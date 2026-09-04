@@ -65,7 +65,7 @@ func _run() -> void:
 	_check(not loyal.identity_revealed and not traitor.identity_revealed and not rebels[0].identity_revealed, "其余身份隐藏")
 
 	# ---- 用例2：随机武将（全员来自已实现武将池，且不含稻草人占位）----
-	var valid_pool = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯", "杰基·斯特朗", "麦克斯·欧尼斯特"]
+	var valid_pool = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯", "杰基·斯特朗", "麦克斯·欧尼斯特", "比尔·盖伊"]
 	var all_ok = true
 	for p in game.players:
 		if not valid_pool.has(p.general_name):

@@ -36,6 +36,10 @@ var harvest_count_this_turn: int = 0   # 五谷丰登 ≤1
 # 判定效果标志
 # 乐不思蜀生效：本回合跳过出牌阶段
 var skip_play_phase: bool = false
+# 【神速】（比尔·盖伊）选项1：跳过判定阶段（判定牌保留不结算）
+var skip_judge_phase: bool = false
+# 【神速】（比尔·盖伊）选项2：跳过出牌和弃牌阶段（出牌阶段后直接进回合结束）
+var skip_play_discard_phase: bool = false
 # 兵粮寸断生效：本回合摸牌阶段少摸一张
 var supply_shortage_active: bool = false
 # 武将牌反面：本回合被整回合跳过（摄魂刀翻面）
@@ -85,13 +89,21 @@ func advance_phase():
 				_change_phase(Phase.DISCARD)
 			else:
 				_change_phase(Phase.PLAY)
-		Phase.PLAY:    _change_phase(Phase.DISCARD)
+		Phase.PLAY:
+			if skip_play_discard_phase:
+				# 【神速】选项2：跳过出牌与弃牌阶段，直接回合结束
+				skip_play_discard_phase = false
+				_change_phase(Phase.END)
+			else:
+				_change_phase(Phase.DISCARD)
 		Phase.DISCARD: _change_phase(Phase.END)
 		Phase.END:     turn_ended.emit(current_player_idx)
 
 func next_turn():
 	current_player_idx = (current_player_idx + 1) % player_count
 	skip_play_phase = false
+	skip_judge_phase = false
+	skip_play_discard_phase = false
 	supply_shortage_active = false
 	skip_full_turn = false
 	granted_judge_target_idx = -1

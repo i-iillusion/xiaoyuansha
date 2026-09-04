@@ -169,6 +169,15 @@ var _calamity_target_override: Callable = Callable()
 # 濒死自救测试钩子（正常游戏不设置）：返回 true = 玩家0使用【桃】自救（没桃照样用不了）
 var _dying_peach_override: Callable = Callable()
 
+# 比尔·盖伊测试钩子（正常游戏不设置）：
+# _shensu_override：返回 true = 发动【神速】；_shensu_option_override：返回 1/2 = 选哪项；
+# _shensu_target_override：神速杀目标玩家（Player 对象，null=取消）
+# _gay_x_override：返回 X = 【Gay】弃牌数（0=取消）
+var _shensu_override: Callable = Callable()
+var _shensu_option_override: Callable = Callable()
+var _shensu_target_override: Callable = Callable()
+var _gay_x_override: Callable = Callable()
+
 # 【是~啊~】测试钩子（正常游戏不设置）：返回 "skill"（发动，流失体力不消耗手牌）/ "card"（不发动，照常消耗）/ "cancel"（取消，视为没有打出）
 var _yes_ah_override: Callable = Callable()
 # 【苕】测试钩子（正常游戏不设置）：
@@ -210,7 +219,13 @@ var _duel_respond_override: Callable = Callable()
 # 【霸王】决斗第二张杀测试钩子（正常游戏不设置）：返回 true = 玩家0响应决斗打出第一张杀后继续出第二张
 var _duel_second_override: Callable = Callable()
 # 【校园霸主】（杰基·斯特朗）：目标选择模式
-var _is_campus_targeting: bool = false
+var _is_campus_targeting: bool = false                          
+# 【神速】（比尔·盖伊）：回合开始选项1 的杀目标选择中
+var _is_shensu_targeting: bool = false
+# 【Gay】（比尔·盖伊）：回复目标选择中
+var _is_gay_targeting: bool = false
+# 【Gay】本回合是否已使用（出牌阶段限一次）
+var _gay_used: bool = false
 # 【觉醒】三选一测试钩子（正常游戏不设置）：返回 1 / 2 / 3（觉醒效果选择）
 var _awaken_pick_override: Callable = Callable()
 
@@ -235,7 +250,8 @@ var _meiyong_target_override: Callable = Callable()      # 返回 Player（目�
 # 通用按钮选择弹窗结果（返回选中索引，-1 = 取消）
 signal _choice_pick_result(idx: int)
 # 【没用】目标选择结果（返回 Player，null = 取消）
-signal _meiyong_pick_result(target: Player)
+signal _meiyong_pick_result(target: Player)                       
+signal _shensu_pick_result(target: Player)                       
 # 【烂忠厚】区域选择结果（"weapon"/"armor"/"mount"/"done"/"cancel"）
 signal _lanzhonghou_zone_result(zone: String)
 # 【烂忠厚】坐骑槽选择结果（返回槽位，"cancel" = 取消）
@@ -683,6 +699,10 @@ func _do_start(pid: int):
 	_update_debug("%s 回合开始（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	# 每回合重置回合级标志（治疗权杖桃计数 / 酒层数——狂暴战斧装备者的酒跨回合保留）
 	_reset_turn_flags()
+	# 【神速】（比尔·盖伊）：回合开始阶段二选一（跳过判定+视为出杀 / 跳出牌弃牌+摸牌减益）
+	# （武将牌反面跳过整回合时不询问）
+	if p.general_name == "比尔·盖伊" and p.is_alive() and not turn_manager.skip_full_turn:
+		await _maybe_shensu(p)
 	# 【没用】（麦克斯·欧尼斯特）：回合开始阶段可摸一张牌并选择跳过自己的一个阶段
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "麦克斯·欧尼斯特" and p.is_alive() and not turn_manager.skip_full_turn:
@@ -694,14 +714,23 @@ func _do_start(pid: int):
 func _reset_turn_flags():
 	for pl in players:
 		pl.heal_staff_peach_used = false
+		pl.shensu_used_this_turn = false  # 【神速】选2 标记每回合重置
 		if pl.get_weapon() != CardData.CardSubType.RAGING_AXE:
 			pl.wine_stacks = 0
 	_lanzhonghou_used = false  # 【烂忠厚】每回合限一次
+	_gay_used = false  # 【Gay】每回合限一次
 
 # 判定阶段：结算判定区的延时锦囊（后放置的先判定）
 # 无花色点数 → 判定必定生效
 func _do_judge(pid: int):
 	var p = players[pid]
+	# 【神速】（比尔·盖伊）选项1：跳过判定阶段（判定区延时锦囊保留，下回合再判）
+	if turn_manager.skip_judge_phase:
+		turn_manager.skip_judge_phase = false
+		_update_debug("%s 发动【神速】：跳过判定阶段（判定区 %d 张牌保留）" % [p.player_name, p.judgment_cards.size()])
+		_sync_all_ui()
+		turn_manager.advance_phase()
+		return
 	# 【没用】（麦克斯·欧尼斯特）授予的判定阶段：跳过自己的判定，目标角色立刻进行判定阶段
 	# （其乐不思蜀/兵粮寸断失效，闪电/火烧连营正常生效）
 	if turn_manager.granted_judge_target_idx >= 0:
@@ -806,10 +835,21 @@ func _do_draw(pid: int):
 		turn_manager.advance_phase()
 		return
 	var draw_count = 2
+	# 【英姿】（比尔·盖伊）锁定技：摸牌阶段多摸一张
+	if p.general_name == "比尔·盖伊" and p.is_alive():
+		draw_count += 1
+		_update_debug("%s 发动【英姿】：摸牌阶段多摸一张" % p.player_name)
 	if turn_manager.supply_shortage_active:
 		turn_manager.supply_shortage_active = false
-		draw_count = 1
+		draw_count -= 1
 		_update_debug("【兵粮寸断】生效，摸牌阶段少摸一张")
+	# 【神速】（比尔·盖伊）选项2 的减益结算：非发动回合的摸牌阶段按累计欠账扣减后清零
+	# （选2 的当回合摸牌不受影响，减益顺延到之后第一个未发动的回合，一次扣清；下限 0 张）
+	if p.general_name == "比尔·盖伊" and not p.shensu_used_this_turn and p.shensu_penalty > 0:
+		var owed = p.shensu_penalty
+		p.shensu_penalty = 0
+		draw_count = maxi(draw_count - owed, 0)
+		_update_debug("%s 的【神速】摸牌减益结算：少摸 %d 张（实际摸 %d 张）" % [p.player_name, owed, draw_count])
 	_draw_blank_cards(p, draw_count)
 	_update_debug("%s 摸了 %d 张牌（手牌 %d 张）" % [p.player_name, draw_count, p.hand_size()])
 	_sync_all_ui()
@@ -1035,6 +1075,19 @@ func _on_cancel_target_pressed():
 		_play_btn.visible = true
 		_end_play_btn.visible = true
 		_update_debug("取消【校园霸主】")
+		return
+	if _is_shensu_targeting:
+		_is_shensu_targeting = false
+		_cancel_target_btn.visible = false
+		_shensu_pick_result.emit(null)
+		_update_debug("取消【神速】杀目标")
+		return
+	if _is_gay_targeting:
+		_is_gay_targeting = false
+		_cancel_target_btn.visible = false
+		_play_btn.visible = true
+		_end_play_btn.visible = true
+		_update_debug("取消【Gay】")
 		return
 	if _is_lanzhonghou_targeting:
 		_is_lanzhonghou_targeting = false
@@ -5098,6 +5151,219 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 
 
 # ============================
+#  【神速】（比尔·盖伊）：回合开始阶段二选一
+# ============================
+
+# 回合开始询问：是否发动（玩家0弹窗 / 测试钩子；AI 暂不主动发动）
+func _maybe_shensu(p: Player) -> void:
+	var activate := false
+	if _shensu_override.is_valid():
+		activate = _shensu_override.call()
+	elif p.seat_index == 0:
+		activate = await _show_shensu_activate_prompt()
+	if not activate:
+		return
+	# 二选一：选项1（判定区有牌才能选）/ 选项2
+	var option := 0
+	if _shensu_option_override.is_valid():
+		option = _shensu_option_override.call()
+	elif p.seat_index == 0:
+		option = await _show_shensu_option_prompt(p)
+	if option == 1:
+		# 选项1 兜底：判定区必须有牌才能发动（无牌时相当于未选）
+		if p.judgment_cards.is_empty():
+			_update_debug("判定区无牌，【神速】选项1 无法发动")
+			_sync_all_ui()
+			return
+		# 选项1：跳过判定阶段 + 视为对一名其他角色打出一张无距离限制的【杀】
+		var target: Player = null
+		if _shensu_target_override.is_valid():
+			target = _shensu_target_override.call()
+		else:
+			target = await _pick_shensu_strike_target(p)
+		if target == null:
+			_update_debug("未选择【神速】杀目标，取消发动（判定阶段照常）")
+			_sync_all_ui()
+			return
+		turn_manager.skip_judge_phase = true
+		_update_debug("%s 发动【神速】选项1：跳过判定阶段，对 %s 视为打出一张无距离限制的【杀】！" % [p.player_name, target.player_name])
+		await _execute_shensu_strike(p, target)
+	elif option == 2:
+		p.shensu_penalty += 1
+		p.shensu_used_this_turn = true
+		turn_manager.skip_play_discard_phase = true
+		_update_debug("%s 发动【神速】选项2：跳过出牌和弃牌阶段，摸牌减益叠加（累计欠 %d 张）" % [p.player_name, p.shensu_penalty])
+	_sync_all_ui()
+
+# 神速发动确认弹窗（玩家0）
+func _show_shensu_activate_prompt() -> bool:
+	var idx = await _show_choice_popup("现在是回合开始阶段\n是否发动【神速】技能？", ["发动【神速】", "不发动"])
+	return idx == 0
+
+# 神速选项弹窗：返回 1/2（0=取消）；判定区无牌时选项1 不可选
+func _show_shensu_option_prompt(p: Player) -> int:
+	var buttons: Array = ["2.跳过出牌和弃牌阶段（下回合摸牌减益）"]
+	if not p.judgment_cards.is_empty():
+		buttons.insert(0, "1.跳过判定阶段，视为打出一张无距离限制的【杀】")
+	else:
+		_update_debug("判定区无牌，【神速】选项1 不可用")
+	var idx = await _show_choice_popup("请选择【神速】的一项", buttons)
+	if idx < 0:
+		return 0
+	if p.judgment_cards.is_empty():
+		return 2
+	return 1 if idx == 0 else 2
+
+# 神速杀目标选择（单选，点击即执行）：返回目标（null=取消）
+func _pick_shensu_strike_target(p: Player) -> Player:
+	_is_shensu_targeting = true
+	_cancel_target_btn.visible = true
+	_update_debug("【神速】：请点击一名其他角色（视为无距离限制的【杀】）")
+	_refresh_status_line()
+	var target: Player = await _shensu_pick_result
+	_is_shensu_targeting = false
+	_cancel_target_btn.visible = false
+	return target
+
+# 神速杀目标点击（分发器在 _on_player_panel_click）
+func _on_shensu_target_click(target: Player):
+	var p = players[turn_manager.current_player_idx]  # 使用者 = 当前回合玩家
+	if target == p:
+		_update_debug("不能选择自己作为目标")
+		return
+	if not target.is_alive():
+		_update_debug("目标已阵亡")
+		return
+	if _is_kneeling(target):
+		_update_debug("%s 处于【下跪】状态，不能成为目标！" % target.player_name)
+		return
+	# 杀的目标免疫与正常杀一致（藤甲/裸奔/觉醒1）
+	if target.get_armor() == CardData.CardSubType.TENGJIA or _is_bare_running(target) or _awake_blocks(target, 1):
+		_update_debug("%s 不能成为【杀】的目标！" % target.player_name)
+		return
+	_is_shensu_targeting = false
+	_cancel_target_btn.visible = false
+	_shensu_pick_result.emit(target)
+
+# 神速杀：视为使用普通【杀】（无距离限制）；不耗手牌、不占杀次数；酒/武器/防具正常结算
+func _execute_shensu_strike(p: Player, target: Player) -> void:
+	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
+		return
+	var card = CardBase.create(CardData.CardSubType.STRIKE)
+	var base_damage = 1
+	# 【酒】：视为杀吃酒加成并消耗酒层数
+	if p.wine_stacks > 0:
+		base_damage += p.wine_stacks
+		p.wine_stacks = 0
+		_update_debug("%s 的【酒】加成：神速杀伤害 +%d" % [p.player_name, base_damage - 1])
+	await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
+	_sync_all_ui()
+
+# ============================
+#  【Gay】（比尔·盖伊）：出牌阶段限一次，弃 X 张手牌令双方各回复 X 点
+# ============================
+
+# 详情弹窗技能按钮 → 【Gay】发动入口
+func _on_gay_skill_clicked(p: Player) -> void:
+	if p != players[0] or p.seat_index != 0:
+		_update_debug("只能对自己使用【Gay】")
+		return
+	if p.general_name != "比尔·盖伊":
+		return
+	if turn_manager.current_phase != TurnManager.Phase.PLAY:
+		_update_debug("【Gay】只能在出牌阶段发动")
+		return
+	if _gay_used:
+		_update_debug("【Gay】每回合限一次，本回合已使用")
+		return
+	if p.hand_size() <= 0:
+		_update_debug("你没有手牌，无法发动【Gay】")
+		return
+	var has_target := false
+	for pl in players:
+		if pl != p and pl.is_alive() and pl.gender == p.gender and pl.hp < pl.max_hp and not _is_kneeling(pl):
+			has_target = true
+			break
+	if not has_target:
+		_update_debug("没有已受伤的同性角色可以作为【Gay】目标")
+		return
+	# 关闭详情弹窗，避免挡住头像选择
+	for child in _detail_popup_root.get_children():
+		child.queue_free()
+	_detail_popup_root.visible = false
+	_is_gay_targeting = true
+	_play_btn.visible = false
+	_end_play_btn.visible = false
+	_cancel_target_btn.visible = true
+	_update_debug("【Gay】：请点击一名已受伤的同性角色（弃 X 张手牌，双方各回复 X 点体力）")
+
+# Gay 目标点击（分发器在 _on_player_panel_click）：校验后弹 X 选择
+func _on_gay_target_click(target: Player):
+	var p = players[0]
+	if target == p:
+		_update_debug("不能选择自己作为目标")
+		return
+	if not target.is_alive():
+		_update_debug("目标已阵亡")
+		return
+	if target.gender != p.gender:
+		_update_debug("%s 与你不是同性，不能选择" % target.player_name)
+		return
+	if target.hp >= target.max_hp:
+		_update_debug("%s 未受伤（体力满），不能选择" % target.player_name)
+		return
+	if _is_kneeling(target):
+		_update_debug("%s 处于【下跪】状态，不能成为目标！" % target.player_name)
+		return
+	_is_gay_targeting = false
+	_cancel_target_btn.visible = false
+	await _execute_gay(p, target)
+	_play_btn.visible = true
+	_end_play_btn.visible = true
+	_sync_all_ui()
+
+# 执行【Gay】：弃 X 张手牌，双方各回复 X 点体力（X ≤ 双方体力上限最小值，且 ≤ 手牌数）
+func _execute_gay(p: Player, target: Player) -> void:
+	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
+		return
+	if _gay_used:
+		return
+	var max_x = mini(p.max_hp, target.max_hp)
+	max_x = mini(max_x, p.hand_size())
+	if max_x <= 0:
+		_update_debug("没有可弃的手牌，【Gay】未发动")
+		return
+	var x := 0
+	if _gay_x_override.is_valid():
+		x = _gay_x_override.call()
+	elif p.seat_index == 0:
+		x = await _show_gay_x_picker(max_x)
+	if x <= 0 or x > max_x:
+		_update_debug("取消【Gay】")
+		_sync_all_ui()
+		return
+	_gay_used = true
+	# 弃 X 张手牌（从手牌尾部弃）
+	for i in x:
+		p.hand.pop_back()
+	var p_before = p.hp
+	var t_before = target.hp
+	p.heal(x)
+	target.heal(x)
+	_update_debug("%s 发动【Gay】：弃置 %d 张手牌，与 %s 各回复 %d 点体力（%d/%d → %d/%d；%d/%d → %d/%d）" % [p.player_name, x, target.player_name, x, p_before, p.max_hp, p.hp, p.max_hp, t_before, target.max_hp, target.hp, target.max_hp])
+	_sync_all_ui()
+
+# X 选择弹窗（玩家0）：返回 1..max_x（取消返回 0）
+func _show_gay_x_picker(max_x: int) -> int:
+	var buttons: Array = []
+	for i in range(1, max_x + 1):
+		buttons.append("弃置 %d 张，各回复 %d 点" % [i, i])
+	var idx = await _show_choice_popup("【Gay】：弃置 X 张手牌（X ≤ %d），双方各回复 X 点体力" % max_x, buttons)
+	if idx < 0:
+		return 0
+	return idx + 1
+
+# ============================
 #  【烂忠厚】麦克斯·欧尼斯特：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域
 #  X = 选择的区域类别数（武器/防具/坐骑各最多一次）；坐骑可跨槽位交换（A的坐骑1 ↔ B的坐骑2）
 #  规则：某一方区域为空或为暗置装备 → 装备直接归还，不交换；坐骑只能选有装备的槽位
@@ -6814,6 +7080,16 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 			_on_campus_target_click(player)
 			return
 
+		# 【神速】选项1 杀目标选择：点击头像选目标（单选，点击即执行）
+		if _is_shensu_targeting:
+			_on_shensu_target_click(player)
+			return
+
+		# 【Gay】回复目标选择：点击头像选目标（单选）
+		if _is_gay_targeting:
+			_on_gay_target_click(player)
+			return
+
 		# 【烂忠厚】角色选择：点击头像选择/取消（选满 2 名进入区域选择）
 		if _is_lanzhonghou_targeting:
 			_on_lanzhonghou_target_click(player)
@@ -6952,6 +7228,9 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 		return
 	if skill_key == "校园霸主":
 		await _on_campus_skill_clicked(owner_player)
+		return
+	if skill_key == "Gay":
+		await _on_gay_skill_clicked(owner_player)
 		return
 	if skill_key == "烂忠厚":
 		await _on_lanzhonghou_skill_clicked(owner_player)

@@ -78,6 +78,11 @@ var kneel_used: bool = false
 var sage_tokens: int = 0
 var sage_activated: bool = false
 
+# 【神速】（比尔·盖伊）：选项2 的摸牌减益欠账层数（每选一次 +1，非发动回合的摸牌阶段一次扣清归零）
+var shensu_penalty: int = 0
+# 【神速】本回合是否已选择选项2（选2 的当回合摸牌阶段不扣减益，顺延到下个未发动的回合）
+var shensu_used_this_turn: bool = false
+
 # 【苕】安普提·斯丢皮得：暗置装备
 # 暗置后装备区对应槽位 = HIDDEN_EQUIPMENT 占位；hidden_equip_slot 记录暗置所在槽位（"" = 无暗置）
 var hidden_equip_slot: String = ""

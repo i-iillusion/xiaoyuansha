@@ -104,6 +104,7 @@ func _show_general_select():
 	_add_general_btn("史蒂芬·彼特先斯")
 	_add_general_btn("杰基·斯特朗")
 	_add_general_btn("麦克斯·欧尼斯特")
+	_add_general_btn("比尔·盖伊")
 	_add_btn("← 返回", _show_test, "")
 
 func _add_general_btn(general_name: String):
