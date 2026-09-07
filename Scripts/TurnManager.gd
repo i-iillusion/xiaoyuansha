@@ -31,6 +31,7 @@ var aoe_count_this_turn: int = 0       # 南蛮入侵+万箭齐发 合计 ≤2
 var steal_count_this_turn: int = 0     # 顺手牵羊+过河拆桥 合计 ≤2
 var peach_garden_count_this_turn: int = 0  # 桃园结义 ≤1
 var harvest_count_this_turn: int = 0   # 五谷丰登 ≤1
+var disarm_count_this_turn: int = 0    # 卸甲归田 ≤1（回合开始重置）
 # 酒状态已改为按玩家存（Player.wine_stacks）：狂暴战斧可叠加且跨回合保留，普通玩家每回合最多 1 层
 
 # 判定效果标志
@@ -56,6 +57,7 @@ var waiting_response_type: String = ""  # 如 "dodge_for_strike", "strike_for_ba
 
 func start_game():
 	current_player_idx = 0
+	disarm_count_this_turn = 0
 	_change_phase(Phase.START)
 
 func _change_phase(new_phase: Phase):
@@ -101,6 +103,7 @@ func advance_phase():
 
 func next_turn():
 	current_player_idx = (current_player_idx + 1) % player_count
+	disarm_count_this_turn = 0
 	skip_play_phase = false
 	skip_judge_phase = false
 	skip_play_discard_phase = false
@@ -138,6 +141,7 @@ func can_use(card_key: String, limit: int = -1) -> bool:
 		"steal": return steal_count_this_turn < 2
 		"peach_garden": return peach_garden_count_this_turn < 1
 		"harvest": return harvest_count_this_turn < 1
+		"disarm": return disarm_count_this_turn < 1
 	return true
 
 # 记录一次使用（摸牌阶段重置）
@@ -148,6 +152,7 @@ func use_card(card_key: String):
 		"steal": steal_count_this_turn += 1
 		"peach_garden": peach_garden_count_this_turn += 1
 		"harvest": harvest_count_this_turn += 1
+		"disarm": disarm_count_this_turn += 1
 
 # ---- 响应链 ----
 

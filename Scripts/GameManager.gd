@@ -87,6 +87,7 @@ var _is_sage_targeting: bool = false
 var _nullify_override: Callable = Callable()
 
 # 舍己为人响应测试钩子（正常游戏不设置）：返回 true = 玩家0打出舍己为人
+var rule_scheduler = RuleScheduler.new()
 var _sacrifice_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
@@ -208,6 +209,7 @@ var _skipping_dead: bool = false
 
 # 【装逼】（史蒂芬·彼特先斯）：点击头像 → 详情弹窗 → 技能发动 + 目标选择模式
 var _is_zhuangbi_targeting: bool = false
+var _zhuangbi_blocked_this_phase: bool = false
 var _zhuangbi_targets: Array[Player] = []
 
 # 【拍胸脯】测试钩子（正常游戏不设置）：返回 true = 玩家0发动【拍胸脯】（要求伤害来源弃一张手牌）
@@ -685,7 +687,10 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 			_do_start(turn_manager.current_player_idx)
 		TurnManager.Phase.JUDGE:   _do_judge(pid)
 		TurnManager.Phase.DRAW:    _do_draw(pid)
-		TurnManager.Phase.PLAY:    _do_play(pid)
+		TurnManager.Phase.PLAY:
+			if old_phase != TurnManager.Phase.WAITING:
+				_zhuangbi_blocked_this_phase = false
+			_do_play(pid)
 		TurnManager.Phase.DISCARD: _do_discard(pid)
 		TurnManager.Phase.END:     _do_end(pid)
 
@@ -1317,10 +1322,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
 
 			# 【灾厄剑】转移：本次杀的全部伤害处理完成后，可选择将灾厄剑移至其他角色
-			# 【+1劣马】转移：造成伤害后可移动一匹至其他角色（妨碍自己进攻的劣马）
 			if dealt:
 				await _try_calamity_transfer(p)
-				await _try_plus_mule_transfer(p)
 
 		CardData.CardSubType.DUEL:
 			if not await _consume_trick(p, CardData.CardSubType.DUEL):
@@ -1335,7 +1338,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 		CardData.CardSubType.SNATCH:
 			await _play_steal_card(p, target, true)
 
-		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE:
+		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP:
 			# 延时锦囊（对目标使用）：进入目标判定区，待其下回合判定阶段结算
 			# （闪电不走此路径：只能对自己，由 play_card 直接处理）
 			if not await _consume_trick(p, sub):
@@ -1345,44 +1348,65 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 
-		CardData.CardSubType.BURNING_CAMP:
-			# 火烧连营：瞬发 — 目标+左右各受 1 点火伤，然后左右判定区各生成一张火烧连营
-			if not await _consume_trick(p, CardData.CardSubType.BURNING_CAMP):
-				return
-			_sync_all_ui()
-			_update_debug("%s 对 %s 使用了【火烧连营】！" % [p.player_name, target.player_name])
-			# 无懈可击：效果即将对目标生效前
-			var bc_nullified = await _ask_nullification_chain("%s的【火烧连营】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-			if bc_nullified:
-				_update_debug("【火烧连营】的效果被【无懈可击】抵消")
-				return
-			# 规则（朋友设定）：火烧连营造成的属性伤害无伤害来源（瞬发与判定一致）
-			await _resolve_burning_camp_damage(null, target, 1)
-			# 蔓延：目标左右判定区各生成一张火烧连营（已有则不重复）
-			var bc_left = players[(target.seat_index + 1) % player_count]
-			var bc_right = players[(target.seat_index - 1 + player_count) % player_count]
-			_spawn_burning_camp(bc_left, p.seat_index)
-			_spawn_burning_camp(bc_right, p.seat_index)
-			_sync_all_ui()
 
 	_sync_all_ui()
 
 # 单个目标的杀结算（防具 → 雌雄 → 响应 → 伤害）：单目标杀与【方天画戟】多目标杀共用
 # 杀次数/手牌/酒 buff 已在调用方消耗
 # 返回 true = 本次结算对目标造成了伤害（供【灾厄剑】转移判定：全部处理完成后再转移）
-func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int) -> bool:
+func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> bool:
+	if target == null or not target.is_alive():
+		return false
+	# “无论是否合法”只越过选目标限制，不跳过响应和伤害防止。
+	if not ignore_target_restrictions and (target.get_armor() == CardData.CardSubType.TENGJIA \
+			or _awake_blocks(target, 1) or _is_bare_running(target) or _is_kneeling(target)):
+		return false
+	var chain = _new_damage_chain(p, target, card, base_damage, element)
+	chain.ignore_target_restrictions = ignore_target_restrictions
+	chain.response_callback = _on_chain_response_check
+	var result = await chain.start()
+	if result == EffectChain.ResponseResult.DODGED:
+		var actual = chain.target_player
+		_update_debug("%s → %s 被【闪】避" % [p.player_name, actual.player_name])
+		if p.is_alive() and actual.is_alive() and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE \
+				and p.mount_count() > 0 and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
+			var activate = p.seat_index != 0 or await _ask_guanshi(actual.player_name)
+			if activate:
+				var slots = p.get_mount_slots()
+				var slot: String = await _show_mount_discard_picker(p) if p.seat_index == 0 else slots.pick_random()
+				if not p.equipment.has(slot):
+					return false
+				deck.discard(CardBase.create(p.equipment[slot]))
+				p.remove_equipment(slot)
+				_update_debug("%s 发动【贯石斧】：此【杀】依然造成伤害" % p.player_name)
+				var hit = _new_damage_chain(p, actual, card, base_damage, element)
+				hit.damage.original_target = chain.damage.original_target
+				hit.damage.sacrifice_offered = true
+				hit.skip_response = true
+				hit.skip_targeting = true # 同一张杀，不重复声明、付费或询问代受。
+				await hit.start()
+				await _finish_damage_chain(hit)
+				return hit.damage.committed
+		return false
+	await _finish_damage_chain(chain)
+	return chain.damage.committed
+
+func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
-	if target.get_armor() == CardData.CardSubType.TENGJIA:
+	if not ignore_restrictions and target.get_armor() == CardData.CardSubType.TENGJIA:
 		_update_debug("%s 的【藤甲】：不能成为【杀】的目标！" % target.player_name)
 		return false
 	# 【觉醒】选择1：不能成为【杀】的目标（兜底防直调）
-	if _awake_blocks(target, 1):
+	if not ignore_restrictions and _awake_blocks(target, 1):
 		_update_debug("%s 的【觉醒】：不能成为【杀】的目标！" % target.player_name)
 		return false
 	# 【裸奔】：凯文·罗本装备区无装备时不能成为【杀】的目标（兜底防直调）
-	if _is_bare_running(target):
+	if not ignore_restrictions and _is_bare_running(target):
 		_update_debug("%s 的【裸奔】：装备区没有装备，不能成为【杀】的目标！" % target.player_name)
 		return false
+
+	if p == null:
+		return true
 
 	# 【烈火盾】vs【寒冰剑】：装备寒冰剑者杀装备烈火盾者 → 双方分别弃置这两张装备，再进行之后的结算
 	# 时机在雌雄/响应/伤害之前；装备弃置后寒冰剑的「防止伤害弃两张」不再触发
@@ -1413,78 +1437,10 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 		if activate:
 			await _resolve_chixiong(p, target)
 
-	var chain = EffectChain.new(p, target, card, EffectChain.EffectType.DAMAGE, base_damage)
-	chain.damage_element = element
-	chain.response_callback = _on_chain_response_check
-	chain.trigger_callback = _on_chain_trigger
-	# 伤害前 hp 快照（寒冰剑防止伤害用：恢复伤害前体力，避免 hp clamp 丢失溢出伤害信息）
-	var hp_snapshot: Dictionary = {}
-	for pl in players:
-		hp_snapshot[pl] = pl.hp
-	var result = await chain.start()
+	return true
 
-	match result:
-		EffectChain.ResponseResult.DODGED:
-			_update_debug("%s → %s 被【闪】避" % [p.player_name, target.player_name])
-			# 【贯石斧】：杀被【闪】抵消后，可弃置一张坐骑牌，令此杀依然对其造成伤害
-			# 强制命中 = 跳过响应阶段重新结算伤害 → 古锭刀/舍己为人/寒冰剑/丈八/铁索传导均正常生效
-			if target.is_alive() and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE and p.mount_count() > 0 \
-					and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-				var use_guanshi = true
-				if p.seat_index == 0:
-					use_guanshi = await _ask_guanshi(target.player_name)
-				if use_guanshi:
-					# 弃置一张坐骑牌（玩家0选择弃哪匹 / AI 随机）
-					var mount_slots = p.get_mount_slots()
-					var mount_slot: String
-					if p.seat_index == 0:
-						mount_slot = await _show_mount_discard_picker(p)
-					else:
-						mount_slot = mount_slots[randi() % mount_slots.size()]
-					var discarded_mount = p.equipment[mount_slot]
-					p.remove_equipment(mount_slot)
-					_update_debug("%s 发动【贯石斧】：弃置坐骑【%s】，此【杀】依然造成伤害！" % [p.player_name, CardData.get_type_name(discarded_mount)])
-					_sync_all_ui()
-					# 强制命中：跳过响应阶段重新结算伤害（伤害值 = 本杀伤害，含酒加成）
-					var hit_chain = EffectChain.new(p, target, card, EffectChain.EffectType.DAMAGE, base_damage)
-					hit_chain.damage_element = element
-					hit_chain.skip_response = true
-					hit_chain.response_callback = _on_chain_response_check
-					hit_chain.trigger_callback = _on_chain_trigger
-					var hp_snapshot_hit: Dictionary = {}
-					for pl in players:
-						hp_snapshot_hit[pl] = pl.hp
-					var hit_result = await hit_chain.start()
-					if hit_result == EffectChain.ResponseResult.NONE and not hit_chain.is_cancelled:
-						var dmg_stood = await _resolve_strike_hit(p, target, hit_chain, hp_snapshot_hit, element)
-						# 凯文·罗本【你个壊货】（受到+造成）：武器技能（贯石斧/寒冰剑/丈八蛇矛等）结算完毕后触发
-						if dmg_stood:
-							await _try_kaiwen_receive(hit_chain.target_player, p, hit_chain.effect_value)
-							await _try_kaiwen_deal(p, hit_chain.target_player, hit_chain.effect_value)
-						return true
-					elif hit_result == EffectChain.ResponseResult.NONE and hit_chain.is_cancelled:
-						_update_debug("本次伤害在效果阶段被防止，%s 未受到伤害" % hit_chain.target_player.player_name)
-			return false
-		EffectChain.ResponseResult.NONE:
-			if chain.is_cancelled:
-				# 伤害在效果阶段被防止（命运之刃/灾厄剑减至 0 等）：不进入命中结算
-				_update_debug("本次伤害在效果阶段被防止（%s 未受到伤害）" % chain.target_player.player_name)
-				return false
-			else:
-				var dmg_stood = await _resolve_strike_hit(p, target, chain, hp_snapshot, element)
-				# 【摄魂刀】：使用杀造成伤害后，可与其拼点两次（激活后）
-				await _try_soul_blade(p, chain.target_player)
-				# 凯文·罗本【你个壊货】（受到+造成）：武器技能（寒冰剑/丈八蛇矛/摄魂刀等）全部结算完毕后触发
-				if dmg_stood:
-					await _try_kaiwen_receive(chain.target_player, p, chain.effect_value)
-					await _try_kaiwen_deal(p, chain.target_player, chain.effect_value)
-				return true
-		_:
-			_update_debug("%s 的【%s】被抵消" % [p.player_name, CardData.get_type_name(sub)])
-			return false
+# 【方天画戟】多目标杀：一次打出、逐目标结算。
 
-# 【方天画戟】多目标杀：一次打出，攻击范围内任意数量目标各自独立结算
-# 杀次数/手牌/酒 buff 只消耗一次；每个目标单独走响应/伤害/濒死/传导
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
@@ -1527,137 +1483,31 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 			dealt_any = true
 
 	# 【灾厄剑】转移：全部目标的伤害都处理完成后，再选择是否转移（双武器假想下语义正确）
-	# 【+1劣马】转移：造成伤害后可移动一匹至其他角色
 	if dealt_any:
 		await _try_calamity_transfer(p)
-		await _try_plus_mule_transfer(p)
 
 	_sync_all_ui()
 
-# 杀命中后的完整结算（伤害已由 chain 施加）：
-# 寒冰剑（防止伤害弃两张）→ 濒死检查 → 丈八蛇矛（流失体力追加伤害）→ 铁索连环传导
-# 供正常命中（NONE）与【贯石斧】强制命中共用
-# 返回本次伤害是否实际成立（寒冰剑防止 = false）；凯文·罗本【你个壊货】在调用方（_execute_single_strike）
-# 等武器技能（寒冰剑/丈八蛇矛/摄魂刀等）全部结算完毕后触发
-func _resolve_strike_hit(p: Player, target: Player, chain: EffectChain, hp_snapshot: Dictionary, element: EffectChain.DamageType) -> bool:
-	# 实际受伤者可能是【舍己为人】替代后的角色
+# 杀、普通伤害与传导共用同一条伤害链。
+func _new_damage_chain(source: Player, target: Player, card: CardBase, amount: int, element: EffectChain.DamageType) -> EffectChain:
+	var chain = EffectChain.new(source, target, card, EffectChain.EffectType.DAMAGE, amount)
+	chain.damage_element = element
+	chain.scheduler = rule_scheduler
+	chain.trigger_callback = _on_chain_trigger
+	return chain
+
+# 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
+func _finish_damage_chain(chain: EffectChain):
+	if not chain.damage.committed:
+		return
 	var actual = chain.target_player
-	_update_debug("%s 对 %s 造成 %d 点伤害" % [p.player_name, actual.player_name, chain.effect_value])
-	if actual != target:
-		_update_debug("（%s 打出【舍己为人】代替 %s 承受）" % [actual.player_name, target.player_name])
-	# 立即同步 UI：体力条/数字立刻变化（后续可能含延迟弹窗）
+	var source = chain.source_player
+	if not chain.damage.is_chain and actual.chained and chain.damage_element != EffectChain.DamageType.PHYSICAL:
+		await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike)
+	await _try_calamity_robe_transfer(actual)
+	await _try_minus_mule_transfer(actual)
+	await _try_plus_mule_transfer(actual)
 	_sync_all_ui()
-	# 寒冰剑：造成伤害后，若该角色有手牌（≥2），可防止此伤害，改为依次弃置其两张手牌
-	# 先于濒死结算：伤害使目标体力归零时，发动寒冰剑成功 → 回复体力 → 不进入濒死状态
-	# （防止 = 回复本次伤害；弃两张后本次伤害视为未发生 → 不触发丈八/铁索传导）
-	var ice_sword_used = false
-	if p.get_weapon() == CardData.CardSubType.ICE_SWORD and actual.hand_size() >= 2 \
-			and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-		var use_ice = true
-		if p.seat_index == 0:
-			use_ice = await _ask_ice_sword(actual.player_name)
-		if use_ice:
-			actual.hp = hp_snapshot[actual]  # 防止伤害（恢复伤害前体力，含酒杀溢出部分）
-			actual.hand.pop_back()
-			actual.hand.pop_back()
-			ice_sword_used = true
-			_update_debug("%s 发动【寒冰剑】：防止 %d 点伤害，依次弃置 %s 两张手牌（剩余 %d 张）" % [p.player_name, chain.effect_value, actual.player_name, actual.hand_size()])
-			_sync_all_ui()
-
-	# 【荆棘战甲】：每当你受到一点伤害后，与伤害来源拼点，赢则反伤 1 点
-	# 寒冰剑防止伤害后视为未发生 → 不触发；伤害已施加且未防止才触发
-	# （凯文·罗本【你个壊货】已移至武器技能全部结算完毕后触发，见 _execute_single_strike）
-	if not ice_sword_used:
-		await _try_thorn_counter(actual, p, chain.effect_value)
-
-	# 濒死检查（寒冰剑发动成功则已回复体力，不会进入濒死）
-	if not actual.is_alive():
-		await _check_dying(actual)
-		if not actual.is_alive():
-			_handle_death(actual, p)  # 阵亡管线（伤害来源 p 为击杀者）
-			if _game_over:
-				return false
-
-	if not ice_sword_used:
-		# 丈八蛇矛：杀造成伤害后，可流失 X 点体力（X≤3）使目标额外受 X 点伤害
-		# 流失体力不算受到伤害（不触发舍己为人/铁索传导）；额外伤害与基础伤害合并结算一次（一起传导）
-		var total_damage = chain.effect_value
-		if actual.is_alive() and p.get_weapon() == CardData.CardSubType.ZHANGBA_SPEAR \
-				and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-			var extra = await _ask_zhangba_extra(p)
-			if extra > 0:
-				# 流失体力（直接扣体力，不算受到伤害）
-				p.hp -= extra
-				_update_debug("%s 流失 %d 点体力（发动【丈八蛇矛】）" % [p.player_name, extra])
-				# 流失使自己进入濒死 → 先处理濒死
-				if not p.is_alive():
-					await _check_dying(p)
-					if not p.is_alive():
-						_handle_death(p, null)  # 流失致死无击杀者
-						extra = 0
-					else:
-						_update_debug("%s 流失体力后自救成功，继续结算" % p.player_name)
-				# 使用者存活且目标存活 → 目标额外受到伤害（一次伤害，并入传导总值）
-				if extra > 0:
-					# 【暴怒】锁定技（布鲁斯·萨维奇）：丈八蛇矛的流失体力已发生 → 额外伤害再附加当前的已损失体力值
-					# （满血流失 1 点 → 额外伤害 = 丈八 1 + 暴怒 1 = 2，总伤害 = 杀 1 + 2 = 3）
-					var rage = _rage_bonus(p)
-					var extra_damage = extra + rage
-					if rage > 0:
-						_update_debug("%s 的【暴怒】：丈八蛇矛额外伤害 +%d（已损失体力值）" % [p.player_name, rage])
-					total_damage += extra_damage
-					if actual.is_alive():
-						# 【百花裙】：体力值为 1 时不会受到任何伤害（锁定被动，额外伤害同样生效；青釭剑无视防具）
-						if actual.get_armor() == CardData.CardSubType.BAIHUA_SKIRT and actual.hp == 1 \
-								and p.get_weapon() != CardData.CardSubType.QINGGANG_SWORD:
-							_update_debug("%s 的【百花裙】抵挡了【丈八蛇矛】的额外伤害（体力值为 1）！" % actual.player_name)
-							total_damage -= extra_damage  # 额外伤害未发生，不并入铁索传导总值
-						else:
-							var extra_actual = extra_damage
-							# 【白银狮子】/【战旗】：效果最后统一计算——丈八蛇矛的额外伤害与原本的杀伤害算作同一次伤害，
-							# 总伤害已封顶 1 点（基础伤害在伤害结算时已被削至 1）→ 额外伤害被防具完全吸收（青釭剑无视防具例外）
-							if (actual.get_armor() == CardData.CardSubType.SILVER_LION \
-									or actual.get_armor() == CardData.CardSubType.ZHANQI) \
-									and p.get_weapon() != CardData.CardSubType.QINGGANG_SWORD:
-								total_damage -= extra_damage  # 额外伤害未发生，不并入铁索传导总值
-								_update_debug("%s 的【%s】将本次伤害封顶为 1 点，【丈八蛇矛】的额外伤害被吸收！" % [actual.player_name, CardData.get_type_name(actual.get_armor())])
-								extra_actual = 0
-							elif actual.get_armor() == CardData.CardSubType.CALAMITY_ROBE and element == EffectChain.DamageType.FIRE:
-								extra_actual = extra_damage + 1
-								total_damage += 1
-								_update_debug("%s 的【灾厄袍】：火焰额外伤害+1（%d 点）" % [actual.player_name, extra_actual])
-							if extra_actual > 0:
-								var zhangba_extra_amt = extra_actual
-								# 【拍胸脯】（史蒂芬·彼特先斯）：丈八额外伤害同样可发动（伤害来源 = 使用者）
-								if await _try_paixiong_block(actual, p):
-									total_damage -= zhangba_extra_amt  # 额外伤害被防止（含灾厄袍加成），不并入传导总值
-									extra_actual = 0
-							if extra_actual > 0:
-								actual.take_damage(extra_actual)
-								_update_debug("%s 额外受到 %d 点伤害" % [actual.player_name, extra_actual])
-								# 【荆棘战甲】：丈八额外伤害同样触发拼点反伤
-								await _try_thorn_counter(actual, p, extra_actual)
-								# 凯文·罗本【你个壊货】：丈八额外伤害同样触发（受到 + 造成）
-								await _try_kaiwen_receive(actual, p, extra_actual)
-								await _try_kaiwen_deal(p, actual, extra_actual)
-								if not actual.is_alive():
-									await _check_dying(actual)
-									if not actual.is_alive():
-										_handle_death(actual, p)  # 丈八额外伤害致死，击杀者 = 使用者
-										if _game_over:
-											return false
-								_sync_all_ui()
-
-		# 铁索连环：属性伤害传导（基础 + 额外伤害合并为一次传导）
-		if actual.is_alive() and actual.chained and element != EffectChain.DamageType.PHYSICAL:
-			await _resolve_chain_propagation(p, actual, total_damage, element, true)
-
-		# 【灾厄袍】/【-1劣马】转移：受到一次伤害后（濒死自救成功也可转移；与统一入口时机一致，寒冰剑防止后不触发）
-		await _try_calamity_robe_transfer(actual)
-		await _try_minus_mule_transfer(actual)
-
-	# 返回本次伤害是否实际成立（寒冰剑防止伤害 = 未成立，你个壊货不触发）
-	return not ice_sword_used
 
 func play_card(sub: CardData.CardSubType):
 	var p = players[turn_manager.current_player_idx]
@@ -1777,6 +1627,9 @@ func play_card(sub: CardData.CardSubType):
 			await _play_harvest()
 
 		CardData.CardSubType.DISARM:
+			if not turn_manager.can_use("disarm"):
+				_update_debug("本回合已使用【卸甲归田】")
+				return
 			_yes_ah_active = (await _ask_yes_ah(p, "卸甲归田", true)) == "skill"
 			await _play_disarm()
 
@@ -1920,7 +1773,7 @@ func play_card(sub: CardData.CardSubType):
 				p.equipment["armor"] = sub
 				# 【白银狮子】：替换（失去）装备区里的白银狮子时回复 1 点体力
 				if old_armor == CardData.CardSubType.SILVER_LION:
-					p.hp += 1
+					p.heal(1)
 					_update_debug("%s 失去【白银狮子】，回复 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 				# 【贤者的加护】：贤者标记跟随装备移动（替换失去时清空）
 				if old_armor == CardData.CardSubType.SAGE_PROTECTION:
@@ -2207,9 +2060,13 @@ func _play_harvest():
 
 func _play_disarm():
 	var p = players[turn_manager.current_player_idx]
+	if not turn_manager.can_use("disarm"):
+		_update_debug("本回合已使用【卸甲归田】")
+		return
 
 	if not await _consume_trick(p, CardData.CardSubType.DISARM):
 		return
+	turn_manager.use_card("disarm")
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
 
@@ -2632,7 +2489,7 @@ func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: 
 	var result = await _weapon_replace_result
 	return result
 
-# 丈八蛇矛：杀造成伤害后询问是否流失体力（X≤3）使目标额外受X点伤害
+# 丈八蛇矛：杀命中后、扣血前询问流失体力数（X≤3），合并伤害。
 # 返回流失的体力数（0 = 放弃）；AI 不主动流失
 func _ask_zhangba_extra(p: Player) -> int:
 	# 测试钩子
@@ -2657,7 +2514,7 @@ func _ask_zhangba_extra(p: Player) -> int:
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "你的【杀】造成了伤害！\n【丈八蛇矛】：可流失 X 点体力（X至多为3），\n使目标额外受到 X 点伤害"
+	label.text = "你的【杀】已命中，尚未结算伤害。\n【丈八蛇矛】：可流失 X 点体力（X至多为3），\n使本次伤害增加 X 点"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -2841,7 +2698,7 @@ func _show_chixiong_target_prompt(attacker_name: String) -> bool:
 
 signal _ice_sword_result(result: bool)
 
-# 寒冰剑：杀造成伤害后确认是否发动（玩家0）；返回 true = 发动（防止伤害弃两张）
+# 寒冰剑：杀将要造成伤害时询问，发动则防止伤害、弃两张手牌。
 func _ask_ice_sword(target_name: String) -> bool:
 	# 测试钩子
 	if _ice_sword_override.is_valid():
@@ -3123,96 +2980,32 @@ func _execute_iron_chain(targets: Array[Player]):
 
 # 铁索连环传导：属性伤害传导给其它连环角色，之后所有人退出连环
 func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, element: EffectChain.DamageType, from_strike: bool = false):
-	# 防御：只有属性伤害 + 受伤者处于连环状态才触发
-	if element == EffectChain.DamageType.PHYSICAL:
+	if element == EffectChain.DamageType.PHYSICAL or not damaged.chained:
 		return
-	if not damaged.chained:
-		return
-
-	var element_name = "火属性" if element == EffectChain.DamageType.FIRE else "雷属性"
-
-	# 收集其它连环且存活的角色（从受伤者下家顺时针结算）
 	var linked: Array[Player] = []
-	var start_seat = damaged.seat_index
 	for i in range(1, player_count):
-		var seat = (start_seat + i) % player_count
-		var other = players[seat]
+		var other = players[(damaged.seat_index + i) % player_count]
 		if other != damaged and other.is_alive() and other.chained:
 			linked.append(other)
-
-	_update_debug("%s 受到%s伤害，触发【铁索连环】！" % [damaged.player_name, element_name])
-
-	# 传导伤害值 = 初始实际伤害（已在 _deal_damage / 杀链中做过【灾厄剑】修正，这里不重复减伤）
-
-	# 依次传导伤害（传导伤害不再触发铁索连环，也不可被【舍己为人】拦截）
+	_update_debug("%s 受到属性伤害，触发【铁索连环】！" % damaged.player_name)
+	# 先解除本次连环，反伤等嵌套伤害不会重入同一传导。
+	damaged.chained = false
 	for other in linked:
-		# 胜负已分：不再结算后续传导
+		other.chained = false
+	for other in linked:
 		if _game_over:
 			break
-		# 【下跪】：下跪状态不会成为任何效果的目标 → 不承受传导伤害
-		if _is_kneeling(other):
-			_update_debug("%s 处于【下跪】状态，不受铁索连环传导" % other.player_name)
+		if not other.is_alive() or _is_kneeling(other):
 			continue
-		# 【拍胸脯】（史蒂芬·彼特先斯）：传导伤害同样可发动（来源 = 主目标伤害来源，可为 null）
-		if other.is_alive() and other.general_name == "史蒂芬·彼特先斯":
-			if await _try_paixiong_block(other, source):
-				continue
-		# 【七星袍】：不会受到任何属性伤害（锁定被动，传导伤害同样生效）
-		if other.get_armor() == CardData.CardSubType.QIXING_PAO:
-			_update_debug("%s 的【七星袍】抵挡了传导伤害！" % other.player_name)
-			continue
-		# 【百花裙】：当你体力值为 1 时，你不会受到任何伤害（锁定被动，传导伤害同样生效）
-		if other.get_armor() == CardData.CardSubType.BAIHUA_SKIRT and other.hp == 1:
-			_update_debug("%s 的【百花裙】抵挡了传导伤害（体力值为 1）！" % other.player_name)
-			continue
-		# 【白银狮子】：传导伤害也最多 1 点（锁定被动）
-		var other_amount = amount
-		if other.get_armor() == CardData.CardSubType.SILVER_LION and amount > 1:
-			other_amount = 1
-			_update_debug("%s 的【白银狮子】将传导伤害减至 1 点！" % other.player_name)
-		# 【战旗】：来自【杀】的传导伤害也至多为 1 点（from_strike 由调用方标识，非杀传导不触发）
-		if from_strike and other.get_armor() == CardData.CardSubType.ZHANQI and amount > 1:
-			other_amount = 1
-			_update_debug("%s 的【战旗】将【杀】传导伤害减至 1 点！" % other.player_name)
-		# 【灾厄袍】：你受到的火焰伤害+1（传导火焰伤害同样生效）
-		if other.get_armor() == CardData.CardSubType.CALAMITY_ROBE and element == EffectChain.DamageType.FIRE:
-			other_amount += 1
-			_update_debug("%s 的【灾厄袍】：传导火焰伤害+1（%d 点）" % [other.player_name, other_amount])
-		# 【命运之刃】：传导伤害致命时同样可弃置防住（一次性装备，无递归风险）
-		var fate_saved = await _try_fate_blade_save(other, other_amount)
-		if fate_saved:
-			continue
-		_update_debug("%s 受到【铁索连环】传导的 %d 点伤害" % [other.player_name, other_amount])
-		other.take_damage(other_amount)
-		# 【荆棘战甲】：传导伤害同样触发拼点反伤（来源=主目标伤害来源，可为 null）
-		await _try_thorn_counter(other, source, other_amount)
-		# 凯文·罗本【你个壊货】：传导伤害同样触发「受到伤害」拼点（来源可为 null 则不触发）
-		await _try_kaiwen_receive(other, source, other_amount)
-		# 【灾厄袍】：受到传导伤害后也可将装备移至其他角色
-		await _try_calamity_robe_transfer(other)
-		# 【-1劣马】：受到传导伤害后可移动一匹至其他角色
-		await _try_minus_mule_transfer(other)
-		if not other.is_alive():
-			await _check_dying(other)
-			if not other.is_alive():
-				_handle_death(other, source)  # 传导致死：击杀者 = 主目标伤害来源（可为 null）
-				if _game_over:
-					break
-
-	# 传导结算完成后，所有连环角色退出连环状态
-	var reset_any = false
-	for p in players:
-		if p.chained:
-			p.chained = false
-			reset_any = true
-	if reset_any:
-		_update_debug("所有角色退出连环状态")
-
+		var chain = _new_damage_chain(source, other, null, amount, element)
+		chain.skip_targeting = true
+		chain.skip_response = true
+		chain.damage.is_chain = true
+		chain.damage.from_strike = from_strike
+		chain.damage.sacrifice_offered = true
+		await chain.start()
+		await _finish_damage_chain(chain)
 	_sync_all_ui()
-
-# ============================
-#  决斗
-# ============================
 
 func _play_duel(attacker: Player, target: Player):
 	# 【决斗】距离限制 2（含马修正，兜底防直调）；【霸王】（杰基·斯特朗）你的决斗无距离限制
@@ -3722,7 +3515,7 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		# 测试钩子：模拟响应者打出【闪】（对任意响应者生效，含 AI）
 		dodged = _dodge_override.call()
 	elif responder_idx == 0:
-		dodged = await _show_dodge_prompt(attacker.player_name, "杀")
+		dodged = await _show_dodge_prompt(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
 	else:
 		dodged = false
 
@@ -3855,124 +3648,107 @@ func _show_target_confirm(attacker_name: String, target_name: String, sub: CardD
 	return result
 
 func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
-	# 伤害已施加（EffectChain._apply_effect 内）：立即同步 UI，血条/体力数字实时变化（不等后续延迟弹窗）
+	var record = chain.damage
+	if event_name == "on_being_targeted":
+		if not record.sacrifice_offered:
+			record.sacrifice_offered = true
+			var substitute = await _maybe_sacrifice(source, subject, chain.effect_value, chain.damage_element)
+			if substitute != null:
+				chain.target_player = substitute
+				_update_debug("%s 打出【舍己为人】，成为【杀】的新目标，可正常出闪" % substitute.player_name)
+				return false # EffectChain 会为新目标重新发出“成为目标”事件。
+		return not await _prepare_strike_target(source, subject, chain.ignore_target_restrictions)
+
+	if event_name == "before_deal_damage":
+		if record.source_modifiers_applied:
+			return false
+		record.source_modifiers_applied = true
+		# 非杀伤害保留原有代受入口；传导不重复代受或源侧数值修正。
+		if not record.from_strike and not record.is_chain and not record.sacrifice_offered:
+			record.sacrifice_offered = true
+			var substitute = await _maybe_sacrifice(subject, chain.target_player, chain.effect_value, chain.damage_element)
+			if substitute != null:
+				chain.target_player = substitute
+		var actual = chain.target_player
+		if subject == null or record.is_chain:
+			return false
+		var weapon = subject.get_weapon()
+		var weapon_enabled = actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+		if record.from_strike and weapon_enabled:
+			if weapon == CardData.CardSubType.ICE_SWORD and actual.hand_size() >= 2:
+				var use_ice = subject.seat_index != 0 or await _ask_ice_sword(actual.player_name)
+				if use_ice:
+					for i in range(2):
+						deck.discard(actual.hand.pop_back())
+					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s 两张手牌" % [subject.player_name, actual.player_name])
+					_sync_all_ui()
+					return true
+			if weapon == CardData.CardSubType.ZHANGBA_SPEAR:
+				var extra = clampi(await _ask_zhangba_extra(subject), 0, 3)
+				if extra > 0:
+					var rage_before = _rage_bonus(subject)
+					subject.hp -= extra
+					_update_debug("%s 流失 %d 点体力（发动【丈八蛇矛】，尚未造成伤害）" % [subject.player_name, extra])
+					if subject.is_dying():
+						await _check_dying(subject)
+						if subject.is_dying():
+							_handle_death(subject, null)
+					# 原始基础值已经含暴怒；只更新差额，不能重复加整个已损失体力。
+					var rage_delta = _rage_bonus(subject) - rage_before if not subject.is_dead() else 0
+					data["value"] += extra + rage_delta
+			if weapon == CardData.CardSubType.GUDING_BLADE and actual.hand_size() == 0:
+				data["value"] += 1
+		if weapon_enabled and weapon == CardData.CardSubType.CALAMITY_SWORD:
+			data["value"] = maxi(data["value"] - 1, 0)
+
+	if event_name == "before_take_damage":
+		if record.target_modifiers_applied:
+			return false
+		record.target_modifiers_applied = true
+		if subject == null or subject.is_dead():
+			return true
+		if await _try_paixiong_block(subject, source):
+			data["value"] = 0
+			return true
+		var ignore_armor = record.from_strike and not record.is_chain and source != null \
+			and source.get_weapon() == CardData.CardSubType.QINGGANG_SWORD
+		var armor = subject.get_armor()
+		if not ignore_armor:
+			if (armor == CardData.CardSubType.QIXING_PAO and chain.damage_element != EffectChain.DamageType.PHYSICAL) \
+					or (armor == CardData.CardSubType.BAIHUA_SKIRT and subject.hp == 1):
+				data["value"] = 0
+				return true
+			if armor == CardData.CardSubType.SILVER_LION or (record.from_strike and armor == CardData.CardSubType.ZHANQI):
+				data["value"] = mini(data["value"], 1)
+			if armor == CardData.CardSubType.CALAMITY_ROBE and chain.damage_element == EffectChain.DamageType.FIRE:
+				data["value"] += 1
+		if await _try_fate_blade_save(subject, data["value"]):
+			data["value"] = 0
+			return true
+
 	if event_name == "damage_applied":
+		_update_debug("%s 受到 %d 点伤害" % [subject.player_name, data["damage"]])
 		_sync_all_ui()
+		if subject.is_dying():
+			await _check_dying(subject)
+			await rule_scheduler.checkpoint(chain, "before_death")
+			if subject.is_dying():
+				_handle_death(subject, source)
 		return false
-	# 古锭刀：使用【杀】将要对目标造成伤害时，若该角色没有手牌，此伤害+1
-	# 时机在响应（出闪）之后、伤害施加之前；修改 data["value"] 即可
-	# 注意：before_deal_damage 事件的 subject = 发起者（使用者），source = null
-	if event_name == "before_deal_damage" and subject != null \
-			and subject.get_weapon() == CardData.CardSubType.GUDING_BLADE \
-			and chain.target_player != null and chain.target_player.hand_size() <= 0 \
-			and chain.target_player.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-		data["value"] = data.get("value", chain.effect_value) + 1
-		_update_debug("%s 发动【古锭刀】：%s 没有手牌，此伤害+1" % [subject.player_name, chain.target_player.player_name])
 
-	# 【灾厄剑】锁定被动：你造成的所有伤害-1（最低 0，减至 0 视为未造成伤害，链会取消）
-	# 同一修正点（伤害施加前），与古锭刀叠加顺序无关；【青釭盾】目标无视此武器
-	if event_name == "before_deal_damage" and subject != null \
-			and subject.get_weapon() == CardData.CardSubType.CALAMITY_SWORD \
-			and chain.target_player != null and chain.target_player.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-		data["value"] = maxi(data.get("value", chain.effect_value) - 1, 0)
-		_update_debug("%s 的【灾厄剑】：此伤害-1（%d 点）" % [subject.player_name, data["value"]])
+	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
+		_trigger_pofeng(subject, data["damage"])
+		await _try_gou_lian_claw(subject, chain.target_player)
+		await _try_bloodthirsty(subject, chain.target_player, data["damage"])
+		_update_soul_blade_count(subject, chain.target_player, data["damage"])
+		if record.from_strike and not record.is_chain:
+			await _try_soul_blade(subject, chain.target_player)
+		await _try_kaiwen_deal(subject, chain.target_player, data["damage"])
 
-	# 【舍己为人】：其他玩家将要受到伤害时，可打出代替其承受
-	# 通过改写 chain.target_player 把伤害转移给代替者
-	if event_name == "before_take_damage" and subject != null and subject.is_alive():
-		var sacrificer = await _maybe_sacrifice(source, subject, chain.effect_value, chain.damage_element)
-		if sacrificer != null:
-			chain.target_player = sacrificer
-		# 【七星袍】：你不会受到任何属性伤害（锁定被动，判定实际受伤者；青釭剑无视防具，仅限杀）
-		var actual_victim = chain.target_player
-		if actual_victim != null and actual_victim.is_alive():
-			# 【拍胸脯】（史蒂芬·彼特先斯）：将要受到伤害时，可发动；发动则伤害来源需弃一张手牌才能造成伤害
-			# （在防具判定之前：防住则本次伤害不造成，后续减伤/命运之刃不再触发）
-			var paixiong_blocked = await _try_paixiong_block(actual_victim, source)
-			if paixiong_blocked:
-				data["value"] = 0
-				return true
-			if actual_victim.get_armor() == CardData.CardSubType.QIXING_PAO \
-					and chain.damage_element != EffectChain.DamageType.PHYSICAL \
-					and (source == null or source.get_weapon() != CardData.CardSubType.QINGGANG_SWORD):
-				data["value"] = 0
-				_update_debug("%s 的【七星袍】抵挡了%s伤害！" % [actual_victim.player_name, "火属性" if chain.damage_element == EffectChain.DamageType.FIRE else "雷属性"])
-				return true
-			# 【百花裙】：当你体力值为 1 时，你不会受到任何伤害（锁定被动）
-			# 判定实际受伤者（可能被舍己为人改写）；【青釭剑】无视防具（仅限杀）
-			if actual_victim.get_armor() == CardData.CardSubType.BAIHUA_SKIRT and actual_victim.hp == 1 \
-					and (source == null or source.get_weapon() != CardData.CardSubType.QINGGANG_SWORD):
-				data["value"] = 0
-				_update_debug("%s 的【百花裙】抵挡了本次伤害（体力值为 1）！" % actual_victim.player_name)
-				return true
-			# 【白银狮子】锁定被动：你受到伤害最多为 1 点（判定实际受伤者；青釭剑无视防具，仅限杀）
-			# 先于命运之刃：命运之刃按实际伤害值（减伤后）判定致命
-			var capped_damage = chain.effect_value
-			if actual_victim.get_armor() == CardData.CardSubType.SILVER_LION \
-					and (source == null or source.get_weapon() != CardData.CardSubType.QINGGANG_SWORD):
-				capped_damage = mini(chain.effect_value, 1)
-				if capped_damage < chain.effect_value:
-					data["value"] = capped_damage
-					_update_debug("%s 的【白银狮子】将本次伤害减至 1 点！" % actual_victim.player_name)
-			# 【战旗】锁定被动：你受到来自【杀】的伤害至多为 1 点（判定实际受伤者；青釭剑无视防具）
-			if actual_victim.get_armor() == CardData.CardSubType.ZHANQI \
-					and (source == null or source.get_weapon() != CardData.CardSubType.QINGGANG_SWORD):
-				capped_damage = mini(capped_damage, 1)
-				if capped_damage < chain.effect_value:
-					data["value"] = capped_damage
-					_update_debug("%s 的【战旗】将【杀】伤害减至 1 点！" % actual_victim.player_name)
-			# 【灾厄袍】锁定被动：你受到的火焰伤害+1（判定实际受伤者；青釭剑无视防具，仅限杀）
-			if actual_victim.get_armor() == CardData.CardSubType.CALAMITY_ROBE \
-					and chain.damage_element == EffectChain.DamageType.FIRE \
-					and (source == null or source.get_weapon() != CardData.CardSubType.QINGGANG_SWORD):
-				capped_damage += 1
-				data["value"] = capped_damage
-				_update_debug("%s 的【灾厄袍】：火焰伤害+1（%d 点）" % [actual_victim.player_name, capped_damage])
-			# 【命运之刃】：实际受伤者（可能被舍己为人改写）将要受到致命伤害时，可弃置此武器防止
-			var fate_saved = await _try_fate_blade_save(actual_victim, capped_damage)
-			if fate_saved:
-				data["value"] = 0
-				return true
-
-	# 【破风枪】：每当你造成一点伤害后，你的手牌上限+1（杀伤害结算后触发）
-	# 被【闪】/无懈抵消则不会进入结算阶段；寒冰剑/丈八与破风枪互斥武器，无需回退逻辑
-	if event_name == "after_deal_damage" and subject != null \
-			and subject.get_weapon() == CardData.CardSubType.POFENG_SPEAR:
-		var dmg = data.get("damage", 0)
-		if dmg > 0:
-			subject.hand_limit_bonus += dmg
-			_update_debug("%s 发动【破风枪】：造成 %d 点伤害，手牌上限 +%d（当前上限 %d）" % [subject.player_name, dmg, dmg, subject.hand_limit()])
-			_sync_all_ui()
-
-	# 【勾镰爪】：对一名角色造成伤害后，可获得其装备区里的一张坐骑牌
-	# 实际受伤者 = chain.target_player（可能被舍己为人改写）；与破风枪同时刻触发（伤害后、濒死前）
-	if event_name == "after_deal_damage" and subject != null \
-			and subject.get_weapon() == CardData.CardSubType.GOU_LIAN_CLAW:
-		var dmg = data.get("damage", 0)
-		if dmg > 0 and chain.target_player != null:
-			await _try_gou_lian_claw(subject, chain.target_player)
-
-	# 【噬血之刃】：每当你造成一点伤害后，与受伤角色进行一次拼点，若你赢则回复 1 点体力
-	# 按点数逐点触发（酒杀 2 点 = 拼点 2 次）；实际受伤者 = chain.target_player
-	if event_name == "after_deal_damage" and subject != null \
-			and subject.get_weapon() == CardData.CardSubType.BLOODTHIRSTY_BLADE:
-		var dmg = data.get("damage", 0)
-		if dmg > 0 and chain.target_player != null:
-			await _try_bloodthirsty(subject, chain.target_player, dmg)
-
-	# 【摄魂刀】激活计数：对同一名玩家连续且累计造成伤害（所有伤害都计入，不限杀）
-	if event_name == "after_deal_damage" and subject != null and chain.target_player != null:
-		_update_soul_blade_count(subject, chain.target_player, data.get("damage", 0))
-	# 凯文·罗本【你个壊货】造成伤害：已移至 _execute_single_strike
-	# （武器技能全部结算完毕后触发，见 _execute_single_strike 的 NONE / 贯石斧强制命中分支）
+	if event_name == "after_take_damage" and subject != null and subject.is_alive():
+		await _try_thorn_counter(subject, source, data["damage"])
+		await _try_kaiwen_receive(subject, source, data["damage"])
 	return false
-
-# ============================
-#  统一伤害入口（舍己为人 + 濒死 + 铁索传导）
-# ============================
-
-# 【荆棘战甲】：每当你受到一点伤害后，你与伤害来源进行一次拼点，若你赢则对其造成 1 点伤害
-# 按伤害点数逐点触发（酒杀 2 点 = 拼点 2 次）；无来源伤害（闪电/火烧）不触发；来源=自己不触发
 func _try_thorn_counter(victim: Player, source: Player, amount: int):
 	if source == null or victim == null or source == victim:
 		return
@@ -4101,105 +3877,18 @@ func _show_kaiwen_prompt(opponent_name: String, is_receive: bool) -> bool:
 # source 可为 null（边界情况），此时不触发铁索传导
 # 返回实际受伤者
 func _deal_damage(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Player:
-	# 【灾厄剑】锁定被动：你造成的所有伤害-1（最低 0，含舍己为人提示值；【青釭盾】目标无视此武器）
-	amount = _calamity_adjust(source, target, amount)
-	# 减至 0 = 未造成伤害：不施加、不触发任何伤害后效果
-	if amount <= 0:
-		if source != null and source.get_weapon() == CardData.CardSubType.CALAMITY_SWORD:
-			_update_debug("%s 的【灾厄剑】将伤害减至 0，未造成伤害" % source.player_name)
+	if target == null or target.is_dead() or amount <= 0:
 		return target
-	var actual = await _maybe_sacrifice(source, target, amount, element)
-	if actual == null:
-		actual = target
-	else:
-		_update_debug("%s 打出【舍己为人】，代替 %s 承受 %d 点伤害！" % [actual.player_name, target.player_name, amount])
-
-	# 【拍胸脯】（史蒂芬·彼特先斯）：将要受到伤害时，可发动；发动则伤害来源需弃一张手牌才能造成伤害
-	# （在防具判定之前：防住则本次伤害不造成，后续减伤/命运之刃不再触发）
-	if actual.is_alive() and actual.general_name == "史蒂芬·彼特先斯":
-		if await _try_paixiong_block(actual, source):
-			_sync_all_ui()
-			return actual
-
-	# 【七星袍】：你不会受到任何属性伤害（锁定被动；判定实际受伤者）
-	# 这里的伤害源都不是【杀】（青釭剑只对杀无视防具）→ 无青釭剑例外
-	if actual.is_alive() and actual.get_armor() == CardData.CardSubType.QIXING_PAO and element != EffectChain.DamageType.PHYSICAL:
-		_update_debug("%s 的【七星袍】抵挡了%s伤害！" % [actual.player_name, "火属性" if element == EffectChain.DamageType.FIRE else "雷属性"])
-		_sync_all_ui()
-		return actual
-
-	# 【百花裙】：当你体力值为 1 时，你不会受到任何伤害（锁定被动；判定实际受伤者）
-	# 这里的伤害源都不是【杀】（青釭剑只对杀无视防具）→ 无青釭剑例外
-	if actual.is_alive() and actual.get_armor() == CardData.CardSubType.BAIHUA_SKIRT and actual.hp == 1:
-		_update_debug("%s 的【百花裙】抵挡了 %d 点伤害（体力值为 1）！" % [actual.player_name, amount])
-		_sync_all_ui()
-		return actual
-
-	# 【白银狮子】：你受到伤害最多为 1 点（锁定被动；判定实际受伤者）
-	# 先于命运之刃：命运之刃按实际伤害值（减伤后）判定致命；后续效果/铁索传导用减伤后值
-	if actual.is_alive() and actual.get_armor() == CardData.CardSubType.SILVER_LION and amount > 1:
-		_update_debug("%s 的【白银狮子】将伤害减至 1 点！" % actual.player_name)
-		amount = 1
-
-	# 【灾厄袍】：你受到的火焰伤害+1（锁定被动；判定实际受伤者）
-	if actual.is_alive() and actual.get_armor() == CardData.CardSubType.CALAMITY_ROBE and element == EffectChain.DamageType.FIRE:
-		amount += 1
-		_update_debug("%s 的【灾厄袍】：火焰伤害+1（%d 点）" % [actual.player_name, amount])
-
-	# 【命运之刃】：实际受伤者将要受到致命伤害时，可弃置此武器防止本次伤害
-	var fate_saved = await _try_fate_blade_save(actual, amount)
-	if fate_saved:
-		_sync_all_ui()
-		return actual
-
-	actual.take_damage(amount)
-	_update_debug("%s 受到 %d 点伤害" % [actual.player_name, amount])
-	# 立即同步 UI：体力条/数字立刻变化（后续效果可能含延迟弹窗，不能等它们结束才刷新）
-	_sync_all_ui()
-	# 【荆棘战甲】：每当你受到一点伤害后，与伤害来源拼点，赢则反伤 1 点（无来源伤害不触发）
-	await _try_thorn_counter(actual, source, amount)
-	# 【破风枪】：造成伤害后手牌上限+1（铁索传导伤害不触发）
-	_trigger_pofeng(source, amount)
-	# 【勾镰爪】：对一名角色造成伤害后，可获得其装备区里的一张坐骑牌（传导伤害不触发，与破风枪一致）
-	await _try_gou_lian_claw(source, actual)
-	# 【噬血之刃】：每造成一点伤害后可选择与受伤角色拼点，赢则回 1 血（传导伤害不触发，与破风枪一致）
-	await _try_bloodthirsty(source, actual, amount)
-	# 【摄魂刀】激活计数：对同一名玩家连续且累计造成伤害（所有伤害都计入，不限杀）
-	_update_soul_blade_count(source, actual, amount)
-	# 凯文·罗本【你个壊货】（受到+造成）：武器技能（破风枪/勾镰爪/噬血之刃/摄魂刀）全部结算完毕后触发
-	await _try_kaiwen_receive(actual, source, amount)
-	await _try_kaiwen_deal(source, actual, amount)
-
-	# 濒死检查
-	if not actual.is_alive():
-		await _check_dying(actual)
-		if not actual.is_alive():
-			_handle_death(actual, source)  # 统一伤害入口：击杀者 = 伤害来源（可为 null）
-			if _game_over:
-				return actual
-
-	# 铁索连环：属性伤害传导
-	if actual.is_alive() and actual.chained and element != EffectChain.DamageType.PHYSICAL and source != null:
-		await _resolve_chain_propagation(source, actual, amount, element)
-
-	# 【灾厄袍】：受到一次伤害后可将装备移至其他角色（含传导之后，随伤害事件触发一次）
-	await _try_calamity_robe_transfer(actual)
-	# 【-1劣马】：受到伤害后可移动一匹至其他角色
-	await _try_minus_mule_transfer(actual)
-
-	# 【灾厄剑】转移：本次伤害的全部处理完成后，可选择将灾厄剑移至其他角色
-	await _try_calamity_transfer(source)
-	# 【+1劣马】：造成伤害后可移动一匹至其他角色
-	await _try_plus_mule_transfer(source)
-
-	# 【苕】任意玩家行动后询问是否明置（伤害结算完毕）
+	var chain = _new_damage_chain(source, target, null, amount, element)
+	chain.skip_targeting = true
+	chain.skip_response = true
+	await chain.start()
+	await _finish_damage_chain(chain)
+	if chain.damage.committed:
+		await _try_calamity_transfer(chain.source_player)
 	await _maybe_ask_reveal()
+	return chain.target_player
 
-	_sync_all_ui()
-	return actual
-
-# 【破风枪】：source 造成 amount 点伤害后，手牌上限 +amount（失去武器时清零）
-# 传导伤害（_resolve_chain_propagation 直调 take_damage）不经过这里，不触发
 func _trigger_pofeng(source: Player, amount: int):
 	if source == null or amount <= 0:
 		return
@@ -4905,6 +4594,9 @@ func _show_paixiong_prompt(source_name: String) -> bool:
 
 # 详情弹窗技能点击：进入目标选择模式（与【下跪】/【苕】一致的发动方式）
 func _on_zhuangbi_skill_clicked(p: Player) -> void:
+	if _zhuangbi_blocked_this_phase:
+		_show_toast("【装逼】胜负各半，本出牌阶段不能再次发动")
+		return
 	if p != players[0] or p.seat_index != 0:
 		_update_debug("只能对自己使用【装逼】")
 		return
@@ -4985,6 +4677,9 @@ func _on_confirm_zhuangbi():
 
 # 执行装逼：双方各弃一张手牌 → 依次拼点 → 判定结果
 func _execute_zhuangbi(targets: Array[Player]) -> void:
+	if _zhuangbi_blocked_this_phase:
+		_update_debug("【装逼】本出牌阶段不能再次发动")
+		return
 	var p = players[0]
 	if p.general_name != "史蒂芬·彼特先斯" or not p.is_alive():
 		return
@@ -5020,13 +4715,18 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 			losses += 1
 
 	var n = valid.size()
+	if wins == losses:
+		_zhuangbi_blocked_this_phase = true
+		_update_debug("【装逼】胜负各半：既不成功也不失败，不造成伤害；本出牌阶段不能再发动")
+		_sync_all_ui()
+		return
 	# 输了一半以上 → 立即进入弃牌阶段
 	if losses * 2 > n:
 		_update_debug("%s 拼点输 %d/%d（一半以上），立即进入弃牌阶段！" % [p.player_name, losses, n])
 		_enter_discard_from_zhuangbi()
 		return
-	# 进行拼点必然分出胜负（wins + losses == n），非输局即赢局：输者受伤 + 可以再次使用此技能
-	_update_debug("%s 拼点赢 %d/%d（一半及以上）！输给你的角色受到 1 点伤害！" % [p.player_name, wins, n])
+	# 胜负各半已单独处理；成功才允许再次主动发动。
+	_update_debug("%s 拼点赢 %d/%d！输给你的角色受到 1 点伤害！" % [p.player_name, wins, n])
 	for t in losers:
 		if not t.is_alive():
 			continue
@@ -6151,7 +5851,7 @@ func _emit_calamity_robe_target(overlay: ColorRect, target: Player):
 func _try_minus_mule_transfer(source: Player):
 	await _try_mule_transfer(source, CardData.CardSubType.MULE_MINUS, true)
 
-# +1劣马：你造成伤害后，可移动一匹 +1劣马至一名其他角色的装备区（灾厄剑式时机；甩掉妨碍自己进攻的劣马）
+# +1劣马：与 -1 劣马一致，受到伤害后可转移。
 func _try_plus_mule_transfer(source: Player):
 	await _try_mule_transfer(source, CardData.CardSubType.MULE_PLUS, false)
 
@@ -6606,7 +6306,7 @@ func _heal_with_staff(p: Player) -> int:
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
 #   → 调用方判 is_alive()：仍 ≤0 则进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
 func _check_dying(dying: Player):
-	if dying.is_alive():
+	if not dying.is_dying():
 		return
 
 	_update_debug("%s 进入濒死状态！" % dying.player_name)
@@ -6623,7 +6323,11 @@ func _check_dying(dying: Player):
 
 	# 尝试自救：先允许使用桃或酒（朋友设定：贤者的加护在桃/酒自救之后才发动）
 	if dying_idx == 0:
-		await _show_dying_prompt(dying)
+		while dying.is_dying():
+			var hp_before = dying.hp
+			await _show_dying_prompt(dying)
+			if dying.hp <= hp_before:
+				break # 放弃或没有可用救援牌；负体力时允许连续自救。
 	else:
 		# AI 玩家暂时不自救
 		pass
@@ -6657,6 +6361,7 @@ func _handle_death(victim: Player, killer: Player):
 		return
 	if victim.is_alive():
 		return
+	victim.mark_dead()
 	_dead_processed.append(victim)
 	_update_debug("%s 阵亡！" % victim.player_name)
 
@@ -6786,6 +6491,8 @@ func _on_game_over(winner_identity: String):
 func reset_game_over_state():
 	_game_over = false
 	_dead_processed.clear()
+	for p in players:
+		p.reset_death_state()
 	if _game_over_overlay != null and is_instance_valid(_game_over_overlay):
 		_game_over_overlay.queue_free()
 		_game_over_overlay = null
@@ -6857,28 +6564,26 @@ func _show_sage_save_prompt() -> bool:
 
 # 执行贤者的加护保命：弃置所有牌（手牌/装备/判定牌）→ 复原武将牌至游戏开始时的状态 → 摸四张牌
 func _do_sage_save(p: Player):
-	# 弃置所有牌
-	p.hand.clear()
-	var slots = p.get_equip_slots()
-	for s in slots:
-		p.remove_equipment(s)
-	for c in p.judgment_cards:
-		deck.discard(c)
-	p.judgment_cards.clear()
-	# 复原武将牌至游戏开始时的状态
-	p.hp = p.max_hp
-	p.facedown = false
+	# 清理全部区域；不是把旧手牌/装备重新发回。
+	_discard_all_cards(p, true)
+	p.restore_game_start_state()
 	p.chained = false
 	p.wine_stacks = 0
 	p.sage_tokens = 0
 	p.sage_activated = false
 	p.hand_limit_bonus = 0
-	# 摸四张牌
+	p.heal_staff_peach_used = false
+	p.soul_blade_activated = false
+	p.soul_blade_track_target = null
+	p.soul_blade_track_count = 0
+	p.mount_plus = 0
+	p.mount_minus = 0
+	p.hidden_equip_slot = ""
+	# 一次恢复完再发牌，避免中间的零手牌状态重触发觉醒。
 	_draw_blank_cards(p, 4)
 	_update_debug("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
-# 濒死自救弹窗
 func _show_dying_prompt(dying: Player):
 	# 测试钩子：直接模拟用【桃】自救（有桃才有效）
 	if _dying_peach_override.is_valid():

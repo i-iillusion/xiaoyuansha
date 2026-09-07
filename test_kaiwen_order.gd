@@ -8,6 +8,7 @@ var asserts := 0
 var game = null
 var _klogs: Array[String] = []
 var _zlog := ""
+var _hp_at_zhangba := 0
 
 func _init():
 	_run()
@@ -53,7 +54,8 @@ func _run() -> void:
 	_klogs.clear()
 	_zlog = ""
 	game._zhangba_override = func():
-		_zlog = game._log_label.text  # 丈八询问时：应只有伤害日志，你个壊货拼点尚未发生
+		_zlog = game._log_label.text
+		_hp_at_zhangba = target.hp # 命中但尚未扣血，丈八与基础伤害一次结算。
 		return 1                      # 流失 1 点体力追加伤害
 	game._kaiwen_override = func():
 		_klogs.append(game._log_label.text)  # 你个壊货每次询问时记录当时的日志（数组引用捕获）
@@ -67,11 +69,11 @@ func _run() -> void:
 	_check(kaiwen.hand_size() == 4, "丈八+你个壊货：基础+额外各拼点一次摸 4 张: %d" % kaiwen.hand_size())
 	_check(target.hp == target.max_hp - 2, "目标共受 2 点伤害: %d" % target.hp)
 	_check(kaiwen.hp == kaiwen.max_hp - 1, "凯文流失 1 点体力: %d" % kaiwen.hp)
-	_check(_zlog.contains("造成"), "丈八询问时已有伤害日志: " + _zlog)
+	_check(_hp_at_zhangba == target.max_hp, "丈八询问时尚未扣血: %d" % _hp_at_zhangba)
 	_check(not _zlog.contains("拼点"), "丈八询问时你个壊货拼点尚未发生: " + _zlog)
-	_check(_klogs.size() == 2, "你个壊货共询问 2 次（额外+基础）: %d" % _klogs.size())
+	_check(_klogs.size() == 2, "你个壊货按最终 2 点伤害询问 2 次: %d" % _klogs.size())
 	if _klogs.size() == 2:
-		_check(_klogs[0].contains("额外受到"), "你个壊货（额外）在丈八额外伤害之后询问: " + _klogs[0])
+		_check(_klogs[0].contains("受到 2 点伤害"), "你个壊货在最终伤害提交之后询问: " + _klogs[0])
 		_check(_klogs[1].contains("拼点"), "你个壊货（基础）在额外拼点结果之后询问（丈八已全部结算）: " + _klogs[1])
 	kaiwen.remove_equipment("weapon")
 
