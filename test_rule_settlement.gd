@@ -154,6 +154,14 @@ func _run():
 	check(not c.facedown and not c.chained and not c.sage_activated, "贤者清除翻面、连环和装备状态")
 	check(c.hand_size() == 4 and c.determined_cards.is_empty() and c.equipment.is_empty() and c.judgment_cards.is_empty(), "所有旧牌清理后摸四张，不会因中间空手再次觉醒")
 
+	b.general_name = "比尔·盖伊"
+	b.capture_game_start_state()
+	b.shensu_penalty = 3
+	b.shensu_used_this_turn = true
+	b.hp = 0
+	game._do_sage_save(b)
+	check(b.shensu_penalty == 0 and not b.shensu_used_this_turn, "贤者同样恢复上游新增武将的神速状态")
+
 	reset_players()
 	observations.clear()
 	chain = game._new_damage_chain(a, b, null, 1, EffectChain.DamageType.PHYSICAL)

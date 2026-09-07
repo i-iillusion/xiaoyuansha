@@ -27,7 +27,8 @@ var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "max_hp", "awoken",
-	"awake_choice", "kneeling", "kneel_used", "facedown"]
+	"awake_choice", "kneeling", "kneel_used", "facedown", "shensu_penalty",
+	"shensu_used_this_turn"]
 var hand: Array[CardBase] = []
 var equipment: Dictionary = {}
 
