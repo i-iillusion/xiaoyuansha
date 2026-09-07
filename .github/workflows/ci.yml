@@ -1,0 +1,86 @@
+name: Godot CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: godot-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core rules (Godot 4.7.2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Prepare log directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/godot-ci-logs"
+          echo "CI_LOG_DIR=$RUNNER_TEMP/godot-ci-logs" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: '4.7.2'
+          use-dotnet: false
+          include-templates: false
+          path: ${{ runner.temp }}/godot
+          downloads-path: ${{ runner.temp }}/godot-downloads
+          bin-path: ${{ runner.temp }}/godot-bin
+
+      - name: Import project
+        run: |
+          set -euo pipefail
+          mkdir -p "$CI_LOG_DIR"
+          godot --version
+          timeout --kill-after=10s 120s godot --headless --path . --editor --import --quit 2>&1 | tee "$CI_LOG_DIR/import.log"
+          if grep -Eq '(^|[[:space:]])(SCRIPT ERROR:|ERROR:|Parse Error:)' "$CI_LOG_DIR/import.log"; then
+            echo '::error::Godot reported errors during project import.'
+            exit 1
+          fi
+
+      - name: Run core rule tests
+        run: |
+          set -euo pipefail
+          failed=0
+          tests=(
+            test_rule_settlement
+            test_confirmed_rules
+            test_bill
+          )
+          for test in "${tests[@]}"; do
+            echo "::group::$test"
+            log="$CI_LOG_DIR/$test.log"
+            status=0
+            timeout --kill-after=10s 60s godot --headless --path . --script "Test/$test.gd" 2>&1 | tee "$log" || status=$?
+            if (( status != 0 )) \
+              || ! grep -Eq '^RESULT: [1-9][0-9]* asserts, 0 failures[[:space:]]*$' "$log" \
+              || grep -Eq '(^|[[:space:]])(SCRIPT ERROR:|ERROR:|Parse Error:|FAIL:)|^RESULT: .* [1-9][0-9]* failures' "$log"; then
+              echo "::error::$test failed, timed out, or did not produce a successful RESULT (exit $status)."
+              failed=1
+            fi
+            echo '::endgroup::'
+          done
+          exit "$failed"
+
+      - name: Upload Godot logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-ci-logs
+          path: ${{ runner.temp }}/godot-ci-logs/*.log
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,5 +1,24 @@
-# Godot 4 缓存与自动导入
+# Godot 4.2+ specific ignores
+~*.dll
+
+# Godot 4+ specific ignores
 .godot/
+.nomedia
+
+# Godot-specific ignores
+.import/
+export.cfg
+export_credentials.cfg
+*.tmp
+
+# Imported translations (automatically generated from CSV files)
+*.translation
+
+# Mono-specific ignores
+.mono/
+data_*/
+mono_crash.*.json
+
 
 # 开发笔记（AI 助手记忆，不属于项目本体）
 memory/
