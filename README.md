@@ -7,6 +7,7 @@
 - [校园杀完全知识手册：规则正文、游戏模式和武将说明](Docs/Original/校园杀完全知识手册.md)
 - [开发 QA：问题编号、待讨论事项、确认答案及实现状态](Docs/HumanAgent/QA.md)
 - [规则确认与待讨论记录](Docs/HumanAgent/规则确认与待讨论.md)
+- [里程碑计划与短期目标](Docs/HumanAgent/里程碑计划.md) · [开发看板](https://github.com/i-iillusion/xiaoyuansha/issues/5)
 
 仓库中的《校园杀完全知识手册》Markdown 文档为规则正文；负责人明确补充的裁定优先于手册中的相应旧文字，详见规则确认记录与开发 QA。
 
