@@ -21,6 +21,13 @@ var general_name: String = "稻草人"
 var gender: String = "male"
 
 var hp: int : set = _set_hp
+enum LifeState { ACTIVE, DYING, DEAD }
+var life_state: LifeState = LifeState.ACTIVE
+var _game_start_state: Dictionary = {}
+# 武将牌自身状态；身份、手牌和装备不属于此快照。
+# 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
+const GENERAL_STATE_FIELDS = ["general_name", "gender", "max_hp", "awoken",
+	"awake_choice", "kneeling", "kneel_used", "facedown"]
 var hand: Array[CardBase] = []
 var equipment: Dictionary = {}
 
@@ -124,19 +131,50 @@ var _total_players: int = 5
 
 func _ready():
 	hp = max_hp
+	capture_game_start_state()
 
 func _set_hp(value: int):
-	hp = clampi(value, 0, max_hp)
+	# 保留真实体力（包括负数与超上限）；普通回复的上限由 heal 管理。
+	hp = value
+	if life_state != LifeState.DEAD:
+		life_state = LifeState.DYING if hp <= 0 else LifeState.ACTIVE
 	hp_changed.emit(hp)
 
 func take_damage(amount: int = 1):
-	hp -= amount
+	if not is_dead() and amount > 0:
+		hp -= amount
 
 func heal(amount: int = 1):
-	hp += amount
+	if not is_dead() and amount > 0 and hp < max_hp:
+		hp = mini(hp + amount, max_hp)
 
+# 兼容旧界面的“可行动”判断；死亡判定必须使用 is_dead/is_dying。
 func is_alive() -> bool:
-	return hp > 0
+	return life_state == LifeState.ACTIVE
+
+func is_dying() -> bool:
+	return life_state == LifeState.DYING
+
+func is_dead() -> bool:
+	return life_state == LifeState.DEAD
+
+func mark_dead():
+	life_state = LifeState.DEAD
+
+func reset_death_state():
+	life_state = LifeState.DYING if hp <= 0 else LifeState.ACTIVE
+
+func capture_game_start_state():
+	_game_start_state.clear()
+	for field in GENERAL_STATE_FIELDS:
+		_game_start_state[field] = get(field)
+
+func restore_game_start_state():
+	assert(not _game_start_state.is_empty(), "缺少开局武将快照，不能猜测复活状态")
+	for field in GENERAL_STATE_FIELDS:
+		set(field, _game_start_state[field])
+	life_state = LifeState.ACTIVE
+	hp = max_hp
 
 # 当前手牌上限（弃牌阶段用）：体力 + 破风枪加成 + 圣光白衣加成
 func hand_limit() -> int:
@@ -187,7 +225,7 @@ func remove_equipment(slot: String):
 	equipment.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
 	if sub == CardData.CardSubType.SILVER_LION and is_alive():
-		hp += 1
+		heal(1)
 	match sub:
 		CardData.CardSubType.MOUNT_PLUS:
 			mount_plus = maxi(mount_plus - 1, 0)

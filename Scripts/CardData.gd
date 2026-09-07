@@ -25,7 +25,7 @@ enum CardSubType {
 	DISARM,               # 卸甲归田
 	SNATCH,               # 顺手牵羊
 	DISMANTLE,            # 过河拆桥
-	BURNING_CAMP,         # 火烧连营（火焰蔓延：瞬发+判定双效果）
+	BURNING_CAMP,         # 火烧连营（延时锦囊：判定时伤害并蔓延）
 	NULLIFICATION,        # 无懈可击（响应牌，不能主动打出）
 	SACRIFICE,            # 舍己为人（响应牌：其他玩家将要受到伤害时打出，代替其承受）
 	# 延时锦囊（判定牌）
@@ -38,7 +38,7 @@ enum CardSubType {
 	LIANNU,       # 连弩（武器）：每回合可额外打出一张杀
 	ZHUGE_LIANNU, # 诸葛连弩（武器）：每回合使用杀无次数限制
 	QINGLONG_BLADE, # 青龙偃月刀（武器）：每回合第一次打出杀时摸一张牌
-	ZHANGBA_SPEAR, # 丈八蛇矛（武器）：杀造成伤害后，可流失X体力使目标额外受X伤害（X≤3）
+	ZHANGBA_SPEAR, # 丈八蛇矛（武器）：杀命中后、扣血前流失X体力并合并X伤害（X≤3）
 	CHIXIONG_SHUANGGU, # 雌雄双股剑（武器）：杀指定异性目标后，令其弃一张手牌或令你摸一张牌
 	ICE_SWORD,        # 寒冰剑（武器）：杀造成伤害后，可防止此伤害改为弃置其两张手牌
 	QINGGANG_SWORD,   # 青釭剑（武器）：使用杀指定目标后，无视其防具
@@ -156,19 +156,19 @@ const CARD_DESCRIPTIONS = {
 	CardSubType.IRON_CHAIN: "出牌阶段，对一至两名角色使用（可含自己），横置/重置其连环状态；连环角色受到属性伤害时传导",
 	CardSubType.PEACH_GARDEN: "出牌阶段使用，所有存活角色回复 1 点体力（满血无效，每回合限一张）",
 	CardSubType.HARVEST: "出牌阶段使用，每名角色摸「已损失体力值」数量的牌（最多 3 张，满血摸 0 张；每回合限一张）",
-	CardSubType.DISARM: "出牌阶段使用，所有有装备的角色弃置所有装备牌，然后摸相同数量的牌",
+	CardSubType.DISARM: "每回合限一次，出牌阶段使用，所有有装备的角色弃置所有装备牌，然后摸相同数量的牌",
 	CardSubType.SNATCH: "出牌阶段，对距离 1 内的角色使用，获得其一张牌（与过河拆桥合计每回合限两张）",
 	CardSubType.DISMANTLE: "出牌阶段，对任意角色使用，弃置其一张牌（无距离限制，与顺手牵羊合计每回合限两张）",
-	CardSubType.BURNING_CAMP: "出牌阶段，对距离 1 的角色使用，其与其左右相邻角色各受 1 点火焰伤害，并在其左右相邻角色的判定区各生成一张【火烧连营】",
+	CardSubType.BURNING_CAMP: "延时锦囊：出牌阶段对距离 1 的角色使用，置入其判定区；判定生效时，其与左右相邻角色各受 1 点火焰伤害，并在左右相邻角色判定区各生成一张【火烧连营】",
 	CardSubType.NULLIFICATION: "响应牌：抵消一张锦囊牌的效果（不能主动打出，可连续响应）",
-	CardSubType.SACRIFICE: "响应牌：其他角色将要受到伤害时打出，代替其承受等量同属性伤害（不能主动打出，受伤者本人不能用）",
+	CardSubType.SACRIFICE: "响应牌：代替其他角色承受效果。对于【杀】，在其成为目标时打出，你成为新目标，可正常出闪；伤害按你的状态结算（不能主动打出，原目标本人不能用）",
 	CardSubType.LIGHTNING: "延时锦囊：判定阶段判定（必定生效），受到 3 点雷电伤害（无伤害来源，触发铁索传导）",
 	CardSubType.INDULGENCE: "延时锦囊：判定阶段判定（必定生效），跳过出牌阶段",
 	CardSubType.SUPPLY_SHORTAGE: "延时锦囊：判定阶段判定（必定生效），摸牌阶段少摸一张牌",
 	CardSubType.LIANNU: "每回合内可以额外打出一张【杀】",
 	CardSubType.ZHUGE_LIANNU: "每回合内使用【杀】无次数限制",
 	CardSubType.QINGLONG_BLADE: "每回合第一次打出【杀】时，摸一张牌",
-	CardSubType.ZHANGBA_SPEAR: "每当你使用【杀】造成伤害后，你可以流失X点体力（X至多为3），令该角色额外受到X点伤害（流失体力不算受到伤害；额外伤害与基础伤害合并结算一次）",
+	CardSubType.ZHANGBA_SPEAR: "每当你的【杀】命中时，你可以流失X点体力（X至多为3），令本次伤害增加X点（流失体力不算受到伤害；基础与加成先合并，再进行防具和扣血结算）",
 	CardSubType.CHIXIONG_SHUANGGU: "当你使用【杀】指定一名异性角色为目标后，你可以令其选择一项：1.弃置一张手牌；2.令你摸一张牌",
 	CardSubType.ICE_SWORD: "当你使用【杀】对目标角色造成伤害后，若该角色有手牌，你可以防止此伤害，改为依次弃置其两张手牌",
 	CardSubType.QINGGANG_SWORD: "当你使用【杀】指定一名目标角色后，你无视其防具",
@@ -200,7 +200,7 @@ const CARD_DESCRIPTIONS = {
 	CardSubType.QINGGANG_SHIELD: "当你成为一个效果的目标时，你无视使用效果者的武器；当装备【青釭剑】的角色对你使用【杀】时，双方弃置各自的【青釭剑】与【青釭盾】，再进行之后的结算",
 	CardSubType.THORN_ARMOR: "每当你受到一点伤害后，你与伤害来源进行一次拼点（猜拳），若你赢，则你对其造成 1 点伤害",
 	CardSubType.CALAMITY_ROBE: "你受到的火焰伤害+1；当你受到一次伤害后，你可以将本装备移至一名其他角色的装备区中",
-	CardSubType.SAGE_PROTECTION: "激活：出牌阶段，你可以弃置一张手牌，与一名角色进行拼点。若你赢，则你获得一个贤者标记。当你拥有三个贤者标记时，将所有贤者标记弃置并激活此装备。激活后：当你即将死亡时，你可以弃置所有牌，然后复原你的武将牌至游戏开始时的状态，之后摸四张牌",
+	CardSubType.SAGE_PROTECTION: "激活：出牌阶段，你可以弃置一张手牌，与一名角色进行拼点。若你赢，则你获得一个贤者标记。当你拥有三个贤者标记时，将所有贤者标记弃置并激活此装备。激活后：当你即将死亡时，你可以弃置所有牌，完全复原武将牌至开局状态（包括体力上限、觉醒、界限突破及限定技状态），之后摸四张牌",
 	CardSubType.MOUNT_PLUS: "其他角色计算与你之间的距离时 +1（防御马）",
 	CardSubType.MOUNT_MINUS: "你计算与其他角色之间的距离时 -1（进攻马）",
 	CardSubType.MULE_MINUS: "进行距离判定时，其他玩家视作额外装备了 1 匹 -1 马（攻击距离缩短，你更容易被打到）；当你受到伤害后，你可以将一匹 -1劣马移至一名其他角色的装备区中",
