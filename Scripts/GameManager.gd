@@ -3414,9 +3414,9 @@ func _maybe_liehuo_save(p: Player) -> bool:
 	_update_debug("%s 发动【烈火盾】：流失 1 点体力，代替失去一张牌（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 	_sync_all_ui()
 	# 流失导致濒死 → 先处理（与丈八蛇矛一致）
-	if not p.is_alive():
+	if p.is_dying():
 		await _check_dying(p)
-		if not p.is_alive():
+		if p.is_dying():
 			_handle_death(p, null)  # 流失致死无击杀者
 	return true
 
@@ -3734,6 +3734,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			await rule_scheduler.checkpoint(chain, "before_death")
 			if subject.is_dying():
 				_handle_death(subject, source)
+		# before_death checkpoint 也可能救回目标；重查被普通救援延后的终局。
+		_check_win_condition(null, null)
 		return false
 
 	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
@@ -4163,14 +4165,15 @@ func _show_yes_ah_prompt(card_name: String, has_hand: bool) -> String:
 # 支付【是~啊~】代价：流失 1 点体力（直接减，不算受到伤害）；流失致死先走濒死检查
 # 返回 false = 流失后未救回（本次锦囊/响应视为没有打出，调用方应中止）
 func _pay_yes_ah_cost(p: Player) -> bool:
+	if p == null or not p.is_alive():
+		return false
 	p.hp -= 1
 	_update_debug("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
-	if p.hp <= 0:
+	if p.is_dying():
 		await _check_dying(p)
-		if not p.is_alive():
+		if p.is_dying():
 			_handle_death(p, null)  # 流失致死无击杀者
-			return false
-	return true
+	return p.is_alive()
 
 # 锦囊牌消耗入口：若【是~啊~】已激活则改为流失体力（不消耗手牌）
 # 返回 false = 使用者流失体力后死亡（锦囊取消，调用方应中止）
@@ -6304,7 +6307,7 @@ func _heal_with_staff(p: Player) -> int:
 # 濒死检查：当目标 hp ≤ 0 时，允许自救
 # 阵亡管线（阶段划分，按朋友要求顺序）：
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
-#   → 调用方判 is_alive()：仍 ≤0 则进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
+#   → 调用方判 is_dying()：仍濒死才进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
 func _check_dying(dying: Player):
 	if not dying.is_dying():
 		return
@@ -6333,18 +6336,20 @@ func _check_dying(dying: Player):
 		pass
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢超过一半回复至 1 点体力
-	if not dying.is_alive() and dying.general_name == "安普提·斯丢皮得":
+	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
 		await _try_zhuangsha(dying)
 		if dying.is_alive():
 			_sync_all_ui()
-			return
 
 	# 桃/酒自救/装傻后仍处于濒死 → 阵亡效果·【贤者的加护】（激活后）：即将死亡时可弃置所有牌，复原武将牌至游戏开始时的状态，摸四张牌
-	if not dying.is_alive() and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.sage_activated:
+	if dying.is_dying() and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.sage_activated:
 		var use_save = await _ask_sage_save(dying)
 		if use_save:
 			_do_sage_save(dying)
-			return
+	# 普通嵌套救援中，先前的死亡可能因仍有濒死者而未判胜。
+	# 救回后同样需要重查；未救回则由调用者确认死亡后重查。
+	if dying.is_alive():
+		_check_win_condition(null, null)
 
 # ============================
 #  阵亡处理管线（阶段1-5，按朋友要求顺序分开）
@@ -6354,12 +6359,12 @@ func _check_dying(dying: Player):
 #   阶段2 阵亡效果 —— 弃置所有手牌/装备/判定牌/已确定牌（未来死亡技能钩子在此插入）
 #   阶段3 翻开身份 —— identity_revealed = true，UI 显示身份
 #   阶段4 击杀奖惩 —— 杀死【反贼】：击杀者摸 3 张；主公杀死【忠臣】：主公弃置所有手牌和装备
-#   阶段5 胜负判定 —— 主公阵亡 → 反贼胜（凶手是反贼）/ 内奸胜（其余）；反贼全灭 → 主公&忠臣胜
+#   阶段5 胜负判定 —— 五人标准身份局按已死亡/仍存活身份判定；不依赖凶手身份
 func _handle_death(victim: Player, killer: Player):
 	# ---- 阶段1 阵亡判定 ----
 	if _dead_processed.has(victim):
 		return
-	if victim.is_alive():
+	if not victim.is_dying():
 		return
 	victim.mark_dead()
 	_dead_processed.append(victim)
@@ -6411,31 +6416,14 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 		p.determined_cards.clear()
 		p.hidden_equip_slot = ""
 
-# 胜负判定（阶段5）：
-# ① 主公阵亡 → 游戏立即结束：凶手是【反贼】→ 反贼胜；凶手是忠臣/内奸/无来源 → 内奸胜
-# ② 反贼全部阵亡 → 主公&忠臣胜
-func _check_win_condition(victim: Player, killer: Player):
-	# 1V1 无身份：不判定胜负
-	if player_count < 3:
+# 五人标准身份局判胜；保留旧调用签名，但击杀者只影响奖惩，不决定胜方。
+# 1V1、奸雄、特殊多人死亡时序仍由对应 QA 单独确认。
+func _check_win_condition(_victim: Player, _killer: Player):
+	if _game_over or player_count != 5:
 		return
-	# 主公按身份查找（random_identity 下主公不一定是座位 0）
-	var lord: Player = null
-	for p in players:
-		if p.identity == "主公":
-			lord = p
-			break
-	if lord == null:
-		return
-	if not lord.is_alive():
-		var winner = "反贼" if (killer != null and killer.identity == "反贼") else "内奸"
-		_finish_game(winner, "%s 阵亡" % lord.player_name)
-		return
-	var rebels_alive := 0
-	for p in players:
-		if p.is_alive() and p.identity == "反贼":
-			rebels_alive += 1
-	if rebels_alive == 0:
-		_finish_game("主公", "反贼已全部阵亡")
+	var outcome = IdentityVictory.evaluate(players)
+	if not outcome.is_empty():
+		_finish_game(outcome["winner"], outcome["reason"])
 
 # 结束游戏：置 _game_over 标志 + 发信号（弹窗显示胜方，回合不再推进）
 func _finish_game(winner_identity: String, reason: String):
