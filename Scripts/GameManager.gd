@@ -1341,7 +1341,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP:
 			# 延时锦囊（对目标使用）：进入目标判定区，待其下回合判定阶段结算
 			# （闪电不走此路径：只能对自己，由 play_card 直接处理）
-			if not await _consume_trick(p, sub):
+			card = await _take_trick_card(p, sub)
+			if card == null:
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
@@ -1559,9 +1560,12 @@ func play_card(sub: CardData.CardSubType):
 			if p.get_weapon() != CardData.CardSubType.RAGING_AXE and p.wine_stacks > 0:
 				_update_debug("【酒】的效果尚未消耗，不能连续使用")
 				return
+			var used_wine = HandPayment.take(p.hand, sub)
+			if used_wine == null:
+				_update_debug("没有可用的【酒】或任意牌")
+				return
 			p.wine_stacks += 1
-			p.hand.pop_back()
-			deck.discard(CardBase.create(sub))
+			deck.discard(used_wine)
 			_update_debug("%s 使用了【酒】（当前 %d 层，下一张【杀】伤害+%d）" % [p.player_name, p.wine_stacks, p.wine_stacks])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1570,9 +1574,12 @@ func play_card(sub: CardData.CardSubType):
 			if p.hp >= p.max_hp:
 				_update_debug("体力已满")
 				return
+			var used_peach = HandPayment.take(p.hand, sub)
+			if used_peach == null:
+				_update_debug("没有可用的【桃】或任意牌")
+				return
 			var healed = _heal_with_staff(p)
-			p.hand.pop_back()
-			deck.discard(CardBase.create(sub))
+			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1662,9 +1669,9 @@ func play_card(sub: CardData.CardSubType):
 			if not p.is_alive():
 				_update_debug("你已阵亡，无法使用【闪电】")
 				return
-			if not await _consume_trick(p, sub):
+			var card = await _take_trick_card(p, sub)
+			if card == null:
 				return
-			var card = CardBase.create(sub)
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
 			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
@@ -4191,14 +4198,26 @@ func _pay_yes_ah_cost(p: Player) -> bool:
 			_handle_death(p, null)  # 流失致死无击杀者
 	return p.is_alive()
 
-# 锦囊牌消耗入口：若【是~啊~】已激活则改为流失体力（不消耗手牌）
-# 返回 false = 使用者流失体力后死亡（锦囊取消，调用方应中止）
-func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
+# 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
+func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	if _yes_ah_active:
 		_yes_ah_active = false
-		return await _pay_yes_ah_cost(p)
-	p.hand.pop_back()
-	deck.discard(CardBase.create(sub))
+		if not await _pay_yes_ah_cost(p):
+			return null
+		return CardBase.create(sub)
+	var card = HandPayment.take(p.hand, sub)
+	if card == null:
+		_update_debug("没有可用的【%s】或任意牌，未支付费用" % CardData.get_type_name(sub))
+	return card
+
+# 即时锦囊消耗入口：支付成功才记入弃牌；技能视为使用沿用原有不生成实体弃牌的约定。
+func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
+	var virtual_use := _yes_ah_active
+	var card = await _take_trick_card(p, sub)
+	if card == null:
+		return false
+	if not virtual_use:
+		deck.discard(card)
 	return true
 
 # ============================
