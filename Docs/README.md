@@ -10,4 +10,6 @@
 
 实施证据：[规则差异与五人身份局验收基线（ST-03/04）](HumanAgent/规则差异与五人局验收.md)。
 
+卡牌专项：[牌流转审计第一批（ST-08/10 局部）](HumanAgent/牌流转审计.md)。
+
 原始文档中的中文标点可能影响 GFM 对 `**` 的识别。紧贴正文的书名号、技能括号等加粗内容使用 `<strong>…</strong>`，避免插入空格或修改正文。参见 [GFM 强调规则](https://github.github.com/gfm/#emphasis-and-strong-emphasis)。

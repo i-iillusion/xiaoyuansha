@@ -2152,11 +2152,11 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 
 	match zone:
 		"hand":
-			_steal_hand(attacker, target, is_snatch, card_name)
+			await _steal_hand(attacker, target, is_snatch, card_name)
 		"equip":
 			await _steal_equip(attacker, target, is_snatch, card_name)
 		"judgment":
-			_steal_judgment(attacker, target, is_snatch, card_name)
+			await _steal_judgment(attacker, target, is_snatch, card_name)
 
 	_sync_all_ui()
 
@@ -2169,11 +2169,17 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了这张手牌！" % target.player_name)
 		return
-	target.hand.pop_back()
+	# 等待失牌替代期间牌区可能改变，不能从已清空的牌区生成一张假牌。
+	if target.is_dead() or target.hand.is_empty():
+		return
+	var taken: CardBase = target.hand.pop_back()
 	if is_snatch:
-		attacker.hand.append(null)
+		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
+		attacker.hand.append(taken)
 		_update_debug("%s 获得 %s 的 1 张手牌（自己手牌 %d 张）" % [attacker.player_name, target.player_name, attacker.hand_size()])
 	else:
+		if taken != null:
+			deck.discard(taken)
 		_update_debug("%s 弃置了 %s 的 1 张手牌（目标剩 %d 张）" % [attacker.player_name, target.player_name, target.hand_size()])
 
 # 装备：目标失去该装备；顺手牵羊时放入自己「已确定的牌」
@@ -2192,10 +2198,14 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	else:
 		slot = slots[randi() % slots.size()]
 
+	if not target.equipment.has(slot):
+		return
 	var sub = target.equipment[slot]
 	# 【烈火盾】：可流失 1 点体力代替失去这件装备
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了【%s】！" % [target.player_name, CardData.get_type_name(sub)])
+		return
+	if target.is_dead() or target.equipment.get(slot, -1) != sub:
 		return
 	# 【贤者的加护】标记跟随装备：被顺手牵羊时标记/激活状态一并转移给新持有者（被拆/卸甲进弃牌堆则清空）
 	var sage_transfer := false
@@ -2215,6 +2225,9 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		else:
 			_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
+		# 装备区目前只存类型，因此沿用死亡弃牌的资源重建约定；暗置占位不造实体。
+		if sub != CardData.CardSubType.HIDDEN_EQUIPMENT:
+			deck.discard(CardBase.create(sub))
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
@@ -2226,11 +2239,14 @@ func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_nam
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了判定牌！" % target.player_name)
 		return
+	if target.is_dead() or target.judgment_cards.is_empty():
+		return
 	var card = target.judgment_cards.pop_back()
 	if is_snatch:
 		attacker.determined_cards.append(card)
 		_update_debug("%s 获得 %s 的判定牌【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, card.card_name])
 	else:
+		deck.discard(card)
 		_update_debug("%s 弃置了 %s 的判定牌【%s】" % [attacker.player_name, target.player_name, card.card_name])
 
 # AI 随机选一个目标有牌的区域
