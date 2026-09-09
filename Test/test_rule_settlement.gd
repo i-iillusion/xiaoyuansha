@@ -95,6 +95,8 @@ func check_trick_responses():
 		game._yes_ah_override = func(): return "card"
 		check(await pay_response(sub) and owner.hp == 9 and owner.hand == [wrong], label + "：拒绝技能后仍可支付匹配牌")
 
+		# 下跪状态只对布鲁斯生效；这里模拟弹窗期间状态失效，不测试技能发动条件。
+		owner.general_name = "布鲁斯·萨维奇"
 		actual = CardBase.create(sub)
 		owner.hand.append(actual)
 		var kneel_on_prompt = func():
