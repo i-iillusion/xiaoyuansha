@@ -1906,25 +1906,39 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
-		var responded = false
-		if target_seat == 0 and target.hand_size() > 0:
-			# 玩家 0 需要交互
-			responded = await _show_aoe_prompt(card_name, required_name)
-		else:
-			# AI 玩家直接受伤害
-			pass
+		var responded = await _ask_basic_card_response(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
+		if _game_over:
+			break
+		if not target.is_alive() or _is_kneeling(target):
+			continue
 
 		if responded:
-			target.hand.pop_back()
-			# 【八卦阵】：使用/打出【闪】时摸一张牌（万箭齐发路径）
-			if required_sub == CardData.CardSubType.DODGE:
-				_try_bagua_draw(target)
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 			await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
 
 	_sync_all_ui()
+
+# 决斗/AOE 的物理响应：提示只决定意愿，成功支付后才算打出。
+# 保持 AI 暂不响应的边界；不消耗出牌阶段杀次数和酒。青龙响应计数缺口见 QA-T06。
+func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable) -> bool:
+	if _game_over or not p.is_alive() or _is_kneeling(p) or p.seat_index != 0:
+		return false
+	if HandPayment.find_response_index(p.hand, expected) < 0:
+		return false
+	if not await prompt.call():
+		return false
+	if _game_over or not p.is_alive() or _is_kneeling(p):
+		return false
+	var used_card = HandPayment.take_response(p.hand, expected)
+	if used_card == null:
+		return false
+	deck.discard(used_card)
+	if expected == CardData.CardSubType.DODGE:
+		_try_bagua_draw(p)
+	_sync_all_ui()
+	return true
 
 func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
 	# 测试钩子：跳过 UI 直接返回
@@ -3080,34 +3094,26 @@ func _play_duel(attacker: Player, target: Player):
 
 	while true:
 		# 【霸王】：非杰基方每次响应需打出两张杀（杰基本人只需一张）
+		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+			break
 		var needs_two = jacqui != null and current != jacqui
-		var has_card = current.hand_size() > 0
-		var can_respond = false
-
-		if current.seat_index == 0 and has_card:
-			# 玩家 0 需要交互
-			can_respond = await _show_duel_prompt(needs_two)
-		else:
-			# AI 无法响应
-			can_respond = false
+		var can_respond = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
+		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+			break
 
 		if can_respond:
-			current.hand.pop_back()
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
 			# 【霸王】：对方还需打出第二张杀
 			if needs_two:
-				if current.hand_size() <= 0:
+				if HandPayment.find_response_index(current.hand, CardData.CardSubType.STRIKE) < 0:
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
 					break
-				var cont = false
-				if current.seat_index == 0:
-					cont = await _show_duel_second_strike_prompt()
-				else:
-					cont = false  # AI 不会继续响应（本游戏 AI 不响应决斗）
+				var cont = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
+				if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+					break
 				if cont:
-					current.hand.pop_back()
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)

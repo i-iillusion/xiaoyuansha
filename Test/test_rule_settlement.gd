@@ -22,6 +22,11 @@ func reset_players():
 	game._dying_peach_override = func(): return false
 	game._nullify_override = func(): return false
 	game._yes_ah_override = Callable()
+	game._aoe_override = func(): return false
+	game._duel_respond_override = func(): return false
+	game._duel_second_override = func(): return false
+	game.turn_manager.current_player_idx = 0
+	game.turn_manager.strike_count_this_turn = 0
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -31,6 +36,7 @@ func reset_players():
 		p.equipment.clear()
 		p.chained = false
 		p.kneeling = false
+		p.wine_stacks = 0
 		p.awoken = false
 		p.awake_choice = 0
 		p.capture_game_start_state()
@@ -106,6 +112,83 @@ func check_trick_responses():
 		game._sacrifice_override = kneel_on_prompt
 		check(not await pay_response(sub) and owner.hand == [wrong, actual] and owner.hp == 9, label + "：弹窗期间下跪后不收费用")
 
+func check_duel_aoe_payments():
+	var owner = game.players[0]
+	var opponent = game.players[1]
+	for sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]:
+		reset_players()
+		var actual = CardBase.create(sub)
+		var wrong = CardBase.create(CardData.CardSubType.PEACH)
+		owner.hand.assign([actual, wrong, null])
+		check(HandPayment.find_response_index(owner.hand, CardData.CardSubType.STRIKE) == 0, "响应杀优先具体牌，不先消耗任意牌")
+		check(HandPayment.find_index(owner.hand, CardData.CardSubType.STRIKE, actual) == (0 if sub == CardData.CardSubType.STRIKE else -1), "主动声明仍严格匹配，不受响应族匹配影响")
+		owner.hand.pop_back() # 本场只保留实际响应牌与错误类型。
+		owner.wine_stacks = 2
+		game.turn_manager.strike_count_this_turn = 1
+		game._duel_respond_override = func(): return true
+		await game._play_duel(opponent, owner)
+		check(owner.hp == 10 and opponent.hp == 9, "普通/属性杀均可响应决斗，对手未响应后承担普通伤害")
+		check(owner.hand == [wrong] and game.deck._discard.count(actual) == 1 and actual.sub_type == sub, "决斗保留响应原牌与原类型，不扣末尾桃")
+		check(owner.wine_stacks == 2 and game.turn_manager.strike_count_this_turn == 1, "响应杀不消耗酒和主动杀次数")
+
+	reset_players()
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	owner.hand.append(peach)
+	game._duel_respond_override = func(): return true
+	await game._play_duel(opponent, owner)
+	check(owner.hp == 9 and owner.hand == [peach], "决斗没有杀时不拿桃冒充")
+
+	# 霸王必须依次支付，第二张缺少/拒绝时第一张不退回。
+	for second_mode in ["missing", "decline", "accept", "removed"]:
+		reset_players()
+		opponent.general_name = "杰基·斯特朗"
+		var first = CardBase.create(CardData.CardSubType.THUNDER_STRIKE)
+		var second = CardBase.create(CardData.CardSubType.FIRE_STRIKE)
+		owner.hand.assign([peach, first])
+		if second_mode != "missing":
+			owner.hand.push_front(second)
+		game._duel_respond_override = func(): return true
+		game._duel_second_override = func():
+			if second_mode == "removed":
+				owner.hand.erase(second)
+			return second_mode != "decline"
+		await game._play_duel(opponent, owner)
+		check(game.deck._discard.count(first) == 1, "霸王：第一张杀实际支付且不退回")
+		check(owner.hp == (10 if second_mode == "accept" else 9) and opponent.hp == (9 if second_mode == "accept" else 10), "霸王：两张成功才交换响应方")
+		check(game.deck._discard.count(second) == (1 if second_mode == "accept" else 0) and owner.hand.has(peach), "霸王：第二张失败不扣错牌、不虚构弃牌")
+
+	for required in [CardData.CardSubType.STRIKE, CardData.CardSubType.DODGE]:
+		for mode in ["actual", "blank", "wrong", "decline", "removed"]:
+			reset_players()
+			var aoe = CardData.CardSubType.BARBARIAN_INVASION if required == CardData.CardSubType.STRIKE else CardData.CardSubType.VOLLEY_OF_ARROWS
+			var response_sub = CardData.CardSubType.FIRE_STRIKE if required == CardData.CardSubType.STRIKE else CardData.CardSubType.DODGE
+			var actual = CardBase.create(response_sub)
+			owner.hand.append(peach)
+			if mode == "blank":
+				owner.hand.append(null)
+			elif mode != "wrong":
+				owner.hand.push_front(actual)
+			if required == CardData.CardSubType.DODGE:
+				owner.equipment["armor"] = CardData.CardSubType.BAGUA_ZHEN
+			opponent.hand.append(CardBase.create(aoe))
+			game.turn_manager.current_player_idx = 1
+			game._aoe_override = func():
+				if mode == "removed":
+					owner.hand.erase(actual)
+				return mode != "decline"
+			var discard_before = game.deck._discard.size()
+			await game._play_aoe(required, CardData.get_type_name(aoe), CardData.get_type_name(required))
+			var paid = mode in ["actual", "blank"]
+			check(owner.hp == (10 if paid else 9) and owner.hand.has(peach), "AOE：只有真实支付成功才避免伤害，保留桃")
+			check(game.deck._discard.size() == discard_before + (2 if paid else 1), "AOE：使用牌和成功响应各入弃牌堆一次")
+			if mode == "actual":
+				check(game.deck._discard.count(actual) == 1 and actual.sub_type == response_sub, "AOE：响应保留原实例与属性")
+			if mode == "blank":
+				check(game.deck._discard.back().sub_type == required, "AOE：任意牌默认具体化为所需基本牌")
+			if required == CardData.CardSubType.DODGE:
+				check(owner.hand.count(null) == (1 if paid else 0), "万箭：八卦只在实际支付闪后摸一张")
+	reset_players()
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -120,6 +203,7 @@ func _run():
 	var b = game.players[1]
 	var a = game.players[2]
 	await check_trick_responses()
+	await check_duel_aoe_payments()
 
 	reset_players()
 	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))
