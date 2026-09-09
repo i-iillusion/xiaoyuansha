@@ -20,6 +20,8 @@ func reset_players():
 	game._sacrifice_override = func(): return false
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
+	game._nullify_override = func(): return false
+	game._yes_ah_override = Callable()
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -38,6 +40,70 @@ func strike(source: Player, target: Player, ignore_restrictions: bool = false):
 		CardBase.create(CardData.CardSubType.STRIKE), CardData.CardSubType.STRIKE,
 		EffectChain.DamageType.PHYSICAL, 1, ignore_restrictions)
 
+# 只检查支付结果，不改变原有无懈轮询或代受结算时机。
+func pay_response(sub: CardData.CardSubType) -> bool:
+	if sub == CardData.CardSubType.NULLIFICATION:
+		return await game._ask_nullification_round("支付回归") != ""
+	return await game._maybe_sacrifice(game.players[2], game.players[1], 1, EffectChain.DamageType.PHYSICAL) != null
+
+func check_trick_responses():
+	var owner = game.players[0]
+	for sub in [CardData.CardSubType.NULLIFICATION, CardData.CardSubType.SACRIFICE]:
+		var label = CardData.get_type_name(sub)
+		reset_players()
+		var wrong = CardBase.create(CardData.CardSubType.PEACH)
+		owner.hand.append(wrong)
+		game._nullify_override = func(): return true
+		game._sacrifice_override = func(): return true
+		check(not await pay_response(sub), label + "：具体桃不能冒充响应牌")
+		check(owner.hand == [wrong] and not game.deck._discard.has(wrong), label + "：类型不符保留原牌")
+
+		var actual = CardBase.create(sub)
+		owner.hand.push_front(actual)
+		check(await pay_response(sub), label + "：匹配具体牌可支付")
+		check(owner.hand == [wrong] and game.deck._discard.count(actual) == 1, label + "：原实例入弃牌堆一次，不扣末尾桃")
+
+		owner.hand.append(null)
+		var discard_before = game.deck._discard.size()
+		check(await pay_response(sub), label + "：任意牌可响应")
+		check(owner.hand == [wrong] and game.deck._discard.size() == discard_before + 1 and game.deck._discard.back().sub_type == sub, label + "：任意牌具体化后入弃牌堆")
+
+		actual = CardBase.create(sub)
+		owner.hand.append(actual)
+		game._nullify_override = func(): return false
+		game._sacrifice_override = func(): return false
+		check(not await pay_response(sub) and owner.hand == [wrong, actual], label + "：放弃不扣牌")
+
+		# 提示打开时可支付，返回时原牌已离手：不能改扣剩下的桃。
+		var remove_response = func():
+			owner.hand.erase(actual)
+			return true
+		game._nullify_override = remove_response
+		game._sacrifice_override = remove_response
+		check(not await pay_response(sub) and owner.hand == [wrong], label + "：弹窗返回后再次校验费用")
+
+		game._nullify_override = func(): return true
+		game._sacrifice_override = func(): return true
+		owner.general_name = "安普提·斯丢皮得"
+		discard_before = game.deck._discard.size()
+		check(await pay_response(sub), label + "：无匹配牌仍可用是啊代付")
+		check(owner.hp == 9 and owner.hand == [wrong] and game.deck._discard.size() == discard_before, label + "：代付只失血，不造实体弃牌")
+
+		owner.hand.append(actual)
+		game._yes_ah_override = func(): return "cancel"
+		check(not await pay_response(sub) and owner.hp == 9 and owner.hand == [wrong, actual], label + "：取消是啊保留费用")
+		game._yes_ah_override = func(): return "card"
+		check(await pay_response(sub) and owner.hp == 9 and owner.hand == [wrong], label + "：拒绝技能后仍可支付匹配牌")
+
+		actual = CardBase.create(sub)
+		owner.hand.append(actual)
+		var kneel_on_prompt = func():
+			owner.kneeling = true
+			return true
+		game._nullify_override = kneel_on_prompt
+		game._sacrifice_override = kneel_on_prompt
+		check(not await pay_response(sub) and owner.hand == [wrong, actual] and owner.hp == 9, label + "：弹窗期间下跪后不收费用")
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -51,6 +117,7 @@ func _run():
 	var c = game.players[0]
 	var b = game.players[1]
 	var a = game.players[2]
+	await check_trick_responses()
 
 	reset_players()
 	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))

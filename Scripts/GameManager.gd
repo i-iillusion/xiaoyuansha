@@ -3314,10 +3314,14 @@ func _ask_nullification_round(desc: String) -> String:
 			# AI 暂不主动响应无懈
 			played = "skip"
 		if played != "skip":
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", p.hand_size() > 0)
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0)
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【无懈可击】" % p.player_name)
 				_sync_all_ui()
@@ -3327,8 +3331,10 @@ func _ask_nullification_round(desc: String) -> String:
 					_sync_all_ui()
 					return ""
 			else:
-				p.hand.pop_back()
-				deck.discard(CardBase.create(CardData.CardSubType.NULLIFICATION))
+				var used_card = HandPayment.take(p.hand, CardData.CardSubType.NULLIFICATION)
+				if used_card == null:
+					continue
+				deck.discard(used_card)
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -3338,9 +3344,9 @@ func _ask_nullification_round(desc: String) -> String:
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_nullification_prompt(desc: String, p: Player) -> String:
-	var has_hand = p.hand_size() > 0
+	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
-	# 测试钩子：只决定「是否愿意出」；无手牌时仅安普提可通过【是~啊~】打出
+	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _nullify_override.is_valid():
 		if not _nullify_override.call():
 			return "skip"
@@ -3365,7 +3371,7 @@ func _show_nullification_prompt(desc: String, p: Player) -> String:
 	var label = Label.new()
 	label.text = desc
 	if not has_hand:
-		label.text += "\n（无手牌，可发动【是~啊~】流失 1 点体力视为打出）"
+		label.text += "\n（无可用的无懈或任意牌，可发动【是~啊~】流失 1 点体力视为打出）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -6250,10 +6256,14 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 			play = "skip"  # AI 暂不主动打出舍己为人
 
 		if play != "skip":
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", p.hand_size() > 0)
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0)
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【舍己为人】" % p.player_name)
 				_sync_all_ui()
@@ -6263,8 +6273,10 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 					_sync_all_ui()
 					continue
 			else:
-				p.hand.pop_back()
-				deck.discard(CardBase.create(CardData.CardSubType.SACRIFICE))
+				var used_card = HandPayment.take(p.hand, CardData.CardSubType.SACRIFICE)
+				if used_card == null:
+					continue
+				deck.discard(used_card)
 			_sync_all_ui()
 			return p
 	return null
@@ -6272,9 +6284,9 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	var p = players[0]
-	var has_hand = p.hand_size() > 0
+	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
-	# 测试钩子：只决定「是否愿意打出」；无手牌时仅安普提可通过【是~啊~】打出
+	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _sacrifice_override.is_valid():
 		if not _sacrifice_override.call():
 			return "skip"
@@ -6299,7 +6311,7 @@ func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	var label = Label.new()
 	label.text = "%s 将要受到 %d 点伤害\n是否打出【舍己为人】代替其承受？" % [target.player_name, amount]
 	if not has_hand:
-		label.text += "\n（无手牌，可发动【是~啊~】流失 1 点体力视为打出）"
+		label.text += "\n（无可用的舍己或任意牌，可发动【是~啊~】流失 1 点体力视为打出）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
