@@ -114,7 +114,8 @@ func _run():
 
 	reset_players()
 	b.equipment["armor"] = CardData.CardSubType.TENGJIA
-	b.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	# 忽略目标限制不取消响应；响应必须有真实闪或任意牌，不能拿具体杀冒充。
+	b.hand.append(CardBase.create(CardData.CardSubType.DODGE))
 	check(not await strike(a, b), "通常不能选择藤甲为杀的目标")
 	game._dodge_override = func(): return true
 	await strike(a, b, true)
