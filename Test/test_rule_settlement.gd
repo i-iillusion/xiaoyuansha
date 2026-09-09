@@ -53,8 +53,8 @@ func _run():
 	var a = game.players[2]
 
 	reset_players()
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))
+	c.hand.append(CardBase.create(CardData.CardSubType.SACRIFICE))
 	b.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
 	game._sacrifice_override = func(): return true
 	game._dodge_override = func():
@@ -66,7 +66,25 @@ func _run():
 	check(observations == [1], "只询问实际目标 C 一次，且已先支付代受费用")
 
 	reset_players()
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	var wrong_dodge = CardBase.create(CardData.CardSubType.PEACH)
+	c.hand.append(wrong_dodge)
+	game._dodge_override = func(): return true
+	await strike(b, c)
+	check(c.hp == 9 and c.hand == [wrong_dodge], "桃不能当闪响应，即使测试钩子答应出闪也不扣错牌")
+	check(not game.deck._discard.has(wrong_dodge), "无合法闪不会把其他具体牌放入弃牌堆")
+
+	reset_players()
+	var actual_dodge = CardBase.create(CardData.CardSubType.DODGE)
+	c.hand.append(actual_dodge)
+	c.equipment["armor"] = CardData.CardSubType.BAGUA_ZHEN
+	game._dodge_override = func(): return true
+	await strike(b, c)
+	check(c.hp == 10, "实际闪成功防止本次杀伤害")
+	check(game.deck._discard.count(actual_dodge) == 1, "响应闪原实例只进入弃牌堆一次")
+	check(c.hand.size() == 1 and c.hand[0] == null, "先支付实际闪，再通过八卦摸任意牌")
+
+	reset_players()
+	c.hand.append(CardBase.create(CardData.CardSubType.SACRIFICE))
 	b.equipment["armor"] = CardData.CardSubType.SILVER_LION
 	a.equipment["weapon"] = CardData.CardSubType.ZHANGBA_SPEAR
 	game._sacrifice_override = func(): return true

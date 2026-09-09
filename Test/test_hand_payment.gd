@@ -39,12 +39,18 @@ func reset_case():
 		p.hand.clear()
 		p.judgment_cards.clear()
 		p.equipment.clear()
+		p.wine_stacks = 0
+		p.mount_minus = 0
+		p.mount_plus = 0
 	game.reset_game_over_state()
+	game.turn_manager.strike_count_this_turn = 0
 	game._stop_countdown()
 	game.deck._discard.clear()
 	game._yes_ah_active = false
 	game._dying_peach_override = func(): return false
 	game._nullify_override = func(): return false
+	game._sacrifice_override = func(): return false
+	game._dodge_override = func(): return false
 
 func _run():
 	check_selection()
@@ -108,6 +114,40 @@ func _run():
 	await game.execute_card_on_target(other, CardData.CardSubType.BURNING_CAMP)
 	check(other.judgment_cards.size() == 1 and owner.hand == [spare], "技能延时锦囊支付后生成判定区资源")
 	check(game.deck.discard_count() == 0, "技能延时锦囊不会同时生成弃牌")
+
+	reset_case()
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	owner.wine_stacks = 2
+	owner.hand.append(peach)
+	var target_hp := other.hp
+	await game.execute_card_on_target(other, CardData.CardSubType.STRIKE)
+	check(owner.hand == [peach] and game.deck.discard_count() == 0, "缺杀时不扣桃、不借青龙摸牌完成支付")
+	check(owner.wine_stacks == 2 and game.turn_manager.strike_count_this_turn == 0, "缺杀时保留酒和使用次数")
+	check(other.hp == target_hp, "费用不足时杀不造成伤害")
+	var paid_strike := CardBase.create(CardData.CardSubType.STRIKE)
+	owner.hand.push_front(paid_strike)
+	await game.execute_card_on_target(other, CardData.CardSubType.STRIKE)
+	check(game.deck._discard.count(paid_strike) == 1 and not owner.hand.has(paid_strike), "杀保留并弃置原实例")
+	check(owner.hand == [peach, null], "先支付实际杀，再通过青龙摸牌，不误扣末尾牌")
+	check(owner.wine_stacks == 0 and game.turn_manager.strike_count_this_turn == 1, "成功支付后消耗酒、记录一次杀")
+	check(other.hp == target_hp - 3, "本次杀保留原酒加成")
+
+	reset_case()
+	owner.hand.append(paid_strike)
+	await game.execute_card_on_target(other, CardData.CardSubType.FIRE_STRIKE)
+	check(owner.hand == [paid_strike] and game.turn_manager.strike_count_this_turn == 0, "主动火杀不能重新声明已具体化的普通杀")
+	await game.execute_multi_strike([], CardData.CardSubType.STRIKE)
+	check(owner.hand == [paid_strike] and game.deck.discard_count() == 0, "空多目标列表不收费用")
+	owner.equipment["weapon"] = CardData.CardSubType.FANGTIAN_HALBERD
+	owner.equipment["mount_1"] = CardData.CardSubType.MOUNT_MINUS
+	owner.mount_minus = 1
+	var second := game.players[2]
+	var before_first := other.hp
+	var before_second := second.hp
+	await game.execute_multi_strike([other, second], CardData.CardSubType.STRIKE)
+	check(game.deck._discard.count(paid_strike) == 1 and owner.hand.is_empty(), "多目标杀只支付并弃置一张原牌")
+	check(game.turn_manager.strike_count_this_turn == 1, "多目标杀只记录一次使用")
+	check(other.hp == before_first - 1 and second.hp == before_second - 1, "两个目标分别结算同一次使用")
 
 	game.queue_free()
 	await process_frame

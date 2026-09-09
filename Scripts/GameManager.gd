@@ -1294,6 +1294,10 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
+			card = HandPayment.take(p.hand, sub)
+			if card == null:
+				_update_debug("没有可用的【%s】或任意牌，未使用杀" % CardData.get_type_name(sub))
+				return
 			# 青龙偃月刀：每回合第一次打出【杀】时摸一张牌（被闪避也算打出）
 			# 用出杀前的击杀次数判断「第一次」：中途装卸武器语义自动正确
 			var is_first_strike = turn_manager.strike_count_this_turn == 0
@@ -1307,8 +1311,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += wine_stacks
 			# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 			base_damage += _rage_bonus(p)
-			# 先消耗手牌再执行效果
-			p.hand.pop_back()
+			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
 			_sync_all_ui()
 
@@ -1443,10 +1446,15 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 # 【方天画戟】多目标杀：一次打出、逐目标结算。
 
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
+	if targets.is_empty():
+		return
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
 	var p = players[turn_manager.current_player_idx]
-	var card = CardBase.create(sub)
+	var card = HandPayment.take(p.hand, sub)
+	if card == null:
+		_update_debug("没有可用的【%s】或任意牌，未使用多目标杀" % CardData.get_type_name(sub))
+		return
 
 	turn_manager.use_strike()
 	var base_damage = 1
@@ -1455,7 +1463,6 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	base_damage += wine_stacks
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
-	p.hand.pop_back()
 	deck.discard(card)
 	_sync_all_ui()
 
@@ -1529,6 +1536,9 @@ func play_card(sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
+			if HandPayment.find_index(p.hand, sub) < 0:
+				_update_debug("没有可用的【%s】或任意牌" % CardData.get_type_name(sub))
+				return
 			var strike_limit = p.strike_limit()
 			if not turn_manager.can_play_strike(strike_limit):
 				if strike_limit == -1:
@@ -3513,7 +3523,7 @@ func _show_liehuo_prompt() -> bool:
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
-	if responder.hand_size() <= 0:
+	if HandPayment.find_index(responder.hand, expected_sub) < 0:
 		return false
 	# 【下跪】：无法使用或打出任何牌 → 不能出闪
 	if _is_kneeling(responder):
@@ -3550,7 +3560,13 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		_sync_all_ui()
 
 	if dodged:
-		responder.hand.pop_back()
+		# 弹窗返回后重新验证；没有合法闪时按未响应处理，不扣除其他类型。
+		if not responder.is_alive() or _is_kneeling(responder):
+			return false
+		var used_dodge = HandPayment.take(responder.hand, expected_sub)
+		if used_dodge == null:
+			return false
+		deck.discard(used_dodge)
 		# 【八卦阵】：使用/打出【闪】时摸一张牌（杀→闪路径）
 		if expected_sub == CardData.CardSubType.DODGE:
 			_try_bagua_draw(responder)
