@@ -1298,13 +1298,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			if card == null:
 				_update_debug("没有可用的【%s】或任意牌，未使用杀" % CardData.get_type_name(sub))
 				return
-			# 青龙偃月刀：每回合第一次打出【杀】时摸一张牌（被闪避也算打出）
-			# 用出杀前的击杀次数判断「第一次」：中途装卸武器语义自动正确
-			var is_first_strike = turn_manager.strike_count_this_turn == 0
 			turn_manager.use_strike()
-			if is_first_strike and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
-				_draw_blank_cards(p, 1)
-				_update_debug("%s 发动【青龙偃月刀】：打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 			var base_damage = 1
 			var wine_stacks = p.wine_stacks
 			p.wine_stacks = 0
@@ -1313,6 +1307,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += _rage_bonus(p)
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
+			_record_strike_played(p)
 			_sync_all_ui()
 
 			var element = EffectChain.DamageType.PHYSICAL
@@ -1464,6 +1459,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
+	_record_strike_played(p)
 	_sync_all_ui()
 
 	var element = EffectChain.DamageType.PHYSICAL
@@ -1921,7 +1917,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 	_sync_all_ui()
 
 # 决斗/AOE 的物理响应：提示只决定意愿，成功支付后才算打出。
-# 保持 AI 暂不响应的边界；不消耗出牌阶段杀次数和酒。青龙响应计数缺口见 QA-T06。
+# 保持 AI 暂不响应的边界；不消耗出牌阶段杀次数和酒。
 func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable) -> bool:
 	if _game_over or not p.is_alive() or _is_kneeling(p) or p.seat_index != 0:
 		return false
@@ -1935,6 +1931,8 @@ func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt:
 	if used_card == null:
 		return false
 	deck.discard(used_card)
+	if expected == CardData.CardSubType.STRIKE:
+		_record_strike_played(p)
 	if expected == CardData.CardSubType.DODGE:
 		_try_bagua_draw(p)
 	_sync_all_ui()
@@ -3434,6 +3432,13 @@ signal _calamity_robe_target_result(target: Player)
 # 劣马转移目标选择结果（-1/+1 各自独立，避免并发干扰）
 signal _minus_mule_target_result(target: Player)
 signal _plus_mule_target_result(target: Player)
+
+# 在一次杀使用/打出已经成立后登记；多目标只调用一次，效果链不重复登记。
+func _record_strike_played(p: Player):
+	var first := turn_manager.record_strike_played(p.seat_index)
+	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
+		_draw_blank_cards(p, 1)
+		_update_debug("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 
 # 【八卦阵】：你每使用或打出一张【闪】时，摸一张牌（锁定技；装备者判定）
 func _try_bagua_draw(p: Player):
@@ -5016,6 +5021,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
 	var card = CardBase.create(CardData.CardSubType.STRIKE)
+	_record_strike_played(p)
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
 	if p.wine_stacks > 0:

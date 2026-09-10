@@ -27,6 +27,7 @@ func reset_players():
 	game._duel_second_override = func(): return false
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.strike_count_this_turn = 0
+	game.turn_manager._strike_actors_this_turn.clear()
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -189,6 +190,79 @@ func check_duel_aoe_payments():
 				check(owner.hand.count(null) == (1 if paid else 0), "万箭：八卦只在实际支付闪后摸一张")
 	reset_players()
 
+func check_qinglong_history():
+	# 独立状态机验证边界，不触发对局的回合开始 UI。
+	var turns = TurnManager.new()
+	turns.debug_log = false
+	turns.start_game()
+	check(turns.record_strike_played(0) and turns.record_strike_played(1), "青龙：各座位独立记录第一次杀")
+	check(not turns.record_strike_played(0) and turns.strikes_used() == 0, "青龙：响应历史不占主动杀次数")
+	turns.start_waiting("test", 1)
+	turns.end_waiting()
+	check(not turns.record_strike_played(1), "青龙：响应返回不清空历史")
+	turns.current_phase = TurnManager.Phase.DRAW
+	turns.advance_phase()
+	check(not turns.record_strike_played(0), "青龙：摸牌后进入出牌阶段不重置历史")
+	turns.next_turn()
+	check(turns.record_strike_played(0) and turns.record_strike_played(1), "青龙：下一角色回合重置全部座位")
+	turns.skip_full_turn = true
+	turns.advance_phase()
+	turns.next_turn()
+	check(turns.record_strike_played(0), "青龙：跳过回合后仍按新回合重置")
+	turns.start_game()
+	check(turns.record_strike_played(0), "青龙：新对局不继承旧历史")
+	turns.free()
+
+	reset_players()
+	var owner = game.players[0]
+	var opponent = game.players[1]
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	owner.hand.append(peach)
+	check(not await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true), "青龙：缺少杀不能借摸牌支付")
+	var first = CardBase.create(CardData.CardSubType.FIRE_STRIKE)
+	owner.hand.push_front(first)
+	check(not await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return false), "青龙：拒绝响应不登记首次")
+	check(await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true), "青龙：支付属性杀响应成功")
+	check(owner.hand == [peach, null] and game.deck._discard.count(first) == 1, "青龙：实际响应牌先弃置，首次响应再摸一张")
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	check(owner.hand == [peach] and game.turn_manager.strikes_used() == 1, "青龙：同回合响应后主动杀不再次摸牌")
+
+	reset_players()
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	owner.hand.append(CardBase.create(CardData.CardSubType.THUNDER_STRIKE))
+	await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true)
+	check(owner.hand.is_empty(), "青龙：未装备时打过杀，中途装备不能补触发")
+
+	reset_players()
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	opponent.general_name = "杰基·斯特朗"
+	game._duel_respond_override = func(): return true
+	game._duel_second_override = func(): return true
+	await game._play_duel(opponent, owner)
+	check(owner.hp == 10 and opponent.hp == 9 and owner.hand.is_empty(), "青龙：霸王第一张杀摸到的任意牌可支付第二张，仅摸一次")
+	check(game.turn_manager.strikes_used() == 0, "青龙：霸王两次响应仍不占主动杀次数")
+
+	reset_players()
+	owner.general_name = "比尔·盖伊"
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	await game._execute_shensu_strike(owner, opponent)
+	check(owner.hand == [null] and game.turn_manager.strikes_used() == 0, "青龙：神速视为使用杀计入首次，但不占主动杀次数")
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	check(owner.hand.is_empty(), "青龙：神速后同回合主动杀不再次摸牌")
+
+	reset_players()
+	# 多目标入口只登记一次使用；方天与青龙不能同时装备，不构造双武器规则。
+	owner.equipment["weapon"] = CardData.CardSubType.FANGTIAN_HALBERD
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	var targets: Array[Player] = [opponent, game.players[2]]
+	await game.execute_multi_strike(targets, CardData.CardSubType.STRIKE)
+	check(not game.turn_manager.record_strike_played(owner.seat_index) and game.turn_manager.strikes_used() == 1, "多目标杀登记使用历史且只占一次主动次数")
+	reset_players()
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -204,6 +278,7 @@ func _run():
 	var a = game.players[2]
 	await check_trick_responses()
 	await check_duel_aoe_payments()
+	await check_qinglong_history()
 
 	reset_players()
 	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))

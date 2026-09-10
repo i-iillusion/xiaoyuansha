@@ -44,6 +44,7 @@ func reset_case():
 		p.mount_plus = 0
 	game.reset_game_over_state()
 	game.turn_manager.strike_count_this_turn = 0
+	game.turn_manager._strike_actors_this_turn.clear()
 	game._stop_countdown()
 	game.deck._discard.clear()
 	game._yes_ah_active = false
