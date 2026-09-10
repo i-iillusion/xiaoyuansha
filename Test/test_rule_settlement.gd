@@ -263,6 +263,58 @@ func check_qinglong_history():
 	check(not game.turn_manager.record_strike_played(owner.seat_index) and game.turn_manager.strikes_used() == 1, "多目标杀登记使用历史且只占一次主动次数")
 	reset_players()
 
+func check_dying_payments():
+	var owner = game.players[0]
+	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		reset_players()
+		owner.hp = 0
+		owner.heal_staff_peach_used = false
+		owner.wine_stacks = 2
+		var wrong = CardBase.create(CardData.CardSubType.STRIKE)
+		owner.hand.append(wrong)
+		check(not game._use_dying_card(owner, sub) and owner.hp == 0 and owner.hand == [wrong], "自救：不能将具体杀冒充桃或酒")
+		var actual = CardBase.create(sub)
+		owner.hand.push_front(actual)
+		check(game._use_dying_card(owner, sub), "自救：濒死本人可支付对应具体牌")
+		check(owner.hp == 1 and owner.hand == [wrong] and game.deck._discard.count(actual) == 1, "自救：原实例只弃置一次，保留末尾其他牌")
+		check(owner.wine_stacks == 2, "自救：不消耗或增加攻击酒层数")
+		owner.hand.append(null)
+		check(not game._use_dying_card(owner, sub) and owner.hand == [wrong, null], "自救：已救回的过期操作不收费用")
+		owner.hp = 0
+		check(game._use_dying_card(owner, sub) and owner.hp == 1 and owner.hand == [wrong], "自救：任意牌可具体化为桃或酒")
+		check(game.deck._discard.back().sub_type == sub, "自救：任意牌按实际声明类型入弃牌堆")
+		owner.hp = 0
+		owner.mark_dead()
+		owner.hand.append(null)
+		check(not game._use_dying_card(owner, sub) and owner.hand == [wrong, null], "自救：已死亡不能用牌复活")
+
+	reset_players()
+	owner.hp = -2
+	owner.hand.assign([null, null, null])
+	game._dying_peach_override = func(): return true
+	await game._check_dying(owner)
+	check(owner.hp == 1 and owner.hand.is_empty(), "负体力自救可连续使用三张任意牌")
+
+	reset_players()
+	owner.hp = 0
+	owner.hand.append(null)
+	await game._show_dying_prompt(owner) # 默认钩子拒绝。
+	check(owner.hp == 0 and owner.hand == [null], "自救：放弃保留任意牌和体力")
+	game._dying_peach_override = func():
+		owner.hand.clear() # 模拟提示返回前费用已离手。
+		return true
+	await game._show_dying_prompt(owner)
+	check(owner.hp == 0, "自救：确认时无牌不凭空回复")
+
+	reset_players()
+	owner.hp = -1
+	owner.equipment["weapon"] = CardData.CardSubType.HEAL_STAFF
+	owner.heal_staff_peach_used = false
+	check(not game._use_dying_card(owner, CardData.CardSubType.PEACH) and not owner.heal_staff_peach_used, "自救：支付失败不消耗治疗权杖首次桃")
+	owner.hand.append(null)
+	check(game._use_dying_card(owner, CardData.CardSubType.PEACH) and owner.hp == 1 and owner.heal_staff_peach_used, "自救：先付桃再应用治疗权杖")
+	reset_players()
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -279,6 +331,7 @@ func _run():
 	await check_trick_responses()
 	await check_duel_aoe_payments()
 	await check_qinglong_history()
+	await check_dying_payments()
 
 	reset_players()
 	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))

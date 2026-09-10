@@ -6647,31 +6647,38 @@ func _do_sage_save(p: Player):
 	_update_debug("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
+# 自救支付入口：濒死可使用牌，不可误用 is_alive() 排除本人。
+# UI/测试共用；过期选择、错误类型、已救回或已死亡均不收费用。
+func _use_dying_card(dying: Player, sub: CardData.CardSubType) -> bool:
+	if sub not in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		return false
+	if not dying.is_dying() or _is_kneeling(dying):
+		return false
+	var card = HandPayment.take(dying.hand, sub)
+	if card == null:
+		return false
+	deck.discard(card)
+	var healed = 1
+	if sub == CardData.CardSubType.PEACH:
+		healed = _heal_with_staff(dying)
+	else:
+		dying.heal(1)
+	_update_debug("%s 使用【%s】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, CardData.get_type_name(sub), healed, dying.hp, dying.max_hp])
+	_sync_all_ui()
+	return true
+
 func _show_dying_prompt(dying: Player):
-	# 测试钩子：直接模拟用【桃】自救（有桃才有效）
+	if not dying.is_dying() or _is_kneeling(dying):
+		return
+	# 测试钩子只决定是否用桃；仍需匹配桃/任意牌并实际支付。
 	if _dying_peach_override.is_valid():
 		if _dying_peach_override.call():
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.PEACH:
-					dying.hand.remove_at(i)
-					deck.discard(CardBase.create(CardData.CardSubType.PEACH))
-					var healed = _heal_with_staff(dying)
-					_update_debug("%s 使用【桃】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, healed, dying.hp, dying.max_hp])
-					break
+			_use_dying_card(dying, CardData.CardSubType.PEACH)
 			_sync_all_ui()
 		return
 
-	# 检查手牌中是否有桃或酒
-	var has_peach = false
-	var has_wine = false
-	for c in dying.hand:
-		if c == null:
-			continue
-		if c.sub_type == CardData.CardSubType.PEACH:
-			has_peach = true
-		if c.sub_type == CardData.CardSubType.WINE:
-			has_wine = true
+	var has_peach = HandPayment.find_index(dying.hand, CardData.CardSubType.PEACH) >= 0
+	var has_wine = HandPayment.find_index(dying.hand, CardData.CardSubType.WINE) >= 0
 
 	if not has_peach and not has_wine:
 		_update_debug("%s 没有【桃】或【酒】，无法自救…" % dying.player_name)
@@ -6704,26 +6711,12 @@ func _show_dying_prompt(dying: Player):
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	var saved = [false]
-
 	if has_peach:
 		var peach_btn = Button.new()
 		peach_btn.text = "使用【桃】"
 		peach_btn.custom_minimum_size = Vector2(160, 44)
 		peach_btn.pressed.connect(func():
-			saved[0] = true
-			# 移除一张桃
-			var found = false
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.PEACH:
-					dying.hand.remove_at(i)
-					found = true
-					break
-			if found:
-				deck.discard(CardBase.create(CardData.CardSubType.PEACH))
-				var healed = _heal_with_staff(dying)
-				_update_debug("%s 使用【桃】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, healed, dying.hp, dying.max_hp])
+			_use_dying_card(dying, CardData.CardSubType.PEACH)
 			overlay.queue_free()
 			_sync_all_ui()
 			_response_ready.emit()
@@ -6735,19 +6728,7 @@ func _show_dying_prompt(dying: Player):
 		wine_btn.text = "使用【酒】"
 		wine_btn.custom_minimum_size = Vector2(160, 44)
 		wine_btn.pressed.connect(func():
-			saved[0] = true
-			# 移除一张酒
-			var found = false
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.WINE:
-					dying.hand.remove_at(i)
-					found = true
-					break
-			if found:
-				deck.discard(CardBase.create(CardData.CardSubType.WINE))
-				dying.heal(1)
-				_update_debug("%s 使用【酒】自救，回复 1 点体力（%d/%d）" % [dying.player_name, dying.hp, dying.max_hp])
+			_use_dying_card(dying, CardData.CardSubType.WINE)
 			overlay.queue_free()
 			_sync_all_ui()
 			_response_ready.emit()
