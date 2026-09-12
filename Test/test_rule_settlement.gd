@@ -22,6 +22,9 @@ func check(ok: bool, message: String):
 	checks += 1
 	if not ok:
 		failures += 1
+		# 失败断言同时显示在 Actions 注释中；不改变失败计数或通过条件。
+		var annotation = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+		print("::error file=Test/test_rule_settlement.gd::" + annotation)
 	print(("PASS: " if ok else "FAIL: ") + message)
 
 func reset_players():
