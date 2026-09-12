@@ -4,7 +4,7 @@
 
 ## 规则与讨论
 
-- [合并 dev 后开发交接：已定规则、可直接开工任务与局部阻塞](Docs/HumanAgent/合并dev后开发交接.md)
+- [当前开发交接：PR #7 合并后的基线、可直接开工任务与局部阻塞](Docs/HumanAgent/合并dev后开发交接.md)
 - [待裁决具体案例：按编号讨论，不阻塞无关开发](Docs/HumanAgent/待裁决具体案例.md)
 - [校园杀完全知识手册：规则正文、游戏模式和武将说明](Docs/Original/校园杀完全知识手册.md)
 - [开发 QA：问题编号、待讨论事项、确认答案及实现状态](Docs/HumanAgent/QA.md)
