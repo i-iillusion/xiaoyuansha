@@ -20,6 +20,14 @@ func reset_players():
 	game._sacrifice_override = func(): return false
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
+	game._nullify_override = func(): return false
+	game._yes_ah_override = Callable()
+	game._aoe_override = func(): return false
+	game._duel_respond_override = func(): return false
+	game._duel_second_override = func(): return false
+	game.turn_manager.current_player_idx = 0
+	game.turn_manager.strike_count_this_turn = 0
+	game.turn_manager._strike_actors_this_turn.clear()
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -29,6 +37,7 @@ func reset_players():
 		p.equipment.clear()
 		p.chained = false
 		p.kneeling = false
+		p.wine_stacks = 0
 		p.awoken = false
 		p.awake_choice = 0
 		p.capture_game_start_state()
@@ -37,6 +46,274 @@ func strike(source: Player, target: Player, ignore_restrictions: bool = false):
 	return await game._execute_single_strike(source, target,
 		CardBase.create(CardData.CardSubType.STRIKE), CardData.CardSubType.STRIKE,
 		EffectChain.DamageType.PHYSICAL, 1, ignore_restrictions)
+
+# 只检查支付结果，不改变原有无懈轮询或代受结算时机。
+func pay_response(sub: CardData.CardSubType) -> bool:
+	if sub == CardData.CardSubType.NULLIFICATION:
+		return await game._ask_nullification_round("支付回归") != ""
+	return await game._maybe_sacrifice(game.players[2], game.players[1], 1, EffectChain.DamageType.PHYSICAL) != null
+
+func check_trick_responses():
+	var owner = game.players[0]
+	for sub in [CardData.CardSubType.NULLIFICATION, CardData.CardSubType.SACRIFICE]:
+		var label = CardData.get_type_name(sub)
+		reset_players()
+		var wrong = CardBase.create(CardData.CardSubType.PEACH)
+		owner.hand.append(wrong)
+		game._nullify_override = func(): return true
+		game._sacrifice_override = func(): return true
+		check(not await pay_response(sub), label + "：具体桃不能冒充响应牌")
+		check(owner.hand == [wrong] and not game.deck._discard.has(wrong), label + "：类型不符保留原牌")
+
+		var actual = CardBase.create(sub)
+		owner.hand.push_front(actual)
+		check(await pay_response(sub), label + "：匹配具体牌可支付")
+		check(owner.hand == [wrong] and game.deck._discard.count(actual) == 1, label + "：原实例入弃牌堆一次，不扣末尾桃")
+
+		owner.hand.append(null)
+		var discard_before = game.deck._discard.size()
+		check(await pay_response(sub), label + "：任意牌可响应")
+		check(owner.hand == [wrong] and game.deck._discard.size() == discard_before + 1 and game.deck._discard.back().sub_type == sub, label + "：任意牌具体化后入弃牌堆")
+
+		actual = CardBase.create(sub)
+		owner.hand.append(actual)
+		game._nullify_override = func(): return false
+		game._sacrifice_override = func(): return false
+		check(not await pay_response(sub) and owner.hand == [wrong, actual], label + "：放弃不扣牌")
+
+		# 提示打开时可支付，返回时原牌已离手：不能改扣剩下的桃。
+		var remove_response = func():
+			owner.hand.erase(actual)
+			return true
+		game._nullify_override = remove_response
+		game._sacrifice_override = remove_response
+		check(not await pay_response(sub) and owner.hand == [wrong], label + "：弹窗返回后再次校验费用")
+
+		game._nullify_override = func(): return true
+		game._sacrifice_override = func(): return true
+		owner.general_name = "安普提·斯丢皮得"
+		discard_before = game.deck._discard.size()
+		check(await pay_response(sub), label + "：无匹配牌仍可用是啊代付")
+		check(owner.hp == 9 and owner.hand == [wrong] and game.deck._discard.size() == discard_before, label + "：代付只失血，不造实体弃牌")
+
+		owner.hand.append(actual)
+		game._yes_ah_override = func(): return "cancel"
+		check(not await pay_response(sub) and owner.hp == 9 and owner.hand == [wrong, actual], label + "：取消是啊保留费用")
+		game._yes_ah_override = func(): return "card"
+		check(await pay_response(sub) and owner.hp == 9 and owner.hand == [wrong], label + "：拒绝技能后仍可支付匹配牌")
+
+		# 下跪状态只对布鲁斯生效；这里模拟弹窗期间状态失效，不测试技能发动条件。
+		owner.general_name = "布鲁斯·萨维奇"
+		actual = CardBase.create(sub)
+		owner.hand.append(actual)
+		var kneel_on_prompt = func():
+			owner.kneeling = true
+			return true
+		game._nullify_override = kneel_on_prompt
+		game._sacrifice_override = kneel_on_prompt
+		check(not await pay_response(sub) and owner.hand == [wrong, actual] and owner.hp == 9, label + "：弹窗期间下跪后不收费用")
+
+func check_duel_aoe_payments():
+	var owner = game.players[0]
+	var opponent = game.players[1]
+	for sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]:
+		reset_players()
+		var actual = CardBase.create(sub)
+		var wrong = CardBase.create(CardData.CardSubType.PEACH)
+		owner.hand.assign([actual, wrong, null])
+		check(HandPayment.find_response_index(owner.hand, CardData.CardSubType.STRIKE) == 0, "响应杀优先具体牌，不先消耗任意牌")
+		check(HandPayment.find_index(owner.hand, CardData.CardSubType.STRIKE, actual) == (0 if sub == CardData.CardSubType.STRIKE else -1), "主动声明仍严格匹配，不受响应族匹配影响")
+		owner.hand.pop_back() # 本场只保留实际响应牌与错误类型。
+		owner.wine_stacks = 2
+		game.turn_manager.strike_count_this_turn = 1
+		game._duel_respond_override = func(): return true
+		await game._play_duel(opponent, owner)
+		check(owner.hp == 10 and opponent.hp == 9, "普通/属性杀均可响应决斗，对手未响应后承担普通伤害")
+		check(owner.hand == [wrong] and game.deck._discard.count(actual) == 1 and actual.sub_type == sub, "决斗保留响应原牌与原类型，不扣末尾桃")
+		check(owner.wine_stacks == 2 and game.turn_manager.strike_count_this_turn == 1, "响应杀不消耗酒和主动杀次数")
+
+	reset_players()
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	owner.hand.append(peach)
+	game._duel_respond_override = func(): return true
+	await game._play_duel(opponent, owner)
+	check(owner.hp == 9 and owner.hand == [peach], "决斗没有杀时不拿桃冒充")
+
+	# 霸王必须依次支付，第二张缺少/拒绝时第一张不退回。
+	for second_mode in ["missing", "decline", "accept", "removed"]:
+		reset_players()
+		opponent.general_name = "杰基·斯特朗"
+		var first = CardBase.create(CardData.CardSubType.THUNDER_STRIKE)
+		var second = CardBase.create(CardData.CardSubType.FIRE_STRIKE)
+		owner.hand.assign([peach, first])
+		if second_mode != "missing":
+			owner.hand.push_front(second)
+		game._duel_respond_override = func(): return true
+		game._duel_second_override = func():
+			if second_mode == "removed":
+				owner.hand.erase(second)
+			return second_mode != "decline"
+		await game._play_duel(opponent, owner)
+		check(game.deck._discard.count(first) == 1, "霸王：第一张杀实际支付且不退回")
+		check(owner.hp == (10 if second_mode == "accept" else 9) and opponent.hp == (9 if second_mode == "accept" else 10), "霸王：两张成功才交换响应方")
+		check(game.deck._discard.count(second) == (1 if second_mode == "accept" else 0) and owner.hand.has(peach), "霸王：第二张失败不扣错牌、不虚构弃牌")
+
+	for required in [CardData.CardSubType.STRIKE, CardData.CardSubType.DODGE]:
+		for mode in ["actual", "blank", "wrong", "decline", "removed"]:
+			reset_players()
+			var aoe = CardData.CardSubType.BARBARIAN_INVASION if required == CardData.CardSubType.STRIKE else CardData.CardSubType.VOLLEY_OF_ARROWS
+			var response_sub = CardData.CardSubType.FIRE_STRIKE if required == CardData.CardSubType.STRIKE else CardData.CardSubType.DODGE
+			var actual = CardBase.create(response_sub)
+			owner.hand.append(peach)
+			if mode == "blank":
+				owner.hand.append(null)
+			elif mode != "wrong":
+				owner.hand.push_front(actual)
+			if required == CardData.CardSubType.DODGE:
+				owner.equipment["armor"] = CardData.CardSubType.BAGUA_ZHEN
+			opponent.hand.append(CardBase.create(aoe))
+			game.turn_manager.current_player_idx = 1
+			game._aoe_override = func():
+				if mode == "removed":
+					owner.hand.erase(actual)
+				return mode != "decline"
+			var discard_before = game.deck._discard.size()
+			await game._play_aoe(required, CardData.get_type_name(aoe), CardData.get_type_name(required))
+			var paid = mode in ["actual", "blank"]
+			check(owner.hp == (10 if paid else 9) and owner.hand.has(peach), "AOE：只有真实支付成功才避免伤害，保留桃")
+			check(game.deck._discard.size() == discard_before + (2 if paid else 1), "AOE：使用牌和成功响应各入弃牌堆一次")
+			if mode == "actual":
+				check(game.deck._discard.count(actual) == 1 and actual.sub_type == response_sub, "AOE：响应保留原实例与属性")
+			if mode == "blank":
+				check(game.deck._discard.back().sub_type == required, "AOE：任意牌默认具体化为所需基本牌")
+			if required == CardData.CardSubType.DODGE:
+				check(owner.hand.count(null) == (1 if paid else 0), "万箭：八卦只在实际支付闪后摸一张")
+	reset_players()
+
+func check_qinglong_history():
+	# 独立状态机验证边界，不触发对局的回合开始 UI。
+	var turns = TurnManager.new()
+	turns.debug_log = false
+	turns.start_game()
+	check(turns.record_strike_played(0) and turns.record_strike_played(1), "青龙：各座位独立记录第一次杀")
+	check(not turns.record_strike_played(0) and turns.strikes_used() == 0, "青龙：响应历史不占主动杀次数")
+	turns.start_waiting("test", 1)
+	turns.end_waiting()
+	check(not turns.record_strike_played(1), "青龙：响应返回不清空历史")
+	turns.current_phase = TurnManager.Phase.DRAW
+	turns.advance_phase()
+	check(not turns.record_strike_played(0), "青龙：摸牌后进入出牌阶段不重置历史")
+	turns.next_turn()
+	check(turns.record_strike_played(0) and turns.record_strike_played(1), "青龙：下一角色回合重置全部座位")
+	turns.skip_full_turn = true
+	turns.advance_phase()
+	turns.next_turn()
+	check(turns.record_strike_played(0), "青龙：跳过回合后仍按新回合重置")
+	turns.start_game()
+	check(turns.record_strike_played(0), "青龙：新对局不继承旧历史")
+	turns.free()
+
+	reset_players()
+	var owner = game.players[0]
+	var opponent = game.players[1]
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	owner.hand.append(peach)
+	check(not await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true), "青龙：缺少杀不能借摸牌支付")
+	var first = CardBase.create(CardData.CardSubType.FIRE_STRIKE)
+	owner.hand.push_front(first)
+	check(not await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return false), "青龙：拒绝响应不登记首次")
+	check(await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true), "青龙：支付属性杀响应成功")
+	check(owner.hand == [peach, null] and game.deck._discard.count(first) == 1, "青龙：实际响应牌先弃置，首次响应再摸一张")
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	check(owner.hand == [peach] and game.turn_manager.strikes_used() == 1, "青龙：同回合响应后主动杀不再次摸牌")
+
+	reset_players()
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	owner.hand.append(CardBase.create(CardData.CardSubType.THUNDER_STRIKE))
+	await game._ask_basic_card_response(owner, CardData.CardSubType.STRIKE, func(): return true)
+	check(owner.hand.is_empty(), "青龙：未装备时打过杀，中途装备不能补触发")
+
+	reset_players()
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	opponent.general_name = "杰基·斯特朗"
+	game._duel_respond_override = func(): return true
+	game._duel_second_override = func(): return true
+	await game._play_duel(opponent, owner)
+	check(owner.hp == 10 and opponent.hp == 9 and owner.hand.is_empty(), "青龙：霸王第一张杀摸到的任意牌可支付第二张，仅摸一次")
+	check(game.turn_manager.strikes_used() == 0, "青龙：霸王两次响应仍不占主动杀次数")
+
+	reset_players()
+	owner.general_name = "比尔·盖伊"
+	owner.equipment["weapon"] = CardData.CardSubType.QINGLONG_BLADE
+	await game._execute_shensu_strike(owner, opponent)
+	check(owner.hand == [null] and game.turn_manager.strikes_used() == 0, "青龙：神速视为使用杀计入首次，但不占主动杀次数")
+	await game.execute_card_on_target(opponent, CardData.CardSubType.STRIKE)
+	check(owner.hand.is_empty(), "青龙：神速后同回合主动杀不再次摸牌")
+
+	reset_players()
+	# 多目标入口只登记一次使用；方天与青龙不能同时装备，不构造双武器规则。
+	owner.equipment["weapon"] = CardData.CardSubType.FANGTIAN_HALBERD
+	owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	var targets: Array[Player] = [opponent, game.players[2]]
+	await game.execute_multi_strike(targets, CardData.CardSubType.STRIKE)
+	check(not game.turn_manager.record_strike_played(owner.seat_index) and game.turn_manager.strikes_used() == 1, "多目标杀登记使用历史且只占一次主动次数")
+	reset_players()
+
+func check_dying_payments():
+	var owner = game.players[0]
+	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		reset_players()
+		owner.hp = 0
+		owner.heal_staff_peach_used = false
+		owner.wine_stacks = 2
+		var wrong = CardBase.create(CardData.CardSubType.STRIKE)
+		owner.hand.append(wrong)
+		check(not game._use_dying_card(owner, sub) and owner.hp == 0 and owner.hand == [wrong], "自救：不能将具体杀冒充桃或酒")
+		var actual = CardBase.create(sub)
+		owner.hand.push_front(actual)
+		check(game._use_dying_card(owner, sub), "自救：濒死本人可支付对应具体牌")
+		check(owner.hp == 1 and owner.hand == [wrong] and game.deck._discard.count(actual) == 1, "自救：原实例只弃置一次，保留末尾其他牌")
+		check(owner.wine_stacks == 2, "自救：不消耗或增加攻击酒层数")
+		owner.hand.append(null)
+		check(not game._use_dying_card(owner, sub) and owner.hand == [wrong, null], "自救：已救回的过期操作不收费用")
+		owner.hp = 0
+		check(game._use_dying_card(owner, sub) and owner.hp == 1 and owner.hand == [wrong], "自救：任意牌可具体化为桃或酒")
+		check(game.deck._discard.back().sub_type == sub, "自救：任意牌按实际声明类型入弃牌堆")
+		owner.hp = 0
+		owner.mark_dead()
+		owner.hand.append(null)
+		check(not game._use_dying_card(owner, sub) and owner.hand == [wrong, null], "自救：已死亡不能用牌复活")
+
+	reset_players()
+	owner.hp = -2
+	owner.hand.assign([null, null, null])
+	game._dying_peach_override = func(): return true
+	await game._check_dying(owner)
+	check(owner.hp == 1 and owner.hand.is_empty(), "负体力自救可连续使用三张任意牌")
+
+	reset_players()
+	owner.hp = 0
+	owner.hand.append(null)
+	await game._show_dying_prompt(owner) # 默认钩子拒绝。
+	check(owner.hp == 0 and owner.hand == [null], "自救：放弃保留任意牌和体力")
+	game._dying_peach_override = func():
+		owner.hand.clear() # 模拟提示返回前费用已离手。
+		return true
+	await game._show_dying_prompt(owner)
+	check(owner.hp == 0, "自救：确认时无牌不凭空回复")
+
+	reset_players()
+	owner.hp = -1
+	owner.equipment["weapon"] = CardData.CardSubType.HEAL_STAFF
+	owner.heal_staff_peach_used = false
+	check(not game._use_dying_card(owner, CardData.CardSubType.PEACH) and not owner.heal_staff_peach_used, "自救：支付失败不消耗治疗权杖首次桃")
+	owner.hand.append(null)
+	check(game._use_dying_card(owner, CardData.CardSubType.PEACH) and owner.hp == 1 and owner.heal_staff_peach_used, "自救：先付桃再应用治疗权杖")
+	reset_players()
 
 func _run():
 	GameManager.random_identity = false
@@ -51,10 +328,14 @@ func _run():
 	var c = game.players[0]
 	var b = game.players[1]
 	var a = game.players[2]
+	await check_trick_responses()
+	await check_duel_aoe_payments()
+	await check_qinglong_history()
+	await check_dying_payments()
 
 	reset_players()
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	c.hand.append(CardBase.create(CardData.CardSubType.DODGE))
+	c.hand.append(CardBase.create(CardData.CardSubType.SACRIFICE))
 	b.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
 	game._sacrifice_override = func(): return true
 	game._dodge_override = func():
@@ -66,7 +347,25 @@ func _run():
 	check(observations == [1], "只询问实际目标 C 一次，且已先支付代受费用")
 
 	reset_players()
-	c.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	var wrong_dodge = CardBase.create(CardData.CardSubType.PEACH)
+	c.hand.append(wrong_dodge)
+	game._dodge_override = func(): return true
+	await strike(b, c)
+	check(c.hp == 9 and c.hand == [wrong_dodge], "桃不能当闪响应，即使测试钩子答应出闪也不扣错牌")
+	check(not game.deck._discard.has(wrong_dodge), "无合法闪不会把其他具体牌放入弃牌堆")
+
+	reset_players()
+	var actual_dodge = CardBase.create(CardData.CardSubType.DODGE)
+	c.hand.append(actual_dodge)
+	c.equipment["armor"] = CardData.CardSubType.BAGUA_ZHEN
+	game._dodge_override = func(): return true
+	await strike(b, c)
+	check(c.hp == 10, "实际闪成功防止本次杀伤害")
+	check(game.deck._discard.count(actual_dodge) == 1, "响应闪原实例只进入弃牌堆一次")
+	check(c.hand.size() == 1 and c.hand[0] == null, "先支付实际闪，再通过八卦摸任意牌")
+
+	reset_players()
+	c.hand.append(CardBase.create(CardData.CardSubType.SACRIFICE))
 	b.equipment["armor"] = CardData.CardSubType.SILVER_LION
 	a.equipment["weapon"] = CardData.CardSubType.ZHANGBA_SPEAR
 	game._sacrifice_override = func(): return true
@@ -96,7 +395,8 @@ func _run():
 
 	reset_players()
 	b.equipment["armor"] = CardData.CardSubType.TENGJIA
-	b.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+	# 忽略目标限制不取消响应；响应必须有真实闪或任意牌，不能拿具体杀冒充。
+	b.hand.append(CardBase.create(CardData.CardSubType.DODGE))
 	check(not await strike(a, b), "通常不能选择藤甲为杀的目标")
 	game._dodge_override = func(): return true
 	await strike(a, b, true)

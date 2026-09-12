@@ -25,6 +25,9 @@ var current_player_idx: int = 0
 var current_phase: Phase = Phase.START
 # 本回合已使用的【杀】次数（摸牌阶段重置；上限由武器决定，-1 = 无限制）
 var strike_count_this_turn: int = 0
+# 每个座位本回合是否已经使用/打出过杀；与主动杀使用次数分开。
+# 属于回合历史，不是武将牌状态，阶段切换/装备变动不清空。
+var _strike_actors_this_turn: Dictionary = {}
 # 每回合卡牌使用次数限制（摸牌阶段重置，与杀次数一起）
 var duel_count_this_turn: int = 0      # 决斗 ≤2
 var aoe_count_this_turn: int = 0       # 南蛮入侵+万箭齐发 合计 ≤2
@@ -57,6 +60,7 @@ var waiting_response_type: String = ""  # 如 "dodge_for_strike", "strike_for_ba
 
 func start_game():
 	current_player_idx = 0
+	_strike_actors_this_turn.clear()
 	disarm_count_this_turn = 0
 	_change_phase(Phase.START)
 
@@ -103,6 +107,7 @@ func advance_phase():
 
 func next_turn():
 	current_player_idx = (current_player_idx + 1) % player_count
+	_strike_actors_this_turn.clear()
 	disarm_count_this_turn = 0
 	skip_play_phase = false
 	skip_judge_phase = false
@@ -126,6 +131,12 @@ func can_play_strike(limit: int = 1) -> bool:
 
 func use_strike():
 	strike_count_this_turn += 1
+
+# 成功使用/打出后调用；返回是否为此角色在当前回合的第一次。
+func record_strike_played(seat: int) -> bool:
+	var first := not _strike_actors_this_turn.has(seat)
+	_strike_actors_this_turn[seat] = true
+	return first
 
 func strikes_used() -> int:
 	return strike_count_this_turn

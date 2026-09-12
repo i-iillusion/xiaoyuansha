@@ -1294,22 +1294,20 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
-			# 青龙偃月刀：每回合第一次打出【杀】时摸一张牌（被闪避也算打出）
-			# 用出杀前的击杀次数判断「第一次」：中途装卸武器语义自动正确
-			var is_first_strike = turn_manager.strike_count_this_turn == 0
+			card = HandPayment.take(p.hand, sub)
+			if card == null:
+				_update_debug("没有可用的【%s】或任意牌，未使用杀" % CardData.get_type_name(sub))
+				return
 			turn_manager.use_strike()
-			if is_first_strike and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
-				_draw_blank_cards(p, 1)
-				_update_debug("%s 发动【青龙偃月刀】：打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 			var base_damage = 1
 			var wine_stacks = p.wine_stacks
 			p.wine_stacks = 0
 			base_damage += wine_stacks
 			# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 			base_damage += _rage_bonus(p)
-			# 先消耗手牌再执行效果
-			p.hand.pop_back()
+			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
+			_record_strike_played(p)
 			_sync_all_ui()
 
 			var element = EffectChain.DamageType.PHYSICAL
@@ -1341,7 +1339,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP:
 			# 延时锦囊（对目标使用）：进入目标判定区，待其下回合判定阶段结算
 			# （闪电不走此路径：只能对自己，由 play_card 直接处理）
-			if not await _consume_trick(p, sub):
+			card = await _take_trick_card(p, sub)
+			if card == null:
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
@@ -1442,10 +1441,15 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 # 【方天画戟】多目标杀：一次打出、逐目标结算。
 
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
+	if targets.is_empty():
+		return
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
 	var p = players[turn_manager.current_player_idx]
-	var card = CardBase.create(sub)
+	var card = HandPayment.take(p.hand, sub)
+	if card == null:
+		_update_debug("没有可用的【%s】或任意牌，未使用多目标杀" % CardData.get_type_name(sub))
+		return
 
 	turn_manager.use_strike()
 	var base_damage = 1
@@ -1454,8 +1458,8 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	base_damage += wine_stacks
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
-	p.hand.pop_back()
 	deck.discard(card)
+	_record_strike_played(p)
 	_sync_all_ui()
 
 	var element = EffectChain.DamageType.PHYSICAL
@@ -1528,6 +1532,9 @@ func play_card(sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
+			if HandPayment.find_index(p.hand, sub) < 0:
+				_update_debug("没有可用的【%s】或任意牌" % CardData.get_type_name(sub))
+				return
 			var strike_limit = p.strike_limit()
 			if not turn_manager.can_play_strike(strike_limit):
 				if strike_limit == -1:
@@ -1559,9 +1566,12 @@ func play_card(sub: CardData.CardSubType):
 			if p.get_weapon() != CardData.CardSubType.RAGING_AXE and p.wine_stacks > 0:
 				_update_debug("【酒】的效果尚未消耗，不能连续使用")
 				return
+			var used_wine = HandPayment.take(p.hand, sub)
+			if used_wine == null:
+				_update_debug("没有可用的【酒】或任意牌")
+				return
 			p.wine_stacks += 1
-			p.hand.pop_back()
-			deck.discard(CardBase.create(sub))
+			deck.discard(used_wine)
 			_update_debug("%s 使用了【酒】（当前 %d 层，下一张【杀】伤害+%d）" % [p.player_name, p.wine_stacks, p.wine_stacks])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1570,9 +1580,12 @@ func play_card(sub: CardData.CardSubType):
 			if p.hp >= p.max_hp:
 				_update_debug("体力已满")
 				return
+			var used_peach = HandPayment.take(p.hand, sub)
+			if used_peach == null:
+				_update_debug("没有可用的【桃】或任意牌")
+				return
 			var healed = _heal_with_staff(p)
-			p.hand.pop_back()
-			deck.discard(CardBase.create(sub))
+			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1662,9 +1675,9 @@ func play_card(sub: CardData.CardSubType):
 			if not p.is_alive():
 				_update_debug("你已阵亡，无法使用【闪电】")
 				return
-			if not await _consume_trick(p, sub):
+			var card = await _take_trick_card(p, sub)
+			if card == null:
 				return
-			var card = CardBase.create(sub)
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
 			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
@@ -1889,25 +1902,41 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
-		var responded = false
-		if target_seat == 0 and target.hand_size() > 0:
-			# 玩家 0 需要交互
-			responded = await _show_aoe_prompt(card_name, required_name)
-		else:
-			# AI 玩家直接受伤害
-			pass
+		var responded = await _ask_basic_card_response(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
+		if _game_over:
+			break
+		if not target.is_alive() or _is_kneeling(target):
+			continue
 
 		if responded:
-			target.hand.pop_back()
-			# 【八卦阵】：使用/打出【闪】时摸一张牌（万箭齐发路径）
-			if required_sub == CardData.CardSubType.DODGE:
-				_try_bagua_draw(target)
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 			await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
 
 	_sync_all_ui()
+
+# 决斗/AOE 的物理响应：提示只决定意愿，成功支付后才算打出。
+# 保持 AI 暂不响应的边界；不消耗出牌阶段杀次数和酒。
+func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable) -> bool:
+	if _game_over or not p.is_alive() or _is_kneeling(p) or p.seat_index != 0:
+		return false
+	if HandPayment.find_response_index(p.hand, expected) < 0:
+		return false
+	if not await prompt.call():
+		return false
+	if _game_over or not p.is_alive() or _is_kneeling(p):
+		return false
+	var used_card = HandPayment.take_response(p.hand, expected)
+	if used_card == null:
+		return false
+	deck.discard(used_card)
+	if expected == CardData.CardSubType.STRIKE:
+		_record_strike_played(p)
+	if expected == CardData.CardSubType.DODGE:
+		_try_bagua_draw(p)
+	_sync_all_ui()
+	return true
 
 func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
 	# 测试钩子：跳过 UI 直接返回
@@ -2152,11 +2181,11 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 
 	match zone:
 		"hand":
-			_steal_hand(attacker, target, is_snatch, card_name)
+			await _steal_hand(attacker, target, is_snatch, card_name)
 		"equip":
 			await _steal_equip(attacker, target, is_snatch, card_name)
 		"judgment":
-			_steal_judgment(attacker, target, is_snatch, card_name)
+			await _steal_judgment(attacker, target, is_snatch, card_name)
 
 	_sync_all_ui()
 
@@ -2169,11 +2198,17 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了这张手牌！" % target.player_name)
 		return
-	target.hand.pop_back()
+	# 等待失牌替代期间牌区可能改变，不能从已清空的牌区生成一张假牌。
+	if target.is_dead() or target.hand.is_empty():
+		return
+	var taken: CardBase = target.hand.pop_back()
 	if is_snatch:
-		attacker.hand.append(null)
+		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
+		attacker.hand.append(taken)
 		_update_debug("%s 获得 %s 的 1 张手牌（自己手牌 %d 张）" % [attacker.player_name, target.player_name, attacker.hand_size()])
 	else:
+		if taken != null:
+			deck.discard(taken)
 		_update_debug("%s 弃置了 %s 的 1 张手牌（目标剩 %d 张）" % [attacker.player_name, target.player_name, target.hand_size()])
 
 # 装备：目标失去该装备；顺手牵羊时放入自己「已确定的牌」
@@ -2192,10 +2227,14 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	else:
 		slot = slots[randi() % slots.size()]
 
+	if not target.equipment.has(slot):
+		return
 	var sub = target.equipment[slot]
 	# 【烈火盾】：可流失 1 点体力代替失去这件装备
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了【%s】！" % [target.player_name, CardData.get_type_name(sub)])
+		return
+	if target.is_dead() or target.equipment.get(slot, -1) != sub:
 		return
 	# 【贤者的加护】标记跟随装备：被顺手牵羊时标记/激活状态一并转移给新持有者（被拆/卸甲进弃牌堆则清空）
 	var sage_transfer := false
@@ -2215,6 +2254,9 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		else:
 			_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
+		# 装备区目前只存类型，因此沿用死亡弃牌的资源重建约定；暗置占位不造实体。
+		if sub != CardData.CardSubType.HIDDEN_EQUIPMENT:
+			deck.discard(CardBase.create(sub))
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
@@ -2226,11 +2268,14 @@ func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_nam
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了判定牌！" % target.player_name)
 		return
+	if target.is_dead() or target.judgment_cards.is_empty():
+		return
 	var card = target.judgment_cards.pop_back()
 	if is_snatch:
 		attacker.determined_cards.append(card)
 		_update_debug("%s 获得 %s 的判定牌【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, card.card_name])
 	else:
+		deck.discard(card)
 		_update_debug("%s 弃置了 %s 的判定牌【%s】" % [attacker.player_name, target.player_name, card.card_name])
 
 # AI 随机选一个目标有牌的区域
@@ -3047,34 +3092,26 @@ func _play_duel(attacker: Player, target: Player):
 
 	while true:
 		# 【霸王】：非杰基方每次响应需打出两张杀（杰基本人只需一张）
+		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+			break
 		var needs_two = jacqui != null and current != jacqui
-		var has_card = current.hand_size() > 0
-		var can_respond = false
-
-		if current.seat_index == 0 and has_card:
-			# 玩家 0 需要交互
-			can_respond = await _show_duel_prompt(needs_two)
-		else:
-			# AI 无法响应
-			can_respond = false
+		var can_respond = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
+		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+			break
 
 		if can_respond:
-			current.hand.pop_back()
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
 			# 【霸王】：对方还需打出第二张杀
 			if needs_two:
-				if current.hand_size() <= 0:
+				if HandPayment.find_response_index(current.hand, CardData.CardSubType.STRIKE) < 0:
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
 					break
-				var cont = false
-				if current.seat_index == 0:
-					cont = await _show_duel_second_strike_prompt()
-				else:
-					cont = false  # AI 不会继续响应（本游戏 AI 不响应决斗）
+				var cont = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
+				if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+					break
 				if cont:
-					current.hand.pop_back()
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)
@@ -3281,10 +3318,14 @@ func _ask_nullification_round(desc: String) -> String:
 			# AI 暂不主动响应无懈
 			played = "skip"
 		if played != "skip":
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", p.hand_size() > 0)
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0)
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【无懈可击】" % p.player_name)
 				_sync_all_ui()
@@ -3294,8 +3335,10 @@ func _ask_nullification_round(desc: String) -> String:
 					_sync_all_ui()
 					return ""
 			else:
-				p.hand.pop_back()
-				deck.discard(CardBase.create(CardData.CardSubType.NULLIFICATION))
+				var used_card = HandPayment.take(p.hand, CardData.CardSubType.NULLIFICATION)
+				if used_card == null:
+					continue
+				deck.discard(used_card)
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -3305,9 +3348,9 @@ func _ask_nullification_round(desc: String) -> String:
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_nullification_prompt(desc: String, p: Player) -> String:
-	var has_hand = p.hand_size() > 0
+	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
-	# 测试钩子：只决定「是否愿意出」；无手牌时仅安普提可通过【是~啊~】打出
+	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _nullify_override.is_valid():
 		if not _nullify_override.call():
 			return "skip"
@@ -3332,7 +3375,7 @@ func _show_nullification_prompt(desc: String, p: Player) -> String:
 	var label = Label.new()
 	label.text = desc
 	if not has_hand:
-		label.text += "\n（无手牌，可发动【是~啊~】流失 1 点体力视为打出）"
+		label.text += "\n（无可用的无懈或任意牌，可发动【是~啊~】流失 1 点体力视为打出）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -3390,6 +3433,13 @@ signal _calamity_robe_target_result(target: Player)
 signal _minus_mule_target_result(target: Player)
 signal _plus_mule_target_result(target: Player)
 
+# 在一次杀使用/打出已经成立后登记；多目标只调用一次，效果链不重复登记。
+func _record_strike_played(p: Player):
+	var first := turn_manager.record_strike_played(p.seat_index)
+	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
+		_draw_blank_cards(p, 1)
+		_update_debug("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
+
 # 【八卦阵】：你每使用或打出一张【闪】时，摸一张牌（锁定技；装备者判定）
 func _try_bagua_draw(p: Player):
 	if p == null or not p.is_alive():
@@ -3414,9 +3464,9 @@ func _maybe_liehuo_save(p: Player) -> bool:
 	_update_debug("%s 发动【烈火盾】：流失 1 点体力，代替失去一张牌（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 	_sync_all_ui()
 	# 流失导致濒死 → 先处理（与丈八蛇矛一致）
-	if not p.is_alive():
+	if p.is_dying():
 		await _check_dying(p)
-		if not p.is_alive():
+		if p.is_dying():
 			_handle_death(p, null)  # 流失致死无击杀者
 	return true
 
@@ -3490,7 +3540,7 @@ func _show_liehuo_prompt() -> bool:
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
-	if responder.hand_size() <= 0:
+	if HandPayment.find_index(responder.hand, expected_sub) < 0:
 		return false
 	# 【下跪】：无法使用或打出任何牌 → 不能出闪
 	if _is_kneeling(responder):
@@ -3527,7 +3577,13 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		_sync_all_ui()
 
 	if dodged:
-		responder.hand.pop_back()
+		# 弹窗返回后重新验证；没有合法闪时按未响应处理，不扣除其他类型。
+		if not responder.is_alive() or _is_kneeling(responder):
+			return false
+		var used_dodge = HandPayment.take(responder.hand, expected_sub)
+		if used_dodge == null:
+			return false
+		deck.discard(used_dodge)
 		# 【八卦阵】：使用/打出【闪】时摸一张牌（杀→闪路径）
 		if expected_sub == CardData.CardSubType.DODGE:
 			_try_bagua_draw(responder)
@@ -3734,6 +3790,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			await rule_scheduler.checkpoint(chain, "before_death")
 			if subject.is_dying():
 				_handle_death(subject, source)
+		# before_death checkpoint 也可能救回目标；重查被普通救援延后的终局。
+		_check_win_condition(null, null)
 		return false
 
 	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
@@ -4163,23 +4221,36 @@ func _show_yes_ah_prompt(card_name: String, has_hand: bool) -> String:
 # 支付【是~啊~】代价：流失 1 点体力（直接减，不算受到伤害）；流失致死先走濒死检查
 # 返回 false = 流失后未救回（本次锦囊/响应视为没有打出，调用方应中止）
 func _pay_yes_ah_cost(p: Player) -> bool:
+	if p == null or not p.is_alive():
+		return false
 	p.hp -= 1
 	_update_debug("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
-	if p.hp <= 0:
+	if p.is_dying():
 		await _check_dying(p)
-		if not p.is_alive():
+		if p.is_dying():
 			_handle_death(p, null)  # 流失致死无击杀者
-			return false
-	return true
+	return p.is_alive()
 
-# 锦囊牌消耗入口：若【是~啊~】已激活则改为流失体力（不消耗手牌）
-# 返回 false = 使用者流失体力后死亡（锦囊取消，调用方应中止）
-func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
+# 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
+func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	if _yes_ah_active:
 		_yes_ah_active = false
-		return await _pay_yes_ah_cost(p)
-	p.hand.pop_back()
-	deck.discard(CardBase.create(sub))
+		if not await _pay_yes_ah_cost(p):
+			return null
+		return CardBase.create(sub)
+	var card = HandPayment.take(p.hand, sub)
+	if card == null:
+		_update_debug("没有可用的【%s】或任意牌，未支付费用" % CardData.get_type_name(sub))
+	return card
+
+# 即时锦囊消耗入口：支付成功才记入弃牌；技能视为使用沿用原有不生成实体弃牌的约定。
+func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
+	var virtual_use := _yes_ah_active
+	var card = await _take_trick_card(p, sub)
+	if card == null:
+		return false
+	if not virtual_use:
+		deck.discard(card)
 	return true
 
 # ============================
@@ -4950,6 +5021,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
 	var card = CardBase.create(CardData.CardSubType.STRIKE)
+	_record_strike_played(p)
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
 	if p.wine_stacks > 0:
@@ -6196,10 +6268,14 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 			play = "skip"  # AI 暂不主动打出舍己为人
 
 		if play != "skip":
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", p.hand_size() > 0)
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0)
+			if not p.is_alive() or _is_kneeling(p):
+				continue
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【舍己为人】" % p.player_name)
 				_sync_all_ui()
@@ -6209,8 +6285,10 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 					_sync_all_ui()
 					continue
 			else:
-				p.hand.pop_back()
-				deck.discard(CardBase.create(CardData.CardSubType.SACRIFICE))
+				var used_card = HandPayment.take(p.hand, CardData.CardSubType.SACRIFICE)
+				if used_card == null:
+					continue
+				deck.discard(used_card)
 			_sync_all_ui()
 			return p
 	return null
@@ -6218,9 +6296,9 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	var p = players[0]
-	var has_hand = p.hand_size() > 0
+	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
-	# 测试钩子：只决定「是否愿意打出」；无手牌时仅安普提可通过【是~啊~】打出
+	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _sacrifice_override.is_valid():
 		if not _sacrifice_override.call():
 			return "skip"
@@ -6245,7 +6323,7 @@ func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	var label = Label.new()
 	label.text = "%s 将要受到 %d 点伤害\n是否打出【舍己为人】代替其承受？" % [target.player_name, amount]
 	if not has_hand:
-		label.text += "\n（无手牌，可发动【是~啊~】流失 1 点体力视为打出）"
+		label.text += "\n（无可用的舍己或任意牌，可发动【是~啊~】流失 1 点体力视为打出）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -6304,7 +6382,7 @@ func _heal_with_staff(p: Player) -> int:
 # 濒死检查：当目标 hp ≤ 0 时，允许自救
 # 阵亡管线（阶段划分，按朋友要求顺序）：
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
-#   → 调用方判 is_alive()：仍 ≤0 则进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
+#   → 调用方判 is_dying()：仍濒死才进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
 func _check_dying(dying: Player):
 	if not dying.is_dying():
 		return
@@ -6333,18 +6411,20 @@ func _check_dying(dying: Player):
 		pass
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢超过一半回复至 1 点体力
-	if not dying.is_alive() and dying.general_name == "安普提·斯丢皮得":
+	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
 		await _try_zhuangsha(dying)
 		if dying.is_alive():
 			_sync_all_ui()
-			return
 
 	# 桃/酒自救/装傻后仍处于濒死 → 阵亡效果·【贤者的加护】（激活后）：即将死亡时可弃置所有牌，复原武将牌至游戏开始时的状态，摸四张牌
-	if not dying.is_alive() and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.sage_activated:
+	if dying.is_dying() and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.sage_activated:
 		var use_save = await _ask_sage_save(dying)
 		if use_save:
 			_do_sage_save(dying)
-			return
+	# 普通嵌套救援中，先前的死亡可能因仍有濒死者而未判胜。
+	# 救回后同样需要重查；未救回则由调用者确认死亡后重查。
+	if dying.is_alive():
+		_check_win_condition(null, null)
 
 # ============================
 #  阵亡处理管线（阶段1-5，按朋友要求顺序分开）
@@ -6354,12 +6434,12 @@ func _check_dying(dying: Player):
 #   阶段2 阵亡效果 —— 弃置所有手牌/装备/判定牌/已确定牌（未来死亡技能钩子在此插入）
 #   阶段3 翻开身份 —— identity_revealed = true，UI 显示身份
 #   阶段4 击杀奖惩 —— 杀死【反贼】：击杀者摸 3 张；主公杀死【忠臣】：主公弃置所有手牌和装备
-#   阶段5 胜负判定 —— 主公阵亡 → 反贼胜（凶手是反贼）/ 内奸胜（其余）；反贼全灭 → 主公&忠臣胜
+#   阶段5 胜负判定 —— 五人标准身份局按已死亡/仍存活身份判定；不依赖凶手身份
 func _handle_death(victim: Player, killer: Player):
 	# ---- 阶段1 阵亡判定 ----
 	if _dead_processed.has(victim):
 		return
-	if victim.is_alive():
+	if not victim.is_dying():
 		return
 	victim.mark_dead()
 	_dead_processed.append(victim)
@@ -6411,31 +6491,14 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 		p.determined_cards.clear()
 		p.hidden_equip_slot = ""
 
-# 胜负判定（阶段5）：
-# ① 主公阵亡 → 游戏立即结束：凶手是【反贼】→ 反贼胜；凶手是忠臣/内奸/无来源 → 内奸胜
-# ② 反贼全部阵亡 → 主公&忠臣胜
-func _check_win_condition(victim: Player, killer: Player):
-	# 1V1 无身份：不判定胜负
-	if player_count < 3:
+# 五人标准身份局判胜；保留旧调用签名，但击杀者只影响奖惩，不决定胜方。
+# 1V1、奸雄、特殊多人死亡时序仍由对应 QA 单独确认。
+func _check_win_condition(_victim: Player, _killer: Player):
+	if _game_over or player_count != 5:
 		return
-	# 主公按身份查找（random_identity 下主公不一定是座位 0）
-	var lord: Player = null
-	for p in players:
-		if p.identity == "主公":
-			lord = p
-			break
-	if lord == null:
-		return
-	if not lord.is_alive():
-		var winner = "反贼" if (killer != null and killer.identity == "反贼") else "内奸"
-		_finish_game(winner, "%s 阵亡" % lord.player_name)
-		return
-	var rebels_alive := 0
-	for p in players:
-		if p.is_alive() and p.identity == "反贼":
-			rebels_alive += 1
-	if rebels_alive == 0:
-		_finish_game("主公", "反贼已全部阵亡")
+	var outcome = IdentityVictory.evaluate(players)
+	if not outcome.is_empty():
+		_finish_game(outcome["winner"], outcome["reason"])
 
 # 结束游戏：置 _game_over 标志 + 发信号（弹窗显示胜方，回合不再推进）
 func _finish_game(winner_identity: String, reason: String):
@@ -6584,31 +6647,38 @@ func _do_sage_save(p: Player):
 	_update_debug("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
+# 自救支付入口：濒死可使用牌，不可误用 is_alive() 排除本人。
+# UI/测试共用；过期选择、错误类型、已救回或已死亡均不收费用。
+func _use_dying_card(dying: Player, sub: CardData.CardSubType) -> bool:
+	if sub not in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		return false
+	if not dying.is_dying() or _is_kneeling(dying):
+		return false
+	var card = HandPayment.take(dying.hand, sub)
+	if card == null:
+		return false
+	deck.discard(card)
+	var healed = 1
+	if sub == CardData.CardSubType.PEACH:
+		healed = _heal_with_staff(dying)
+	else:
+		dying.heal(1)
+	_update_debug("%s 使用【%s】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, CardData.get_type_name(sub), healed, dying.hp, dying.max_hp])
+	_sync_all_ui()
+	return true
+
 func _show_dying_prompt(dying: Player):
-	# 测试钩子：直接模拟用【桃】自救（有桃才有效）
+	if not dying.is_dying() or _is_kneeling(dying):
+		return
+	# 测试钩子只决定是否用桃；仍需匹配桃/任意牌并实际支付。
 	if _dying_peach_override.is_valid():
 		if _dying_peach_override.call():
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.PEACH:
-					dying.hand.remove_at(i)
-					deck.discard(CardBase.create(CardData.CardSubType.PEACH))
-					var healed = _heal_with_staff(dying)
-					_update_debug("%s 使用【桃】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, healed, dying.hp, dying.max_hp])
-					break
+			_use_dying_card(dying, CardData.CardSubType.PEACH)
 			_sync_all_ui()
 		return
 
-	# 检查手牌中是否有桃或酒
-	var has_peach = false
-	var has_wine = false
-	for c in dying.hand:
-		if c == null:
-			continue
-		if c.sub_type == CardData.CardSubType.PEACH:
-			has_peach = true
-		if c.sub_type == CardData.CardSubType.WINE:
-			has_wine = true
+	var has_peach = HandPayment.find_index(dying.hand, CardData.CardSubType.PEACH) >= 0
+	var has_wine = HandPayment.find_index(dying.hand, CardData.CardSubType.WINE) >= 0
 
 	if not has_peach and not has_wine:
 		_update_debug("%s 没有【桃】或【酒】，无法自救…" % dying.player_name)
@@ -6641,26 +6711,12 @@ func _show_dying_prompt(dying: Player):
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	var saved = [false]
-
 	if has_peach:
 		var peach_btn = Button.new()
 		peach_btn.text = "使用【桃】"
 		peach_btn.custom_minimum_size = Vector2(160, 44)
 		peach_btn.pressed.connect(func():
-			saved[0] = true
-			# 移除一张桃
-			var found = false
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.PEACH:
-					dying.hand.remove_at(i)
-					found = true
-					break
-			if found:
-				deck.discard(CardBase.create(CardData.CardSubType.PEACH))
-				var healed = _heal_with_staff(dying)
-				_update_debug("%s 使用【桃】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, healed, dying.hp, dying.max_hp])
+			_use_dying_card(dying, CardData.CardSubType.PEACH)
 			overlay.queue_free()
 			_sync_all_ui()
 			_response_ready.emit()
@@ -6672,19 +6728,7 @@ func _show_dying_prompt(dying: Player):
 		wine_btn.text = "使用【酒】"
 		wine_btn.custom_minimum_size = Vector2(160, 44)
 		wine_btn.pressed.connect(func():
-			saved[0] = true
-			# 移除一张酒
-			var found = false
-			for i in dying.hand.size():
-				var c = dying.hand[i]
-				if c != null and c.sub_type == CardData.CardSubType.WINE:
-					dying.hand.remove_at(i)
-					found = true
-					break
-			if found:
-				deck.discard(CardBase.create(CardData.CardSubType.WINE))
-				dying.heal(1)
-				_update_debug("%s 使用【酒】自救，回复 1 点体力（%d/%d）" % [dying.player_name, dying.hp, dying.max_hp])
+			_use_dying_card(dying, CardData.CardSubType.WINE)
 			overlay.queue_free()
 			_sync_all_ui()
 			_response_ready.emit()

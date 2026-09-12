@@ -5,6 +5,7 @@ extends SceneTree
 var failures := 0
 var asserts := 0
 var game = null
+var last_winner := ""
 
 func _init():
 	_run()
@@ -14,6 +15,21 @@ func _check(cond: bool, msg: String):
 	if not cond:
 		failures += 1
 		print("FAIL: ", msg)
+
+# 用例独立：只改 hp 不会复活 DEAD；也不能把上一例的尸体重置为未决濒死者。
+func _reset_case():
+	for p in game.players:
+		p.hp = p.max_hp
+		p.hand.clear()
+		p.equipment.clear()
+		p.judgment_cards.clear()
+		p.determined_cards.clear()
+		p.mount_plus = 0
+		p.mount_minus = 0
+		p.identity_revealed = p.identity == "主公"
+	game.reset_game_over_state()
+	game._stop_countdown()
+	last_winner = ""
 
 func _run() -> void:
 	GameManager.random_identity = false
@@ -29,7 +45,10 @@ func _run() -> void:
 	# 通用钩子：不弹窗
 	game._sacrifice_override = func(): return false
 	game._nullify_override = func(): return false
+	game._dying_peach_override = func(): return false
 	game.start_game()
+	game._stop_countdown()
+	game.game_over.connect(func(winner: String): last_winner = winner)
 	for i in range(6):
 		await process_frame
 
@@ -61,7 +80,7 @@ func _run() -> void:
 	p1.determined_cards.append(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
 	p2.hand.clear()
 	await game._deal_damage(p2, p1, 1, EffectChain.DamageType.PHYSICAL)
-	_check(not p1.is_alive(), "P1 阵亡（体力 0）")
+	_check(p1.is_dead(), "P1 已确认阵亡（体力 0）")
 	_check(game._dead_processed.has(p1), "P1 已走完阵亡管线（防重复）")
 	_check(p1.hand.is_empty(), "阵亡弃置全部手牌")
 	_check(p1.equipment.is_empty(), "阵亡弃置全部装备")
@@ -75,18 +94,17 @@ func _run() -> void:
 	_check(not game._game_over, "忠臣阵亡不结束游戏")
 
 	# ---- 用例3：击杀奖惩·杀死反贼摸 3 张（P2 杀 P3）----
-	game.reset_game_over_state()
+	_reset_case()
 	p3.hp = 1
 	p2.hand.clear()
 	await game._deal_damage(p2, p3, 1, EffectChain.DamageType.PHYSICAL)
-	_check(not p3.is_alive(), "P3 阵亡（反贼）")
+	_check(p3.is_dead(), "P3 阵亡（反贼）")
 	_check(p3.identity_revealed, "P3 身份翻开（反贼）")
 	_check(p2.hand_size() == 3, "击杀反贼摸 3 张: %d" % p2.hand_size())
 	_check(not game._game_over, "还剩一名反贼，游戏继续")
 
 	# ---- 用例4：击杀奖惩·主公杀忠臣 → 弃置所有手牌和装备 ----
-	game.reset_game_over_state()
-	p1.hp = p1.max_hp  # 复活 P1（新场景）
+	_reset_case()
 	p0.hand.clear()
 	p0.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
 	p0.hand.append(CardBase.create(CardData.CardSubType.PEACH))
@@ -96,16 +114,15 @@ func _run() -> void:
 	p1.hp = 1
 	p1.hand.clear()
 	await game._deal_damage(p0, p1, 1, EffectChain.DamageType.PHYSICAL)
-	_check(not p1.is_alive(), "P1 再次阵亡（忠臣）")
+	_check(p1.is_dead(), "P1 再次阵亡（忠臣）")
 	_check(p0.is_alive(), "主公存活")
 	_check(p0.hand.is_empty(), "主公杀忠臣弃置所有手牌: %d" % p0.hand_size())
 	_check(p0.equipment.is_empty(), "主公杀忠臣弃置所有装备")
 	_check(p0.mount_plus == 0, "主公弃装备后马计数清零: %d" % p0.mount_plus)
 	_check(not game._game_over, "主公存活且反贼存活，游戏继续")
 
-	# ---- 用例5：胜负判定·反贼全灭 → 主公&忠臣胜 ----
-	game.reset_game_over_state()
-	p3.hp = p3.max_hp  # 复活 P3（用例3 已阵亡）
+	# ---- 用例5：反贼全灭但内奸尚存 → 继续；内奸也阵亡 → 主忠胜 ----
+	_reset_case()
 	p0.hand.clear()
 	p2.hp = 1
 	await game._deal_damage(p0, p2, 1, EffectChain.DamageType.PHYSICAL)
@@ -114,53 +131,50 @@ func _run() -> void:
 	p3.hp = 1
 	await game._deal_damage(p0, p3, 1, EffectChain.DamageType.PHYSICAL)
 	_check(p0.hand_size() == 6, "主公再杀反贼再摸 3 张: %d" % p0.hand_size())
-	_check(game._game_over, "反贼全灭 → 游戏结束")
+	_check(not game._game_over, "反贼全灭但内奸仍存活 → 游戏继续")
+	p4.hp = 1
+	await game._deal_damage(p0, p4, 1, EffectChain.DamageType.PHYSICAL)
+	_check(game._game_over and last_winner == "主公", "反贼与内奸全灭 → 主公阵营胜")
 	_check(game._game_over_overlay != null, "游戏结束弹窗已显示")
 
 	# ---- 用例6：胜负判定·主公阵亡（凶手反贼）→ 反贼胜 ----
-	game.reset_game_over_state()
-	p2.hp = p2.max_hp  # 复活 P2（新场景）
+	_reset_case()
 	p0.hp = 1
 	p0.hand.clear()
 	await game._deal_damage(p2, p0, 1, EffectChain.DamageType.PHYSICAL)
-	_check(not p0.is_alive(), "主公阵亡")
-	_check(game._game_over, "主公阵亡 → 游戏结束")
+	_check(p0.is_dead(), "主公阵亡")
+	_check(game._game_over and last_winner == "反贼", "主公阵亡 → 反贼胜")
 	_check(game._game_over_overlay != null, "结束弹窗显示")
 
-	# ---- 用例7：胜负判定·主公阵亡（凶手内奸）→ 内奸胜 ----
-	game.reset_game_over_state()
-	p0.hp = p0.max_hp
+	# ---- 用例7：其他人仍存活时内奸杀主公 → 反贼胜 ----
+	_reset_case()
 	p0.hp = 1
 	await game._deal_damage(p4, p0, 1, EffectChain.DamageType.PHYSICAL)
-	_check(game._game_over, "内奸杀主公 → 游戏结束")
+	_check(game._game_over and last_winner == "反贼", "内奸不是唯一生还者 → 反贼胜")
 
-	# ---- 用例8：胜负判定·主公阵亡（无伤害来源）→ 内奸胜 ----
-	game.reset_game_over_state()
-	p0.hp = p0.max_hp
+	# ---- 用例8：主公无来源死亡，其他人仍存活 → 反贼胜 ----
+	_reset_case()
 	p0.hp = 1
 	await game._deal_damage(null, p0, 1, EffectChain.DamageType.THUNDER)
-	_check(game._game_over, "闪电式无来源杀主公 → 内奸胜（游戏结束）")
+	_check(game._game_over and last_winner == "反贼", "无来源杀主公不自动判内奸胜")
 
 	# ---- 用例9：流失致死无击杀者（无奖惩）----
-	game.reset_game_over_state()
-	p0.hp = p0.max_hp
+	_reset_case()
 	p3.hp = 1
 	p3.hand.clear()
 	p0.hand.clear()
 	var paid = await game._pay_yes_ah_cost(p3)
 	_check(not paid, "流失致死返回 false")
-	_check(not p3.is_alive(), "P3 流失阵亡")
+	_check(p3.is_dead(), "P3 流失阵亡")
 	_check(p3.identity_revealed, "P3 身份翻开（反贼）")
 	_check(p0.hand_size() == 0, "流失致死无击杀者，无奖惩: %d" % p0.hand_size())
 	_check(not game._game_over, "反贼还剩 P2，游戏继续")
 
 	# ---- 用例10：阵亡角色跳过自己的回合 ----
-	game.reset_game_over_state()
-	for p in game.players:
-		p.hp = p.max_hp
+	_reset_case()
 	p1.hp = 0
 	game._handle_death(p1, null)  # 直接走阵亡管线（无击杀者）
-	_check(not p1.is_alive(), "P1 阵亡（跳回合前置）")
+	_check(p1.is_dead(), "P1 阵亡（跳回合前置）")
 	_check(not game._game_over, "忠臣阵亡不结束游戏")
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.current_phase = TurnManager.Phase.PLAY
@@ -182,13 +196,15 @@ func _run() -> void:
 	for i in range(6):
 		await process_frame
 	game2._sacrifice_override = func(): return false
+	game2._dying_peach_override = func(): return false
 	game2.start_game()
+	game2._stop_countdown()
 	for i in range(6):
 		await process_frame
 	var q0 = game2.players[0]
 	q0.hp = 1
 	await game2._deal_damage(game2.players[1], q0, 1, EffectChain.DamageType.PHYSICAL)
-	_check(not q0.is_alive(), "1V1 玩家0 阵亡")
+	_check(q0.is_dead(), "1V1 玩家0 阵亡")
 	_check(not game2._game_over, "1V1 无身份不判定胜负")
 	_check(not q0.identity_revealed, "1V1 无身份不翻开")
 	game2.queue_free()
@@ -205,9 +221,11 @@ func _run() -> void:
 		await process_frame
 	game3._sacrifice_override = func(): return false
 	game3._nullify_override = func(): return false
+	game3._dying_peach_override = func(): return false
 	# 安普提（P0）出石头，其余出剪刀 → P0 全胜
 	game3._rps_override = func(p): return game3.RPS_ROCK if p == game3.players[0] else game3.RPS_SCISSORS
 	game3.start_game()
+	game3._stop_countdown()
 	for i in range(6):
 		await process_frame
 	var a0 = game3.players[0]
