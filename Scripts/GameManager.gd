@@ -204,6 +204,8 @@ var _game_over: bool = false
 var _game_over_overlay: Control = null
 # 已走完阵亡管线的角色（防重复处理：一名角色一局只阵亡一次）
 var _dead_processed: Array[Player] = []
+# 尚未完成的濒死窗口：同一角色不重开，嵌套窗口全部结束后才检查终局。
+var _dying_contexts: Dictionary = {}
 # 跳过阵亡角色回合时的重入保护（next_turn 会同步触发 START 阶段回调）
 var _skipping_dead: bool = false
 
@@ -3465,9 +3467,7 @@ func _maybe_liehuo_save(p: Player) -> bool:
 	_sync_all_ui()
 	# 流失导致濒死 → 先处理（与丈八蛇矛一致）
 	if p.is_dying():
-		await _check_dying(p)
-		if p.is_dying():
-			_handle_death(p, null)  # 流失致死无击杀者
+		await _resolve_dying(p, null, "liehuo") # 流失致死无击杀者
 	return true
 
 # 询问是否发动烈火盾：玩家0弹窗，AI 默认不发动
@@ -3746,9 +3746,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					subject.hp -= extra
 					_update_debug("%s 流失 %d 点体力（发动【丈八蛇矛】，尚未造成伤害）" % [subject.player_name, extra])
 					if subject.is_dying():
-						await _check_dying(subject)
-						if subject.is_dying():
-							_handle_death(subject, null)
+						await _resolve_dying(subject, null, "zhangba", chain)
 					# 原始基础值已经含暴怒；只更新差额，不能重复加整个已损失体力。
 					var rage_delta = _rage_bonus(subject) - rage_before if not subject.is_dead() else 0
 					data["value"] += extra + rage_delta
@@ -3786,10 +3784,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		_update_debug("%s 受到 %d 点伤害" % [subject.player_name, data["damage"]])
 		_sync_all_ui()
 		if subject.is_dying():
-			await _check_dying(subject)
-			await rule_scheduler.checkpoint(chain, "before_death")
-			if subject.is_dying():
-				_handle_death(subject, source)
+			await _resolve_dying(subject, source, "damage", chain)
 		# before_death checkpoint 也可能救回目标；重查被普通救援延后的终局。
 		_check_win_condition(null, null)
 		return false
@@ -4226,9 +4221,7 @@ func _pay_yes_ah_cost(p: Player) -> bool:
 	p.hp -= 1
 	_update_debug("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 	if p.is_dying():
-		await _check_dying(p)
-		if p.is_dying():
-			_handle_death(p, null)  # 流失致死无击杀者
+		await _resolve_dying(p, null, "yes_ah") # 流失致死无击杀者
 	return p.is_alive()
 
 # 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
@@ -6379,7 +6372,29 @@ func _heal_with_staff(p: Player) -> int:
 	p.heal(amount)
 	return amount
 
-# 濒死检查：当目标 hp ≤ 0 时，允许自救
+# 统一濒死入口：所有伤害/流失来源都先完成救援，再开放死亡前规则。
+# 同一窗口的重入直接返回，不能等待自身；这不是重复请求的完成等待接口。
+# before_death 的上下文为 DyingContext，原效果链在 context.effect_chain。
+func _resolve_dying(victim: Player, killer: Player, cause: String, chain: EffectChain = null):
+	if _game_over or victim == null or not players.has(victim) or not victim.is_dying():
+		return
+	if _dying_contexts.has(victim):
+		return
+	var context = DyingContext.new(victim, killer, cause, chain)
+	_dying_contexts[victim] = context
+	await _check_dying(victim)
+	if not _game_over and victim.is_dying():
+		context.stage = DyingContext.Stage.BEFORE_DEATH
+		await rule_scheduler.checkpoint(context, "before_death")
+	if not _game_over and victim.is_dying():
+		context.stage = DyingContext.Stage.FINAL_DEATH
+		_handle_death(victim, context.killer)
+	context.stage = DyingContext.Stage.FINISHED
+	_dying_contexts.erase(victim)
+	_sync_all_ui()
+	_check_win_condition(null, null)
+
+# 濒死救援子流程：不确认死亡；生产调用统一经过 _resolve_dying。
 # 阵亡管线（阶段划分，按朋友要求顺序）：
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
 #   → 调用方完成死亡前规则后判 is_dying()：仍濒死才进入 _handle_death（确认死亡 → 翻开身份 → 清牌 → 击杀奖惩 → 胜负判定）
@@ -6437,6 +6452,9 @@ func _check_dying(dying: Player):
 #   阶段5 胜负判定 —— 五人标准身份局按已死亡/仍存活身份判定；不依赖凶手身份
 func _handle_death(victim: Player, killer: Player):
 	# ---- 阶段1 阵亡判定 ----
+	# 活跃窗口由统一入口提交，规则回调不能绕过尚未结束的救援/死亡前规则。
+	if _dying_contexts.has(victim) and _dying_contexts[victim].stage != DyingContext.Stage.FINAL_DEATH:
+		return
 	if _dead_processed.has(victim):
 		return
 	if not victim.is_dying():
@@ -6494,7 +6512,7 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 # 五人标准身份局判胜；保留旧调用签名，但击杀者只影响奖惩，不决定胜方。
 # 1V1、奸雄、特殊多人死亡时序仍由对应 QA 单独确认。
 func _check_win_condition(_victim: Player, _killer: Player):
-	if _game_over or player_count != 5:
+	if _game_over or player_count != 5 or not _dying_contexts.is_empty():
 		return
 	var outcome = IdentityVictory.evaluate(players)
 	if not outcome.is_empty():
@@ -6554,6 +6572,7 @@ func _on_game_over(winner_identity: String):
 func reset_game_over_state():
 	_game_over = false
 	_dead_processed.clear()
+	_dying_contexts.clear()
 	for p in players:
 		p.reset_death_state()
 	if _game_over_overlay != null and is_instance_valid(_game_over_overlay):

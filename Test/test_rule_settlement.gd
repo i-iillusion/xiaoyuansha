@@ -393,6 +393,118 @@ func check_dying_payments():
 	check(game._use_dying_card(owner, CardData.CardSubType.PEACH) and owner.hp == 1 and owner.heal_staff_peach_used, "自救：先付桃再应用治疗权杖")
 	reset_players()
 
+# 四个生产入口必须经过同一个死亡前窗口；回调只模拟规则的保命结果，非完整预大习。
+func check_dying_windows():
+	var actor = game.players[2]
+	var target = game.players[1]
+	var lord = game.players[0]
+	for route in ["damage", "zhangba", "liehuo", "yes_ah"]:
+		for save in [true, false]:
+			reset_players()
+			actor.identity_revealed = false
+			actor.judgment_cards.clear()
+			actor.determined_cards.clear()
+			actor.hp = 1
+			var card = CardBase.create(CardData.CardSubType.STRIKE)
+			var judgment = CardBase.create(CardData.CardSubType.INDULGENCE)
+			actor.hand.append(card)
+			actor.judgment_cards.append(judgment)
+			var windows: Array = []
+			var label = "%s/%s：" % [route, "救回" if save else "死亡"]
+			var rule = func(context, stage):
+				windows.append(context)
+				check(context is DyingContext and stage == "before_death" and context.stage == DyingContext.Stage.BEFORE_DEATH, label + "使用显式死亡前上下文")
+				check(context.victim == actor and context.cause == route and context.killer == (lord if route == "damage" else null), label + "保留真正的濒死者与原因，流失无击杀来源")
+				check(actor.is_dying() and not actor.identity_revealed and actor.hand == [card] and actor.judgment_cards == [judgment], label + "规则开始前未死亡、未亮身份、未清牌")
+				game._handle_death(actor, lord)
+				await game._resolve_dying(actor, lord, "duplicate")
+				check(actor.is_dying() and not game._dead_processed.has(actor) and game._dying_contexts[actor] == context, label + "回调不能提前提交死亡或重开同一窗口")
+				await process_frame
+				if save:
+					actor.hp = 1
+			var chain: EffectChain = null
+			if route == "damage":
+				chain = game._new_damage_chain(lord, actor, null, 1, EffectChain.DamageType.PHYSICAL)
+				chain.skip_targeting = true
+				var callback = game._on_chain_trigger
+				chain.trigger_callback = func(current, event, subject, source, data):
+					if event == "damage_applied":
+						game.rule_scheduler.enqueue("死亡前入口回归", rule)
+					return await callback.call(current, event, subject, source, data)
+				await chain.start()
+			elif route == "zhangba":
+				actor.equipment["weapon"] = CardData.CardSubType.ZHANGBA_SPEAR
+				game._zhangba_override = func():
+					game.rule_scheduler.enqueue("死亡前入口回归", rule)
+					return 1
+				chain = game._new_damage_chain(actor, target, CardBase.create(CardData.CardSubType.STRIKE), 1, EffectChain.DamageType.PHYSICAL)
+				await chain.start()
+				check(target.hp == 8 and chain.damage.source == (actor if save else null), label + "恢复原杀且只提交一次伤害，来源只在最终死亡后清除")
+			elif route == "liehuo":
+				actor.equipment["armor"] = CardData.CardSubType.LIEHUO_SHIELD
+				game._liehuo_override = func():
+					game.rule_scheduler.enqueue("死亡前入口回归", rule)
+					return true
+				check(await game._maybe_liehuo_save(actor), label + "完成原有体力支付")
+			else:
+				game.rule_scheduler.enqueue("死亡前入口回归", rule)
+				check(await game._pay_yes_ah_cost(actor) == save, label + "费用入口按最终是否救回返回，死亡则中止后续锦囊")
+			check(windows.size() == 1 and windows[0].stage == DyingContext.Stage.FINISHED and game._dying_contexts.is_empty(), label + "窗口仅执行一次，完成后无活动上下文残留")
+			check(windows[0].effect_chain == chain, label + "链内保留原链，链外不伪造伤害链")
+			if save:
+				check(actor.is_alive() and not actor.identity_revealed and actor.hand == [card] and actor.judgment_cards == [judgment], label + "规则救回后保留牌区与隐藏身份")
+			else:
+				check(actor.is_dead() and actor.identity_revealed and actor.hand.is_empty() and actor.judgment_cards.is_empty() and game._dead_processed.count(actor) == 1, label + "规则未救回才提交一次最终死亡")
+			check(lord.hand_size() == (3 if route == "damage" and not save else 0), label + "只有有来源伤害击杀反贼才发奖励")
+			# 上下文引用原链；释放测试观察记录/回调，避免形成引用环。
+			windows.clear()
+			if chain != null:
+				chain.trigger_callback = Callable()
+	game._zhangba_override = Callable()
+	game._liehuo_override = Callable()
+
+	reset_players()
+	lord.hp = 0
+	lord.hand.append(CardBase.create(CardData.CardSubType.PEACH))
+	game._dying_peach_override = func(): return true
+	var skipped: Array = []
+	game.rule_scheduler.enqueue("不应进入的死亡前窗口", func(_context, _stage): skipped.append(true))
+	await game._resolve_dying(lord, actor, "damage")
+	check(lord.is_alive() and lord.hand.is_empty() and not game._dead_processed.has(lord), "普通桃自救先完成支付并阻止死亡")
+	check(skipped.is_empty() and game._dying_contexts.is_empty(), "普通求救已救回时不再开放死亡前窗口")
+	game.rule_scheduler._pending.clear() # 丢弃本例未执行的测试回调，不影响后续例子。
+
+	# 父窗口暂时救回，但规则尚未返回；子窗口杀死最后一个敌人也不能抢先终局。
+	reset_players()
+	for index in [3, 4]:
+		game.players[index].hp = 0
+		game.players[index].mark_dead()
+	lord.hp = 0
+	var timeline: Array = []
+	var on_winner = func(winner): timeline.append(winner)
+	game.game_over.connect(on_winner)
+	game.rule_scheduler.enqueue("嵌套窗口回归", func(parent, _stage):
+		timeline.append("parent")
+		lord.hp = 1
+		actor.hp = 0
+		game.rule_scheduler.enqueue("子窗口回归", func(child, _child_stage):
+			check(child.victim == actor and parent.victim == lord and game._dying_contexts.size() == 2, "嵌套窗口分别记录濒死者，不覆盖父窗口")
+			timeline.append("child")
+		)
+		await game._resolve_dying(actor, lord, "damage")
+		check(actor.is_dead() and lord.hand_size() == 3, "子窗口先完成实际死亡与原有奖惩")
+		game._check_win_condition(null, null)
+		check(not game._game_over and game._dying_contexts.size() == 1, "即使已无濒死者，父窗口仍未完成时也不提前判胜")
+		await process_frame
+		timeline.append("parent:end")
+	)
+	await game._resolve_dying(lord, null, "damage")
+	check(timeline == ["parent", "child", "parent:end", "主公"], "最外层窗口返回后再宣告胜利，顺序不受暂时救回影响")
+	check(game._dying_contexts.is_empty() and not game.rule_scheduler.is_paused(), "嵌套结束后上下文与调度帧均释放")
+	game.game_over.disconnect(on_winner)
+	reset_players()
+	await process_frame
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -605,5 +717,6 @@ func _run():
 	await chain.start()
 	check(observations == [true], "濒死/死亡先于普通伤害后技能")
 	await check_death_order()
+	await check_dying_windows()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
