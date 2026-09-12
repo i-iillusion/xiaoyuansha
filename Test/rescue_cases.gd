@@ -3,6 +3,7 @@ extends RefCounted
 
 var suite
 var game: GameManager
+var response_timeout: Callable
 const PEACH = CardData.CardSubType.PEACH
 const WINE = CardData.CardSubType.WINE
 const STRIKE = CardData.CardSubType.STRIKE
@@ -235,6 +236,7 @@ func respond_to_prompt(mode: String):
 		elif button.text == "使用【酒】":
 			has_wine = true
 	check(peach_button != null and cancel_button != null and not has_wine, "救别人弹窗只提供桃与放弃")
+	response_timeout = game._countdown_on_timeout
 	game._response_ready.emit() # 不得结束当前独立救援弹窗。
 	check(not overlay.is_queued_for_deletion(), "其他响应信号不串入救援弹窗")
 	if mode == "timeout":
@@ -247,15 +249,21 @@ func respond_to_prompt(mode: String):
 		peach_button.pressed.emit() # 重复点击只能提交一次。
 
 func check_prompts():
-	for mode in ["pay", "cancel", "timeout"]:
-		reset_case()
-		var victim = game.players[2]
-		victim.hp = 0
-		game.players[0].hand.assign([null, null])
-		respond_to_prompt.call_deferred(mode)
-		await game._run_rescue_round(victim)
-		check(victim.hp == (1 if mode == "pay" else 0), "弹窗 %s 正确返回并结束本人的询问" % mode)
-		check(game.players[0].hand.size() == (1 if mode == "pay" else 2), "弹窗 %s 不重复付费，拒绝/超时不扣牌" % mode)
-		check(not game._countdown_active, "弹窗结束停止响应计时")
-		await suite.process_frame
-		check(game.get_node_or_null("UI/RescuePrompt") == null, "弹窗结束无残留遮罩")
+	for phase in [TurnManager.Phase.JUDGE, TurnManager.Phase.PLAY]:
+		for mode in ["pay", "cancel", "timeout"]:
+			reset_case()
+			game.turn_manager.current_phase = phase
+			var victim = game.players[2]
+			victim.hp = 0
+			game.players[0].hand.assign([null, null])
+			respond_to_prompt.call_deferred(mode)
+			await game._run_rescue_round(victim)
+			check(victim.hp == (1 if mode == "pay" else 0), "弹窗 %s 正确返回并结束本人的询问" % mode)
+			check(game.players[0].hand.size() == (1 if mode == "pay" else 2), "弹窗 %s 不重复付费，拒绝/超时不扣牌" % mode)
+			check(game._countdown_active == (phase == TurnManager.Phase.PLAY), "关闭响应计时后，仅在出牌阶段恢复出牌计时")
+			check(game._countdown_on_timeout != response_timeout, "旧救援超时回调已解除，不带入后续阶段")
+			check(game.turn_manager.current_phase == phase, "救援确认/放弃/超时不推进原阶段")
+			response_timeout = Callable()
+			game._halt_countdown()
+			await suite.process_frame
+			check(game.get_node_or_null("UI/RescuePrompt") == null, "弹窗结束无残留遮罩")
