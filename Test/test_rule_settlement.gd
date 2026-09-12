@@ -1,6 +1,15 @@
 # 2026-09-07 规则确认回归：代受/丈八/完整复原/真实体力/可恢复结算。
 extends SceneTree
 
+# 只在测试中观察实际入弃牌堆的瞬间，不给生产代码增加测试专用事件。
+class DeathOrderDeck extends Deck:
+	var on_discard: Callable
+
+	func discard(card: CardBase):
+		if on_discard.is_valid():
+			on_discard.call(card)
+		super.discard(card)
+
 var failures := 0
 var checks := 0
 var game: GameManager
@@ -46,6 +55,75 @@ func strike(source: Player, target: Player, ignore_restrictions: bool = false):
 	return await game._execute_single_strike(source, target,
 		CardBase.create(CardData.CardSubType.STRIKE), CardData.CardSubType.STRIKE,
 		EffectChain.DamageType.PHYSICAL, 1, ignore_restrictions)
+
+func check_death_order():
+	reset_players()
+	var original_deck = game.deck
+	var observed_deck = DeathOrderDeck.new()
+	game.deck = observed_deck
+	var victim = game.players[2]
+	var killer = game.players[0]
+	var original_identity = victim.identity
+	var original_revealed = victim.identity_revealed
+	for p in game.players:
+		p.judgment_cards.clear()
+		p.determined_cards.clear()
+	victim.identity = "反贼"
+	victim.identity_revealed = false
+	var hand_card = CardBase.create(CardData.CardSubType.STRIKE)
+	var judgment = CardBase.create(CardData.CardSubType.INDULGENCE)
+	var determined = CardBase.create(CardData.CardSubType.PEACH)
+	victim.hand.append(hand_card)
+	victim.equipment["armor"] = CardData.CardSubType.SILVER_LION
+	victim.judgment_cards.append(judgment)
+	victim.determined_cards.append(determined)
+	victim.hp = 0
+
+	# 普通求救结束不等于实际死亡；完整预大习尚未接入，不在此伪造技能验收。
+	await game._check_dying(victim)
+	check(victim.is_dying() and not game._dead_processed.has(victim), "未救回者在死亡前窗口仍是濒死，不提前确认死亡")
+	check(not victim.identity_revealed and observed_deck.discard_count() == 0, "等待死亡前规则时不翻身份、不清牌")
+	check(victim.hand == [hand_card] and victim.get_armor() == CardData.CardSubType.SILVER_LION, "等待死亡前规则时保留手牌和装备")
+	check(victim.judgment_cards == [judgment] and victim.determined_cards == [determined], "等待死亡前规则时保留判定区和已确定牌")
+	victim.hp = 1 # 模拟死亡前窗口已救回，只验证最终死亡入口的保护条件。
+	game._handle_death(victim, killer)
+	check(victim.is_alive() and not game._dead_processed.has(victim), "已救回者不进入最终死亡处理")
+	check(not victim.identity_revealed and observed_deck.discard_count() == 0 and killer.hand.is_empty(), "已救回者不公开、不清牌、不发击杀奖励")
+	check(victim.hand == [hand_card] and victim.get_armor() == CardData.CardSubType.SILVER_LION and victim.judgment_cards == [judgment] and victim.determined_cards == [determined], "已救回者保留全部原牌区")
+
+	var discard_states: Array = []
+	observed_deck.on_discard = func(_card):
+		discard_states.append([victim.is_dead(), victim.identity_revealed, game._dead_processed.has(victim), killer.hand_size()])
+		if discard_states.size() == 1:
+			game._handle_death(victim, killer) # 清牌回调重入不能再次处理或提前发奖励。
+	victim.hp = 0
+	game._handle_death(victim, killer)
+	check(discard_states == [[true, true, true, 0], [true, true, true, 0], [true, true, true, 0], [true, true, true, 0]], "每张牌清理时均已死亡并公开身份，奖惩尚未执行，重入不重复清牌")
+	check(victim.is_dead() and victim.hp == 0, "死亡弃白银狮子不回复体力")
+	check(victim.hand.is_empty() and victim.equipment.is_empty() and victim.judgment_cards.is_empty() and victim.determined_cards.is_empty(), "最终死亡清空全部牌区")
+	check(observed_deck._discard.count(hand_card) == 1 and observed_deck._discard.count(judgment) == 1 and observed_deck._discard.count(determined) == 1, "手牌、判定牌和已确定牌原实例各弃置一次")
+	check(game._dead_processed.count(victim) == 1 and killer.hand_size() == 3, "一次最终死亡只登记一次、发放一次反贼击杀奖励")
+	game._handle_death(victim, killer)
+	check(discard_states.size() == 4 and observed_deck.discard_count() == 4 and killer.hand_size() == 3, "完成后再次请求处理同一死亡也不重复清牌或奖惩")
+
+	# 无身份的角色没有身份可翻；本例只覆盖死亡入口，不代表乱斗模式已实现。
+	observed_deck.on_discard = Callable()
+	reset_players()
+	victim.identity = ""
+	victim.identity_revealed = false
+	victim.hand.append(hand_card)
+	victim.hp = 0
+	discard_states.clear()
+	observed_deck.on_discard = func(_card):
+		discard_states.append([victim.is_dead(), victim.identity_revealed])
+	game._handle_death(victim, null)
+	check(discard_states == [[true, false]] and victim.hand.is_empty(), "无身份角色实际死亡后正常清牌，不制造身份公开")
+	check(killer.hand.is_empty(), "无击杀来源、无身份的死亡不产生击杀奖励")
+	observed_deck.on_discard = Callable()
+	game.deck = original_deck
+	victim.identity = original_identity
+	victim.identity_revealed = original_revealed
+	reset_players()
 
 # 只检查支付结果，不改变原有无懈轮询或代受结算时机。
 func pay_response(sub: CardData.CardSubType) -> bool:
@@ -526,5 +604,6 @@ func _run():
 		return await callback.call(current, event, subject, source, data)
 	await chain.start()
 	check(observations == [true], "濒死/死亡先于普通伤害后技能")
+	await check_death_order()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

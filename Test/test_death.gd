@@ -1,5 +1,5 @@
 # test_death.gd — 阵亡管线冒烟测试
-# 按朋友要求分阶段验证：阵亡判定 → 阵亡效果（弃牌）→ 翻开身份 → 击杀奖惩 → 胜负判定
+# 按最终裁定分阶段验证：确认死亡 → 翻开身份 → 清牌 → 击杀奖惩 → 胜负判定
 extends SceneTree
 
 var failures := 0
@@ -68,7 +68,7 @@ func _run() -> void:
 	game._update_player_panel(p1_panel, p1)
 	_check(p1_id_label.text == "【?】", "面板未公开身份显示【?】: " + p1_id_label.text)
 
-	# ---- 用例2：阵亡管线（判定→弃牌→翻身份），反贼P2 杀 忠臣P1（无奖惩）----
+	# ---- 用例2：阵亡管线（判定→翻身份→弃牌），反贼P2 杀 忠臣P1（无奖惩）----
 	p1.hp = 1
 	p1.hand.clear()
 	p1.hand.append(CardBase.create(CardData.CardSubType.STRIKE))

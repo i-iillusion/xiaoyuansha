@@ -6382,7 +6382,7 @@ func _heal_with_staff(p: Player) -> int:
 # 濒死检查：当目标 hp ≤ 0 时，允许自救
 # 阵亡管线（阶段划分，按朋友要求顺序）：
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
-#   → 调用方判 is_dying()：仍濒死才进入 _handle_death（阵亡判定 → 阵亡效果·弃牌 → 翻开身份 → 击杀奖惩 → 胜负判定）
+#   → 调用方完成死亡前规则后判 is_dying()：仍濒死才进入 _handle_death（确认死亡 → 翻开身份 → 清牌 → 击杀奖惩 → 胜负判定）
 func _check_dying(dying: Player):
 	if not dying.is_dying():
 		return
@@ -6429,10 +6429,10 @@ func _check_dying(dying: Player):
 # ============================
 #  阵亡处理管线（阶段1-5，按朋友要求顺序分开）
 # ============================
-# 调用时机：濒死结算（_check_dying）全部结束，角色体力仍 ≤ 0
+# 调用时机：濒死结算（_check_dying）及死亡前规则全部结束，角色仍处于濒死状态
 #   阶段1 阵亡判定 —— 确认阵亡（体力 ≤ 0），防重复处理
-#   阶段2 阵亡效果 —— 弃置所有手牌/装备/判定牌/已确定牌（未来死亡技能钩子在此插入）
-#   阶段3 翻开身份 —— identity_revealed = true，UI 显示身份
+#   阶段2 翻开身份 —— identity_revealed = true，无身份则不公开
+#   阶段3 清理牌区 —— 弃置所有手牌/装备/判定牌/已确定牌
 #   阶段4 击杀奖惩 —— 杀死【反贼】：击杀者摸 3 张；主公杀死【忠臣】：主公弃置所有手牌和装备
 #   阶段5 胜负判定 —— 五人标准身份局按已死亡/仍存活身份判定；不依赖凶手身份
 func _handle_death(victim: Player, killer: Player):
@@ -6445,14 +6445,14 @@ func _handle_death(victim: Player, killer: Player):
 	_dead_processed.append(victim)
 	_update_debug("%s 阵亡！" % victim.player_name)
 
-	# ---- 阶段2 阵亡效果：弃置所有牌 ----
-	_discard_all_cards(victim, true)
-	_update_debug("%s 弃置了所有牌（手牌/装备/判定牌）" % victim.player_name)
-
-	# ---- 阶段3 翻开身份 ----
+	# ---- 阶段2 翻开身份：清牌及失去装备效果必须能观察到已公开状态 ----
 	if victim.identity != "":
 		victim.identity_revealed = true
 		_update_debug("身份翻开：%s 是【%s】！" % [victim.player_name, victim.identity])
+
+	# ---- 阶段3 清理牌区：此时已最终死亡，白银狮子等不能将其救回 ----
+	_discard_all_cards(victim, true)
+	_update_debug("%s 弃置了所有牌（手牌/装备/判定牌）" % victim.player_name)
 	_sync_all_ui()
 
 	# ---- 阶段4 击杀奖惩（胜负未分时才执行；体力流失致死等无击杀者不触发）----
