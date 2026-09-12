@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JR Problem · 预大习结算可视化器</title>
+<style>
+:root{
+  color-scheme:light dark;
+  --bg:#0f1115;--panel:#171a21;--panel2:#1d212a;--text:#eef1f7;--muted:#98a2b3;
+  --line:#2b3240;--accent:#6f72f6;--accent2:#8a63e8;--danger:#ff6675;--ok:#4fd39a;
+  --shadow:0 10px 34px rgba(0,0,0,.18);
+}
+@media(prefers-color-scheme:light){
+  :root{
+    --bg:#f2f5fb;--panel:#fff;--panel2:#f7f9fd;--text:#18202c;--muted:#687386;
+    --line:#dce3ef;--accent:#5b5ce8;--accent2:#7656d8;--danger:#df4f60;--ok:#269b70;
+    --shadow:0 8px 26px rgba(45,57,78,.08);
+  }
+}
+*{box-sizing:border-box;min-width:0}
+html,body{width:100%;height:100%;margin:0}
+body{
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 15% -20%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 34rem),
+    radial-gradient(circle at 92% 0%,color-mix(in srgb,var(--accent2) 9%,transparent),transparent 28rem),
+    var(--bg);
+  color:var(--text);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{opacity:.42;cursor:not-allowed}
+.app{
+  width:100vw;height:100vh;
+  padding:10px;
+  display:grid;
+  grid-template-rows:44px minmax(235px,35%) minmax(0,1fr);
+  gap:10px;
+  overflow:hidden;
+}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:0 4px;
+}
+.title{font-size:19px;font-weight:750;letter-spacing:-.02em;white-space:nowrap}
+.top-status{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.card{
+  min-height:0;
+  background:color-mix(in srgb,var(--panel) 96%,transparent);
+  border:1px solid var(--line);
+  border-radius:15px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+  display:grid;
+  grid-template-rows:46px minmax(0,1fr);
+}
+.card-h{
+  padding:0 14px;
+  border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+}
+.card-h h2{margin:0;font-size:14px}
+.sub{font-size:11px;color:var(--muted)}
+.card-b{min-height:0;padding:10px 12px}
+
+.config-body{
+  height:100%;
+  display:grid;
+  grid-template-columns:minmax(0,1.35fr) minmax(310px,.65fr);
+  gap:12px;
+}
+.config-side{
+  min-height:0;
+  display:grid;
+  grid-template-rows:auto auto auto 1fr;
+  align-content:start;
+  gap:9px;
+  padding-left:2px;
+}
+.controls{display:flex;flex-wrap:wrap;gap:7px;align-items:end}
+.btn{
+  min-height:36px;padding:7px 11px;
+  border:1px solid var(--line);border-radius:9px;
+  background:var(--panel2);
+  transition:.16s transform,.16s border-color,.16s background;
+}
+.btn:hover:not(:disabled){transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.btn.primary{
+  border-color:transparent;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:white;font-weight:700;
+}
+.btn.danger{color:var(--danger)}
+label{display:grid;gap:4px;color:var(--muted);font-size:11px}
+input[type="number"],input[type="text"],select{
+  min-height:36px;
+  border:1px solid var(--line);
+  background:var(--panel2);
+  border-radius:9px;
+  padding:7px 9px;
+  outline:none;
+}
+input:focus,select:focus,button:focus-visible{
+  outline:2px solid color-mix(in srgb,var(--accent) 70%,transparent);
+  outline-offset:2px;
+}
+.status{
+  min-height:36px;
+  padding:8px 10px;
+  border:1px solid var(--line);
+  background:var(--panel2);
+  border-radius:9px;
+  color:var(--muted);
+  font-size:12px;
+  overflow:auto;
+}
+
+.table-wrap{height:100%;overflow:auto;border:1px solid var(--line);border-radius:11px;background:var(--panel2)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{
+  position:sticky;top:0;z-index:2;
+  background:var(--panel2);
+  font-size:11px;color:var(--muted);font-weight:650;
+}
+tbody tr:last-child td{border-bottom:none}
+.icon-btn{
+  width:32px;height:32px;padding:0;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel);
+}
+.switch{display:inline-flex;gap:6px;align-items:center;color:var(--text)}
+.switch input{width:16px;height:16px}
+
+.main-row{
+  min-height:0;
+  display:grid;
+  grid-template-columns:.9fr 1fr 1.35fr;
+  gap:10px;
+}
+.scroller{height:100%;min-height:0;overflow:auto;padding-right:2px}
+.stack,.role-list,.log{display:grid;align-content:start;gap:7px}
+
+.role{
+  position:relative;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 11px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  transition:.2s transform,.2s border-color,.2s opacity,.2s background;
+}
+.role.dead{opacity:.5;filter:saturate(.55)}
+.role .name{font-weight:700}
+.role .meta{font-size:11px;color:var(--muted);margin-top:2px}
+.hp{
+  font:700 18px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:nowrap;
+}
+.hp small{font:500 10px/1 ui-sans-serif;color:var(--muted)}
+.role.hit{animation:hit .42s ease}
+.role.revive{animation:revive .62s ease}
+.role.die{animation:die .5s ease}
+@keyframes hit{
+  20%{transform:translateX(-6px);border-color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,var(--panel2))}
+  48%{transform:translateX(4px)}
+  72%{transform:translateX(-2px)}
+}
+@keyframes revive{
+  0%{transform:scale(.97)}
+  45%{transform:scale(1.02);border-color:var(--ok);box-shadow:0 0 0 8px transparent}
+}
+@keyframes die{25%{transform:scale(.985);border-color:var(--danger)}100%{opacity:.5}}
+
+.frame{
+  padding:9px 10px 9px 13px;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel2);
+  animation:push .24s ease both;
+}
+.frame.top{
+  border-color:color-mix(in srgb,var(--accent) 72%,var(--line));
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+.frame .ft{font-weight:700}
+.frame .fs{font-size:11px;color:var(--muted);margin-top:2px}
+@keyframes push{from{opacity:0;transform:translateY(-6px) scale(.99)}to{opacity:1;transform:none}}
+
+.log-entry{
+  display:grid;grid-template-columns:30px 1fr;gap:7px;
+  padding:6px 0;
+  border-bottom:1px dashed color-mix(in srgb,var(--line) 78%,transparent);
+  animation:fade .24s ease both;
+}
+.log-entry .n{font:10px/1.5 ui-monospace;color:var(--muted)}
+.log-entry strong{color:var(--accent)}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.legend{display:flex;gap:8px;color:var(--muted);font-size:11px;align-items:center}
+.swatch{width:8px;height:8px;border-radius:2px;background:var(--accent)}
+.pulse-dot{
+  display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:6px;animation:pulse 1.1s infinite
+}
+@keyframes pulse{50%{opacity:.35;transform:scale(.72)}}
+
+@media(max-width:900px){
+  .app{grid-template-rows:44px 40% minmax(0,1fr)}
+  .config-body{grid-template-columns:1fr .75fr}
+  .main-row{grid-template-columns:1fr 1fr 1.15fr}
+}
+@media(max-width:720px){
+  body{overflow:auto}
+  .app{height:auto;min-height:100vh;overflow:visible;grid-template-rows:auto auto auto}
+  .topbar{min-height:44px}
+  .config-body,.main-row{grid-template-columns:1fr}
+  .card{min-height:260px}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="title">JR Problem · 【预大习】</div>
+    <div class="top-status">顺序结算可视化器</div>
+  </header>
+
+  <section class="card">
+    <div class="card-h">
+      <h2>场景配置</h2>
+      <div class="controls">
+        <button class="btn" id="preset2">双 JR</button>
+        <button class="btn" id="preset3">三 JR</button>
+        <button class="btn" id="presetCycle">循环搜索种子</button>
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="config-body">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>角色</th><th>HP</th><th>JR</th><th>移动</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+
+        <div class="config-side">
+          <div class="controls">
+            <button class="btn" id="addRole">＋ 添加</button>
+            <button class="btn danger" id="removeRole">－ 删除末位</button>
+          </div>
+
+          <div class="controls">
+            <label style="flex:1;min-width:170px">初始触发 JR
+              <select id="starter"></select>
+            </label>
+            <label style="width:105px">播放速度
+              <select id="speed">
+                <option value="900">慢</option>
+                <option value="480" selected>中</option>
+                <option value="180">快</option>
+                <option value="40">极快</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="controls">
+            <button class="btn primary" id="start">初始化</button>
+            <button class="btn" id="step" disabled>执行一步</button>
+            <button class="btn" id="play" disabled>▶ 自动播放</button>
+            <button class="btn" id="reset">重置</button>
+          </div>
+
+          <div class="status" id="status">尚未初始化。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <main class="main-row">
+    <section class="card">
+      <div class="card-h">
+        <h2>结算栈</h2>
+        <div class="legend"><span class="swatch"></span>栈顶</div>
+      </div>
+      <div class="card-b">
+        <div id="stack" class="stack scroller"><div class="sub">初始化后显示。</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><h2>角色状态</h2></div>
+      <div class="card-b">
+        <div id="roles" class="role-list scroller"><div class="sub">初始化后显示。</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-h">
+        <h2>事件日志</h2>
+        <button class="btn" id="clearLog">清空</button>
+      </div>
+      <div class="card-b">
+        <div id="log" class="log scroller"><div class="sub">等待执行。</div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(()=>{
+'use strict';
+const $=s=>document.querySelector(s);
+const rows=$('#rows'),starter=$('#starter'),rolesEl=$('#roles'),stackEl=$('#stack'),logEl=$('#log'),statusEl=$('#status');
+const startBtn=$('#start'),stepBtn=$('#step'),playBtn=$('#play');
+let config=[],sim=null,nextId=1,timer=null,anim={id:null,type:null};
+
+const mk=(name,hp,jr)=>({id:nextId++,name,hp,jr});
+function preset(kind){
+  stopPlay(); nextId=1;
+  if(kind==='two') config=[mk('A',0,true),mk('B',2,true),mk('C',2,false)];
+  else if(kind==='three') config=[mk('A',0,true),mk('B',2,true),mk('C',2,true),mk('D',2,false)];
+  else config=[mk('A',0,true),mk('B',2,true),mk('C',2,true),mk('D',4,true),mk('E',2,false)];
+  sim=null; renderConfig(); render();
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function renderConfig(){
+  rows.innerHTML='';
+  config.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${i+1}</td>
+      <td><input data-k="name" data-i="${i}" type="text" value="${esc(r.name)}" style="width:88px"></td>
+      <td><input data-k="hp" data-i="${i}" type="number" min="-20" max="99" value="${r.hp}" style="width:82px"></td>
+      <td><label class="switch"><input data-k="jr" data-i="${i}" type="checkbox" ${r.jr?'checked':''}>JR</label></td>
+      <td><button class="icon-btn" data-move="up" data-i="${i}">↑</button> <button class="icon-btn" data-move="down" data-i="${i}">↓</button></td>`;
+    rows.appendChild(tr);
+  });
+  const prev=starter.value; starter.innerHTML='';
+  config.filter(r=>r.jr).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.name;starter.appendChild(o)});
+  if([...starter.options].some(o=>o.value===prev))starter.value=prev;
+}
+rows.addEventListener('input',e=>{
+  const i=+e.target.dataset.i,k=e.target.dataset.k;if(!config[i]||!k)return;
+  if(k==='name')config[i].name=(e.target.value||`P${i+1}`).slice(0,16);
+  if(k==='hp')config[i].hp=Math.max(-20,Math.min(99,Number(e.target.value)||0));
+  if(k==='jr')config[i].jr=e.target.checked;
+  stopPlay();sim=null;renderConfig();render();
+});
+rows.addEventListener('click',e=>{
+  const b=e.target.closest('[data-move]');if(!b)return;const i=+b.dataset.i,j=b.dataset.move==='up'?i-1:i+1;
+  if(j<0||j>=config.length)return;[config[i],config[j]]=[config[j],config[i]];stopPlay();sim=null;renderConfig();render();
+});
+$('#addRole').addEventListener('click',()=>{if(config.length>=12)return;config.push(mk(String.fromCharCode(65+config.length),4,false));sim=null;renderConfig();render()});
+$('#removeRole').addEventListener('click',()=>{if(config.length<=2)return;config.pop();sim=null;renderConfig();render()});
+$('#preset2').onclick=()=>preset('two');$('#preset3').onclick=()=>preset('three');$('#presetCycle').onclick=()=>preset('cycle');
+$('#reset').onclick=()=>{stopPlay();sim=null;render()};
+$('#clearLog').onclick=()=>{if(sim){sim.log=[];render()}};
+startBtn.onclick=init;stepBtn.onclick=()=>{stopPlay();step();render()};
+playBtn.onclick=()=>{if(timer)stopPlay();else startPlay()};
+
+function r(id){return sim.roles.find(x=>x.id===id)}
+function frame(id){return sim.stack.find(x=>x.type==='yudaxi'&&x.id===id)}
+function log(text){sim.log.push(text);if(sim.log.length>1500)sim.log.shift()}
+function mark(id,type){anim={id,type};setTimeout(()=>{if(anim.id===id){anim={id:null,type:null};renderRoles()}},620)}
+
+function init(){
+  stopPlay();
+  const sid=+starter.value,s0=config.find(x=>x.id===sid);
+  if(!s0||!s0.jr){statusEl.textContent='请选择一名 JR。';return}
+  sim={roles:config.map(x=>({...x,alive:true,draws:0,deaths:0})),stack:[],log:[],steps:0,done:false,seq:1,seen:new Map(),cycle:null};
+  const a=r(sid);a.alive=false;if(a.hp>0)a.hp=0;a.deaths++;
+  sim.stack.push({type:'death',actor:sid,cause:null,stage:'pre',id:'D0'});
+  log(`${a.name} 已死亡，进入死亡结算“亮出身份牌前”。`);
+  recordState();
+  render();
+}
+function startPlay(){
+  if(!sim||sim.done)return;
+  playBtn.textContent='⏸ 暂停';
+  const tick=()=>{if(!sim||sim.done){stopPlay();render();return}step();render();timer=setTimeout(tick,+$('#speed').value)};
+  timer=setTimeout(tick,50);
+}
+function stopPlay(){if(timer){clearTimeout(timer);timer=null}playBtn.textContent='▶ 自动播放'}
+
+function recordState(){
+  if(!sim)return;
+  const activeIds=[];
+  for(const f of sim.stack) if(f.type==='yudaxi') activeIds.push(f.id);
+  const idMap=new Map(activeIds.map((id,i)=>[id,i]));
+  const normCause=c=>c&&idMap.has(c)?idMap.get(c):-1;
+  const key=JSON.stringify({
+    roles:sim.roles.map(x=>[x.id,x.hp,x.alive]),
+    stack:sim.stack.map(f=>{
+      if(f.type==='yudaxi')return['Y',idMap.get(f.id),f.owner,f.cursor,f.deaths,f.targets];
+      if(f.type==='death')return['D',f.actor,normCause(f.cause),f.stage];
+      return['N',f.actor,normCause(f.cause)];
+    })
+  });
+  if(sim.seen.has(key)&&!sim.cycle)sim.cycle={from:sim.seen.get(key),to:sim.steps};
+  else sim.seen.set(key,sim.steps);
+}
+function step(){
+  if(!sim||sim.done)return;
+  sim.steps++;
+  const top=sim.stack.at(-1);
+  if(!top){sim.done=true;log('全部结算完成。');return}
+  if(top.type==='dying')stepDying(top);
+  else if(top.type==='death')stepDeath(top);
+  else stepYudaxi(top);
+  if(!sim.stack.length&&!sim.done){sim.done=true;log('全部结算完成。')}
+  recordState();
+  if(sim.cycle){sim.done=true;log(`检测到状态重复：第 ${sim.cycle.from} 步与第 ${sim.cycle.to} 步状态相同。若模型无隐藏历史量，这意味着进入循环。`);stopPlay()}
+  if(sim.steps>5000){sim.done=true;log('安全停止：超过 5000 步。');stopPlay()}
+}
+function stepDying(f){
+  const x=r(f.actor);
+  if(!x.alive){sim.stack.pop();return}
+  log(`${x.name} 的濒死结算无人救援，死亡。`);
+  x.alive=false;x.deaths++;mark(x.id,'die');
+  sim.stack.pop();
+  sim.stack.push({type:'death',actor:x.id,cause:f.cause,stage:'pre',id:`D${sim.steps}`});
+}
+function stepDeath(f){
+  const x=r(f.actor);
+  if(f.stage==='pre'){
+    if(x.jr){
+      f.stage='after';
+      const id=`Y${sim.seq++}`,targets=sim.roles.filter(q=>q.alive&&q.id!==x.id).map(q=>q.id);
+      log(`${x.name} 在“亮出身份牌前”触发【预大习】。`);
+      sim.stack.push({type:'yudaxi',id,owner:x.id,targets,cursor:0,deaths:0});
+    }else finishDeath(f);
+  }else{
+    if(x.alive){log(`${x.name} 已由【预大习】回复，本次死亡撤销。`);sim.stack.pop()}
+    else finishDeath(f);
+  }
+}
+function finishDeath(f){
+  const x=r(f.actor);log(`${x.name} 的死亡完成。`);sim.stack.pop();
+  if(f.cause){
+    const c=frame(f.cause);
+    if(c){c.deaths++;log(`${x.name} 计入【预大习】(${r(c.owner).name}) 的 X；当前 X=${c.deaths}。`)}
+  }
+}
+function stepYudaxi(f){
+  const owner=r(f.owner);
+  while(f.cursor<f.targets.length){
+    const tid=f.targets[f.cursor++],t=r(tid);
+    if(!t||!t.alive){log(`${t?t.name:'该角色'} 在轮到【预大习】(${owner.name})前已死亡，跳过。`);return}
+    const before=t.hp;t.hp-=2;mark(t.id,'hit');
+    log(`【预大习】(${owner.name})：${t.name} ${before} → ${t.hp}。`);
+    if(t.hp<=0){log(`${t.name} 进入濒死；暂停【预大习】(${owner.name})。`);sim.stack.push({type:'dying',actor:t.id,cause:f.id,id:`N${sim.steps}`})}
+    return;
+  }
+  const x=f.deaths;sim.stack.pop();
+  if(x>0){
+    owner.hp=x;owner.draws+=x;owner.alive=true;mark(owner.id,'revive');
+    log(`【预大习】(${owner.name})结束：X=${x}。${owner.name} 回复至 ${x} 点体力并摸 ${x} 张牌，撤销死亡。`);
+  }else log(`【预大习】(${owner.name})结束：X=0。${owner.name} 不能由此回来。`);
+}
+
+function renderRoles(){
+  if(!sim){rolesEl.innerHTML='<div class="sub">初始化后显示。</div>';return}
+  rolesEl.innerHTML=sim.roles.map(x=>`<div class="role ${x.alive?'':'dead'} ${anim.id===x.id?anim.type:''}">
+    <div><div class="name">${esc(x.name)} ${x.jr?'<span class="sub">· JR</span>':''}</div>
+    <div class="meta">${x.alive?'存活':'死亡'} · 累计死亡 ${x.deaths} 次${x.draws?` · 摸牌 ${x.draws}`:''}</div></div>
+    <div class="hp">${x.hp} <small>HP</small></div></div>`).join('');
+}
+function renderStack(){
+  if(!sim||!sim.stack.length){stackEl.innerHTML='<div class="sub">栈为空。</div>';return}
+  stackEl.innerHTML=[...sim.stack].reverse().map((f,i)=>{
+    let t='',s='';
+    if(f.type==='death'){t=`死亡结算 · ${r(f.actor).name}`;s=f.stage==='pre'?'亮出身份牌前':'等待【预大习】返回'}
+    else if(f.type==='dying'){t=`濒死结算 · ${r(f.actor).name}`;s=`来源：${f.cause||'其他'}`}
+    else{t=`【预大习】· ${r(f.owner).name}`;s=`游标 ${Math.min(f.cursor,f.targets.length)}/${f.targets.length} · X=${f.deaths}`}
+    return `<div class="frame ${i===0?'top':''}"><div class="ft">${esc(t)}</div><div class="fs">${esc(s)}</div></div>`;
+  }).join('');
+}
+function renderLog(){
+  if(!sim||!sim.log.length){logEl.innerHTML='<div class="sub">等待执行。</div>';return}
+  logEl.innerHTML=sim.log.map((x,i)=>`<div class="log-entry"><div class="n">${String(i+1).padStart(3,'0')}</div><div>${esc(x).replace(/【预大习】/g,'<strong>【预大习】</strong>')}</div></div>`).join('');
+  logEl.scrollTop=logEl.scrollHeight;
+}
+function render(){
+  renderRoles();renderStack();renderLog();
+  stepBtn.disabled=!sim||sim.done;playBtn.disabled=!sim||sim.done;
+  if(!sim)statusEl.textContent='尚未初始化。';
+  else if(sim.cycle)statusEl.innerHTML=`<span class="pulse-dot"></span>检测到重复状态：第 ${sim.cycle.from} → ${sim.cycle.to} 步。`;
+  else if(sim.done)statusEl.textContent=`结算完成，共 ${sim.steps} 步。`;
+  else statusEl.innerHTML=`<span class="pulse-dot"></span>已执行 ${sim.steps} 步；当前栈深 ${sim.stack.length}。`;
+}
+preset('three');
+})();
+</script>
+</body>
+</html>
