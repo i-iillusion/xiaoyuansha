@@ -29,6 +29,7 @@ func reset_players():
 	game._sacrifice_override = func(): return false
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._nullify_override = func(): return false
 	game._yes_ah_override = Callable()
 	game._aoe_override = func(): return false
@@ -47,6 +48,7 @@ func reset_players():
 		p.chained = false
 		p.kneeling = false
 		p.wine_stacks = 0
+		p.heal_staff_peach_used = false
 		p.awoken = false
 		p.awake_choice = 0
 		p.capture_game_start_state()
@@ -718,5 +720,7 @@ func _run():
 	check(observations == [true], "濒死/死亡先于普通伤害后技能")
 	await check_death_order()
 	await check_dying_windows()
+	var rescue_cases = load("res://Test/rescue_cases.gd").new()
+	await rescue_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

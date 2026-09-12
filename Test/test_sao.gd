@@ -34,6 +34,7 @@ func _run() -> void:
 	game._sacrifice_override = func(): return false
 	game._nullify_override = func(): return false
 	game._aoe_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._yes_ah_override = Callable()
 	game._sao_type_override = Callable()
 	game._sao_reveal_override = Callable()

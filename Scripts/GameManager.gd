@@ -5,6 +5,17 @@
 class_name GameManager
 extends Node
 
+# 每次救援弹窗使用独立答复对象，避免与外层响应信号串线或重复点击。
+class RescueAnswer extends RefCounted:
+	signal answered(sub: int)
+	var settled := false
+
+	func submit(sub: int):
+		if settled:
+			return
+		settled = true
+		answered.emit(sub)
+
 signal game_started()
 signal game_over(winner_identity: String)
 
@@ -169,6 +180,9 @@ var _calamity_target_override: Callable = Callable()
 
 # 濒死自救测试钩子（正常游戏不设置）：返回 true = 玩家0使用【桃】自救（没桃照样用不了）
 var _dying_peach_override: Callable = Callable()
+# 救援决策测试钩子：(出牌者, 濒死者, 合法牌型数组) -> 牌型或 -1（放弃）。
+# 只替代决策，不绕过确认时的合法性和实际支付。
+var _rescue_choice_override: Callable = Callable()
 
 # 比尔·盖伊测试钩子（正常游戏不设置）：
 # _shensu_override：返回 true = 发动【神速】；_shensu_option_override：返回 1/2 = 选哪项；
@@ -6363,13 +6377,17 @@ func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 
 # 【治疗权杖】：每个回合内（含其他玩家的回合），装备者使用的第一张桃额外回复 1 点体力
 # 计数按玩家存（heal_staff_peach_used），回合开始时统一重置；出牌阶段用桃与濒死自救共用
-func _heal_with_staff(p: Player) -> int:
+func _heal_with_staff(p: Player, recipient: Player = null) -> int:
+	if recipient == null:
+		recipient = p
 	var amount = 1
-	if p.get_weapon() == CardData.CardSubType.HEAL_STAFF and not p.heal_staff_peach_used:
+	if p.get_weapon() == CardData.CardSubType.HEAL_STAFF and not p.heal_staff_peach_used \
+			and recipient.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
 		amount = 2
-		p.heal_staff_peach_used = true
 		_update_debug("%s 发动【治疗权杖】：本回合第一张【桃】额外回复 1 点体力" % p.player_name)
-	p.heal(amount)
+	# 记录出桃者的首次使用；中途装备或解除目标青釭盾不能补触发。
+	p.heal_staff_peach_used = true
+	recipient.heal(amount)
 	return amount
 
 # 统一濒死入口：所有伤害/流失来源都先完成救援，再开放死亡前规则。
@@ -6404,26 +6422,14 @@ func _check_dying(dying: Player):
 
 	_update_debug("%s 进入濒死状态！" % dying.player_name)
 
-	# 只有玩家 0（人类玩家）需要交互
-	var dying_idx = -1
-	for i in players.size():
-		if players[i] == dying:
-			dying_idx = i
-			break
-
-	if dying_idx < 0:
+	if not players.has(dying):
 		return
 
-	# 尝试自救：先允许使用桃或酒（朋友设定：贤者的加护在桃/酒自救之后才发动）
-	if dying_idx == 0:
-		while dying.is_dying():
-			var hp_before = dying.hp
-			await _show_dying_prompt(dying)
-			if dying.hp <= hp_before:
-				break # 放弃或没有可用救援牌；负体力时允许连续自救。
-	else:
-		# AI 玩家暂时不自救
-		pass
+	# 经典基线：从当前回合角色开始轮询，含濒死本人；放弃后本窗口不回头。
+	# 普通求救全部结束后，才进入既有装傻/贤者及死亡前规则。
+	await _run_rescue_round(dying)
+	if _game_over:
+		return
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢超过一半回复至 1 点体力
 	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
@@ -6666,44 +6672,93 @@ func _do_sage_save(p: Player):
 	_update_debug("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
-# 自救支付入口：濒死可使用牌，不可误用 is_alive() 排除本人。
-# UI/测试共用；过期选择、错误类型、已救回或已死亡均不收费用。
-func _use_dying_card(dying: Player, sub: CardData.CardSubType) -> bool:
-	if sub not in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+# 合法性与持牌情况是所有人共用的规则；是否愿意救援是另一个决策层。
+func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
+	var options: Array[int] = []
+	if _game_over or rescuer == null or dying == null or not players.has(rescuer) or not players.has(dying):
+		return options
+	if not dying.is_dying() or _is_kneeling(dying) or _is_kneeling(rescuer):
+		return options
+	if rescuer != dying and not rescuer.is_alive():
+		return options
+	if _dying_contexts.has(dying) and _dying_contexts[dying].stage != DyingContext.Stage.RESCUE:
+		return options
+	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		if sub == CardData.CardSubType.WINE and rescuer != dying:
+			continue
+		if HandPayment.find_index(rescuer.hand, sub) >= 0:
+			options.append(sub)
+	return options
+
+# 自救/救他人共用支付入口；确认时重验，不因过期选择丢牌或凭空治疗。
+func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
+	if not _rescue_options(rescuer, dying).has(sub):
 		return false
-	if not dying.is_dying() or _is_kneeling(dying):
-		return false
-	var card = HandPayment.take(dying.hand, sub)
+	var card = HandPayment.take(rescuer.hand, sub)
 	if card == null:
 		return false
 	deck.discard(card)
 	var healed = 1
 	if sub == CardData.CardSubType.PEACH:
-		healed = _heal_with_staff(dying)
+		healed = _heal_with_staff(rescuer, dying)
 	else:
 		dying.heal(1)
-	_update_debug("%s 使用【%s】自救，回复 %d 点体力（%d/%d）" % [dying.player_name, CardData.get_type_name(sub), healed, dying.hp, dying.max_hp])
+	_update_debug("%s 对 %s 使用【%s】，回复 %d 点体力（%d/%d）" % [rescuer.player_name, dying.player_name, CardData.get_type_name(sub), healed, dying.hp, dying.max_hp])
 	_sync_all_ui()
 	return true
 
+# 兼容既有自救按钮/用例；不再有另一套支付逻辑。
+func _use_dying_card(dying: Player, sub: CardData.CardSubType) -> bool:
+	return _use_rescue_card(dying, dying, sub)
+
+func _run_rescue_round(dying: Player):
+	if turn_manager == null or turn_manager.current_player_idx < 0 or turn_manager.current_player_idx >= players.size():
+		return
+	var order: Array[Player] = []
+	for offset in players.size():
+		order.append(players[(turn_manager.current_player_idx + offset) % players.size()])
+	for rescuer in order:
+		while dying.is_dying() and not _game_over:
+			var sub = await _ask_rescue_card(rescuer, dying)
+			var hp_before = dying.hp
+			if not _use_rescue_card(rescuer, dying, sub) or dying.hp <= hp_before:
+				break # 本人可连续出牌；拒绝/无牌/过期选择则轮到下一人。
+		if not dying.is_dying() or _game_over:
+			break
+
+func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
+	var options = _rescue_options(rescuer, dying)
+	if options.is_empty():
+		return -1
+	# 保留旧玩家0自救钩子；其他角色的测试决策使用新钩子。
+	if rescuer == dying and rescuer == players[0] and _dying_peach_override.is_valid():
+		return CardData.CardSubType.PEACH if _dying_peach_override.call() else -1
+	if _rescue_choice_override.is_valid():
+		return await _rescue_choice_override.call(rescuer, dying, options)
+	if rescuer != players[0]:
+		return _choose_ai_rescue(rescuer, dying, options)
+	return await _show_rescue_prompt(rescuer, dying, options)
+
+# 保守 AI 策略，不是规则限制：自救；救公开同阵营者；不读取他人隐藏身份。
+func _choose_ai_rescue(rescuer: Player, dying: Player, options: Array[int]) -> int:
+	if options.is_empty():
+		return -1
+	if rescuer == dying:
+		return options[0]
+	if not dying.identity_revealed:
+		return -1
+	var allies = (rescuer.identity in ["主公", "忠臣"] and dying.identity in ["主公", "忠臣"]) \
+		or (rescuer.identity == "反贼" and dying.identity == "反贼")
+	return CardData.CardSubType.PEACH if allies and options.has(CardData.CardSubType.PEACH) else -1
+
 func _show_dying_prompt(dying: Player):
-	if not dying.is_dying() or _is_kneeling(dying):
-		return
-	# 测试钩子只决定是否用桃；仍需匹配桃/任意牌并实际支付。
-	if _dying_peach_override.is_valid():
-		if _dying_peach_override.call():
-			_use_dying_card(dying, CardData.CardSubType.PEACH)
-			_sync_all_ui()
-		return
+	var sub = await _ask_rescue_card(dying, dying)
+	_use_rescue_card(dying, dying, sub)
 
-	var has_peach = HandPayment.find_index(dying.hand, CardData.CardSubType.PEACH) >= 0
-	var has_wine = HandPayment.find_index(dying.hand, CardData.CardSubType.WINE) >= 0
-
-	if not has_peach and not has_wine:
-		_update_debug("%s 没有【桃】或【酒】，无法自救…" % dying.player_name)
-		return
-
+func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int]) -> int:
+	var answer = RescueAnswer.new()
 	var overlay = ColorRect.new()
+	overlay.name = "RescuePrompt"
 	overlay.color = Color(0.3, 0.0, 0.0, 0.6)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -6717,7 +6772,7 @@ func _show_dying_prompt(dying: Player):
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "你已进入濒死状态！"
+	label.text = "%s 处于濒死状态（体力 %d），是否使用牌救援？" % [dying.player_name, dying.hp]
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
@@ -6730,45 +6785,27 @@ func _show_dying_prompt(dying: Player):
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	if has_peach:
-		var peach_btn = Button.new()
-		peach_btn.text = "使用【桃】"
-		peach_btn.custom_minimum_size = Vector2(160, 44)
-		peach_btn.pressed.connect(func():
-			_use_dying_card(dying, CardData.CardSubType.PEACH)
-			overlay.queue_free()
-			_sync_all_ui()
-			_response_ready.emit()
-		, CONNECT_ONE_SHOT)
-		hbox.add_child(peach_btn)
-
-	if has_wine:
-		var wine_btn = Button.new()
-		wine_btn.text = "使用【酒】"
-		wine_btn.custom_minimum_size = Vector2(160, 44)
-		wine_btn.pressed.connect(func():
-			_use_dying_card(dying, CardData.CardSubType.WINE)
-			overlay.queue_free()
-			_sync_all_ui()
-			_response_ready.emit()
-		, CONNECT_ONE_SHOT)
-		hbox.add_child(wine_btn)
+	for sub in options:
+		var button = Button.new()
+		button.text = "使用【%s】" % CardData.get_type_name(sub)
+		button.custom_minimum_size = Vector2(160, 44)
+		button.pressed.connect(answer.submit.bind(sub))
+		hbox.add_child(button)
 
 	# 放弃按钮（独立一行，居中）
 	var skip_btn = Button.new()
 	skip_btn.text = "放弃"
 	skip_btn.custom_minimum_size = Vector2(160, 44)
 	skip_btn.modulate = Color(0.6, 0.6, 0.6)
-	skip_btn.pressed.connect(func():
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(answer.submit.bind(-1))
 	vbox.add_child(skip_btn)
 
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
+	_start_response_countdown(overlay, rescuer.player_name, answer.submit.bind(-1))
+	var chosen_sub: int = await answer.answered
 	_stop_countdown()
-	_sync_all_ui()
+	if not overlay.is_queued_for_deletion():
+		overlay.queue_free()
+	return chosen_sub
 
 func end_play_phase():
 	if turn_manager.current_phase == TurnManager.Phase.PLAY:

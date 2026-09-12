@@ -26,6 +26,7 @@ func _run():
 	game._stop_countdown()
 	game._sacrifice_override = func(): return false
 	game._nullify_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._zhuangbi_again_override = func(): return false
 	for p in game.players:
 		p.hp = 10

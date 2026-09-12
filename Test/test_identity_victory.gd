@@ -121,6 +121,7 @@ func reset_case():
 	game._sacrifice_override = func(): return false
 	game._nullify_override = func(): return false
 	game._dying_peach_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	winners.clear()
 
 func check_integration():

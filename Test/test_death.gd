@@ -46,6 +46,7 @@ func _run() -> void:
 	game._sacrifice_override = func(): return false
 	game._nullify_override = func(): return false
 	game._dying_peach_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game.start_game()
 	game._stop_countdown()
 	game.game_over.connect(func(winner: String): last_winner = winner)
@@ -197,6 +198,7 @@ func _run() -> void:
 		await process_frame
 	game2._sacrifice_override = func(): return false
 	game2._dying_peach_override = func(): return false
+	game2._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game2.start_game()
 	game2._stop_countdown()
 	for i in range(6):
@@ -222,6 +224,7 @@ func _run() -> void:
 	game3._sacrifice_override = func(): return false
 	game3._nullify_override = func(): return false
 	game3._dying_peach_override = func(): return false
+	game3._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	# 安普提（P0）出石头，其余出剪刀 → P0 全胜
 	game3._rps_override = func(p): return game3.RPS_ROCK if p == game3.players[0] else game3.RPS_SCISSORS
 	game3.start_game()
