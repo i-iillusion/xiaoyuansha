@@ -94,6 +94,8 @@ func _sync_record():
 	source_player = damage.source
 
 func _trigger(event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
+	if is_cancelled:
+		return true
 	_sync_record()
 	if scheduler != null:
 		await scheduler.checkpoint(self, event_name)
@@ -112,6 +114,8 @@ func _trigger(event_name: String, subject: Player, source: Player, data: Diction
 	var handled = false
 	if trigger_callback.is_valid():
 		handled = await trigger_callback.call(self, event_name, subject, source, data)
+	if is_cancelled:
+		return true
 	if data.has("value"):
 		effect_value = data["value"]
 	if scheduler != null:

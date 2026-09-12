@@ -725,5 +725,7 @@ func _run():
 	await check_dying_windows()
 	var rescue_cases = load("res://Test/rescue_cases.gd").new()
 	await rescue_cases.run(self)
+	var yudaxi_cases = load("res://Test/yudaxi_cases.gd").new()
+	await yudaxi_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

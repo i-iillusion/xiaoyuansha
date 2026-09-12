@@ -99,6 +99,7 @@ var _nullify_override: Callable = Callable()
 
 # 舍己为人响应测试钩子（正常游戏不设置）：返回 true = 玩家0打出舍己为人
 var rule_scheduler = RuleScheduler.new()
+var yudaxi = YudaxiResolver.new()
 var _sacrifice_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
@@ -1518,12 +1519,14 @@ func _new_damage_chain(source: Player, target: Player, card: CardBase, amount: i
 
 # 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
 func _finish_damage_chain(chain: EffectChain):
-	if not chain.damage.committed:
+	if _game_over or not chain.damage.committed:
 		return
 	var actual = chain.target_player
 	var source = chain.source_player
 	if not chain.damage.is_chain and actual.chained and chain.damage_element != EffectChain.DamageType.PHYSICAL:
 		await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike)
+	if _game_over:
+		return
 	await _try_calamity_robe_transfer(actual)
 	await _try_minus_mule_transfer(actual)
 	await _try_plus_mule_transfer(actual)
@@ -4424,7 +4427,7 @@ func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）
 func _maybe_ask_reveal() -> void:
-	if not _reveal_ask_pending:
+	if _game_over or not _reveal_ask_pending:
 		return
 	_reveal_ask_pending = false
 	var owner = players[0]
@@ -5731,7 +5734,7 @@ func _calamity_adjust(source: Player, target: Player, amount: int) -> int:
 # 【灾厄剑】转移：造成一次伤害后，可将本装备移至一名其他角色的装备区
 # 目标已有武器则替换（旧武器进弃牌堆）；EquipmentPool 占用永久保留（不解除）
 func _try_calamity_transfer(source: Player):
-	if source == null or not source.is_alive():
+	if _game_over or source == null or not source.is_alive():
 		return
 	if source.get_weapon() != CardData.CardSubType.CALAMITY_SWORD:
 		return
@@ -6403,7 +6406,12 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	await _check_dying(victim)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.BEFORE_DEATH
-		await rule_scheduler.checkpoint(context, "before_death")
+		# 锁定规则先于普通检查点；里奥尚未加入选将表，完整武将仍待开发。
+		if victim.general_name == "里奥·普利威尔":
+			await yudaxi.resolve(victim, _yudaxi_targets, _settle_yudaxi_target,
+				_draw_blank_cards, func(): return _game_over, _on_yudaxi_limit)
+		if not _game_over and victim.is_dying() and not yudaxi.is_active():
+			await rule_scheduler.checkpoint(context, "before_death")
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.FINAL_DEATH
 		_handle_death(victim, context.killer)
@@ -6411,6 +6419,32 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	_dying_contexts.erase(victim)
 	_sync_all_ui()
 	_check_win_condition(null, null)
+
+# 暂行 S3：当前 players 仅为玩家角色，不把未来单位混入此名单。
+# 沿当前空间/行动数组从发动者下家起算；排除正在等待死亡前规则的角色。
+func _yudaxi_targets(owner: Player) -> Array[Player]:
+	var targets: Array[Player] = []
+	var start = players.find(owner)
+	if start < 0:
+		return targets
+	for offset in range(1, players.size()):
+		var target = players[(start + offset) % players.size()]
+		if target.is_alive() and not _dying_contexts.has(target):
+			targets.append(target)
+	return targets
+
+func _settle_yudaxi_target(target: Player):
+	# 扣除体力没有伤害来源/击杀奖励，仍允许普通求救及既定保命技能。
+	_sync_all_ui()
+	await _resolve_dying(target, null, "yudaxi")
+
+func _on_yudaxi_limit():
+	# 终止悬挂的外层伤害链，不在平局后继续普通伤害后技能。
+	for context in _dying_contexts.values():
+		if context.effect_chain != null:
+			context.effect_chain.is_cancelled = true
+			context.effect_chain.response_result = EffectChain.ResponseResult.CANCELED
+	_finish_game("平局", "预大习超过安全结算步数（%d）" % yudaxi.step_limit)
 
 # 濒死救援子流程：不确认死亡；生产调用统一经过 _resolve_dying。
 # 阵亡管线（阶段划分，按朋友要求顺序）：
@@ -6529,7 +6563,11 @@ func _finish_game(winner_identity: String, reason: String):
 	if _game_over:
 		return
 	_game_over = true
-	_update_debug("游戏结束！【%s】阵营获胜！（%s）" % [winner_identity, reason])
+	_halt_countdown()
+	if winner_identity == "平局":
+		_update_debug("游戏结束！平局（%s）" % reason)
+	else:
+		_update_debug("游戏结束！【%s】阵营获胜！（%s）" % [winner_identity, reason])
 	game_over.emit(winner_identity)
 
 # 游戏结束弹窗（锚点居中）：显示胜方 + 返回主菜单
@@ -6556,7 +6594,7 @@ func _on_game_over(winner_identity: String):
 		"反贼": "反贼阵营",
 		"内奸": "内奸",
 	}.get(winner_identity, winner_identity)
-	title.text = "游戏结束！\n%s 获胜！" % winner_text
+	title.text = "游戏结束！\n平局" if winner_identity == "平局" else "游戏结束！\n%s 获胜！" % winner_text
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 34)
 	title.add_theme_color_override("font_color", Color(1, 0.9, 0.5))
@@ -7220,6 +7258,10 @@ func _set_status_line(msg: String):
 
 # 根据当前回合状态刷新提示句（并启动/停止对应倒计时）
 func _refresh_status_line():
+	if _game_over:
+		_halt_countdown()
+		_set_status_line("游戏已结束")
+		return
 	var pid = turn_manager.current_player_idx
 	if pid >= players.size():
 		return
