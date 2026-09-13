@@ -10,7 +10,10 @@ var confirm: Button
 
 func setup(snapshot: HandSelection, count: int, mandatory: bool):
 	required = count
-	fallback = snapshot.defaults(count) if mandatory else []
+	# 三元表达式的 [] 是无类型 Array，不能赋给 Array[int]（运行时错误）。
+	fallback.clear()
+	if mandatory:
+		fallback.assign(snapshot.defaults(count))
 	color = Color(0, 0, 0, 0.8)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
