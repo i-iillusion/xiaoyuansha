@@ -1318,12 +1318,12 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 func _has_play_card(p: Player, sub: CardData.CardSubType) -> bool:
 	if _pending_determined_card != null:
 		return _pending_determined_card.sub_type == sub and p.determined_cards.has(_pending_determined_card)
-	return HandPayment.find_index(p.hand, sub) >= 0
+	return HandPayment.has_card(p, sub)
 
 # 统一主动出牌支付：普通声明仍从 hand 取同类型/任意牌；点击已确定牌时只接受并移除该原对象。
 func _take_play_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	if _pending_determined_card == null:
-		return HandPayment.take(p.hand, sub)
+		return HandPayment.take_card(p, sub)
 	var selected := _pending_determined_card
 	if selected.sub_type != sub or not p.determined_cards.has(selected):
 		return null
@@ -1574,7 +1574,7 @@ func play_card(sub: CardData.CardSubType):
 	if not turn_manager.can_play_card():
 		_update_debug("当前不能出牌")
 		return
-	if p.hand_size() <= 0 and _pending_determined_card == null:
+	if p.hand_size() <= 0 and p.determined_cards.is_empty() and _pending_determined_card == null:
 		_update_debug("没有手牌了")
 		return
 	if _pending_determined_card != null and not _has_play_card(p, sub):
@@ -1995,13 +1995,13 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable) -> bool:
 	if _game_over or not p.is_alive() or _is_kneeling(p) or p.seat_index != 0:
 		return false
-	if HandPayment.find_response_index(p.hand, expected) < 0:
+	if not HandPayment.has_response(p, expected):
 		return false
 	if not await prompt.call():
 		return false
 	if _game_over or not p.is_alive() or _is_kneeling(p):
 		return false
-	var used_card = HandPayment.take_response(p.hand, expected)
+	var used_card = HandPayment.take_player_response(p, expected)
 	if used_card == null:
 		return false
 	deck.discard(used_card)
@@ -3178,7 +3178,7 @@ func _play_duel(attacker: Player, target: Player):
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
 			# 【霸王】：对方还需打出第二张杀
 			if needs_two:
-				if HandPayment.find_response_index(current.hand, CardData.CardSubType.STRIKE) < 0:
+				if not HandPayment.has_response(current, CardData.CardSubType.STRIKE):
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
@@ -3398,7 +3398,7 @@ func _ask_nullification_round(desc: String) -> String:
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0)
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION))
 			if not p.is_alive() or _is_kneeling(p):
 				continue
 			if yes_ah == "cancel":
@@ -3410,7 +3410,7 @@ func _ask_nullification_round(desc: String) -> String:
 					_sync_all_ui()
 					return ""
 			else:
-				var used_card = HandPayment.take(p.hand, CardData.CardSubType.NULLIFICATION)
+				var used_card = HandPayment.take_card(p, CardData.CardSubType.NULLIFICATION)
 				if used_card == null:
 					continue
 				deck.discard(used_card)
@@ -3423,7 +3423,7 @@ func _ask_nullification_round(desc: String) -> String:
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_nullification_prompt(desc: String, p: Player) -> String:
-	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.NULLIFICATION) >= 0
+	var has_hand = HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _nullify_override.is_valid():
@@ -3613,7 +3613,7 @@ func _show_liehuo_prompt() -> bool:
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
-	if HandPayment.find_index(responder.hand, expected_sub) < 0:
+	if not HandPayment.has_card(responder, expected_sub):
 		return false
 	# 【下跪】：无法使用或打出任何牌 → 不能出闪
 	if _is_kneeling(responder):
@@ -3653,7 +3653,7 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		# 弹窗返回后重新验证；没有合法闪时按未响应处理，不扣除其他类型。
 		if not responder.is_alive() or _is_kneeling(responder):
 			return false
-		var used_dodge = HandPayment.take(responder.hand, expected_sub)
+		var used_dodge = HandPayment.take_card(responder, expected_sub)
 		if used_dodge == null:
 			return false
 		deck.discard(used_dodge)
@@ -6342,7 +6342,7 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0)
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE))
 			if not p.is_alive() or _is_kneeling(p):
 				continue
 			if yes_ah == "cancel":
@@ -6354,7 +6354,7 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 					_sync_all_ui()
 					continue
 			else:
-				var used_card = HandPayment.take(p.hand, CardData.CardSubType.SACRIFICE)
+				var used_card = HandPayment.take_card(p, CardData.CardSubType.SACRIFICE)
 				if used_card == null:
 					continue
 				deck.discard(used_card)
@@ -6365,7 +6365,7 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	var p = players[0]
-	var has_hand = HandPayment.find_index(p.hand, CardData.CardSubType.SACRIFICE) >= 0
+	var has_hand = HandPayment.has_card(p, CardData.CardSubType.SACRIFICE)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _sacrifice_override.is_valid():
@@ -6789,7 +6789,7 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
 		if sub == CardData.CardSubType.WINE and rescuer != dying:
 			continue
-		if HandPayment.find_index(rescuer.hand, sub) >= 0:
+		if HandPayment.has_card(rescuer, sub):
 			options.append(sub)
 	return options
 
@@ -6797,7 +6797,7 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if not _rescue_options(rescuer, dying).has(sub):
 		return false
-	var card = HandPayment.take(rescuer.hand, sub)
+	var card = HandPayment.take_card(rescuer, sub)
 	if card == null:
 		return false
 	deck.discard(card)

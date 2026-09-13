@@ -49,3 +49,34 @@ static func _take_at(hand: Array[CardBase], index: int, blank_sub: CardData.Card
 		card = CardBase.create(blank_sub)
 	hand.remove_at(index)
 	return card
+
+# 两个存储区均为手中牌；不移动/合并数组，不把视图副本当支付对象。
+# 保留具体牌优先于任意牌的策略，同等具体牌先取 hand；不是强制选牌规则。
+static func _find_player_card(p: Player, sub: CardData.CardSubType, response: bool) -> Dictionary:
+	if p == null:
+		return {}
+	var blank: Dictionary = {}
+	for cards in [p.hand, p.determined_cards]:
+		var index: int = find_response_index(cards, sub) if response else find_index(cards, sub)
+		if index < 0:
+			continue
+		var selected: Dictionary = {"cards": cards, "index": index}
+		if cards[index] != null:
+			return selected
+		if blank.is_empty():
+			blank = selected
+	return blank
+
+static func has_card(p: Player, sub: CardData.CardSubType) -> bool:
+	return not _find_player_card(p, sub, false).is_empty()
+
+static func take_card(p: Player, sub: CardData.CardSubType) -> CardBase:
+	var selected := _find_player_card(p, sub, false)
+	return null if selected.is_empty() else _take_at(selected.cards, selected.index, sub)
+
+static func has_response(p: Player, expected: CardData.CardSubType) -> bool:
+	return not _find_player_card(p, expected, true).is_empty()
+
+static func take_player_response(p: Player, expected: CardData.CardSubType) -> CardBase:
+	var selected := _find_player_card(p, expected, true)
+	return null if selected.is_empty() else _take_at(selected.cards, selected.index, expected)

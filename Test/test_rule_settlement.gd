@@ -47,6 +47,7 @@ func reset_players():
 		p.max_hp = 10
 		p.hp = 10
 		p.hand.clear()
+		p.determined_cards.clear() # 两个手牌存储区均须隔离，避免前例牌参与后例救援。
 		p.equipment.clear()
 		p.chained = false
 		p.kneeling = false

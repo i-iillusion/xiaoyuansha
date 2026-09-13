@@ -269,7 +269,82 @@ func _run():
 	game._sync_all_ui()
 	check(not game._play_btn.disabled, "只有已确定牌时出牌按钮仍可打开选择器")
 
+	await check_cross_zone_payments()
 	game.queue_free()
 	await process_frame
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+# A1：生产预查与支付入口，而非仅在合并视图上删除副本。
+func check_cross_zone_payments():
+	var p = game.players[0]
+	var target = game.players[1]
+	reset_case()
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	var fire = CardBase.create(CardData.CardSubType.FIRE_STRIKE)
+	p.hand.append(null)
+	p.determined_cards.assign([peach, fire])
+	check(HandPayment.has_card(p, CardData.CardSubType.PEACH), "A1 跨牌区预查可用桃")
+	check(p.hand == [null] and p.determined_cards == [peach, fire], "A1 预查不移动或具体化任何牌")
+	check(HandPayment.take_card(p, CardData.CardSubType.PEACH) == peach and p.hand == [null], "A1 第二牌区具体桃优先于第一牌区任意牌")
+	check(HandPayment.take_player_response(p, CardData.CardSubType.STRIKE) == fire, "A1 响应杀保留第二牌区火杀原实例")
+	check(p.determined_cards.is_empty() and p.hand == [null], "A1 支付从原数组精确移除")
+	var wine = HandPayment.take_card(p, CardData.CardSubType.WINE)
+	check(wine != null and wine.sub_type == CardData.CardSubType.WINE and p.hand.is_empty(), "A1 用尽具体牌后任意牌正常具体化")
+	p.determined_cards.append(fire)
+	check(not HandPayment.has_card(p, CardData.CardSubType.STRIKE) and HandPayment.take_card(p, CardData.CardSubType.STRIKE) == null, "A1 主动普通杀不能冒充具体火杀")
+	check(p.determined_cards == [fire] and not HandPayment.has_card(null, CardData.CardSubType.PEACH), "A1 错误类型和空角色无副作用")
+
+	reset_case()
+	p.hp = 2
+	p.determined_cards.append(peach)
+	await game.play_card(CardData.CardSubType.PEACH)
+	check(p.hp == 3 and game.deck._discard == [peach] and p.determined_cards.is_empty(), "A1 无普通手牌时通用主动桃入口可支付已确定桃")
+
+	reset_case()
+	target.hp = 0
+	p.determined_cards.append(peach)
+	check(game._rescue_options(p, target).has(CardData.CardSubType.PEACH), "A1 求救名单识别第二牌区桃")
+	check(game._use_rescue_card(p, target, CardData.CardSubType.PEACH), "A1 实际支付已确定桃救他人")
+	check(target.hp == 1 and p.determined_cards.is_empty() and game.deck._discard == [peach], "A1 求救恢复正确目标且原牌只弃一次")
+	check(not game._use_rescue_card(p, target, CardData.CardSubType.PEACH), "A1 已救回目标不重复支付")
+	p.hp = 0
+	p.determined_cards.append(wine)
+	check(game._use_rescue_card(p, p, CardData.CardSubType.WINE) and p.hp == 1, "A1 第二牌区酒可自救")
+	check(p.wine_stacks == 0 and game.deck._discard.count(wine) == 1, "A1 自救酒不增加进攻层数")
+
+	reset_case()
+	p.determined_cards.append(fire)
+	check(await game._ask_basic_card_response(p, CardData.CardSubType.STRIKE, func(): return true), "A1 决斗/AOE 响应杀识别已确定火杀")
+	check(game.deck._discard == [fire] and p.determined_cards.is_empty(), "A1 响应原属性牌只弃一次")
+	check(game.turn_manager.strike_count_this_turn == 0, "A1 响应不消耗主动杀次数")
+	p.determined_cards.append(fire)
+	check(not await game._ask_basic_card_response(p, CardData.CardSubType.STRIKE, func(): return false), "A1 拒绝响应不支付")
+	check(p.determined_cards == [fire], "A1 拒绝后原牌仍在")
+	check(not await game._ask_basic_card_response(p, CardData.CardSubType.STRIKE, func():
+		p.determined_cards.erase(fire)
+		return true), "A1 等待期间牌离手，返回后不凭空支付")
+	check(game.deck._discard.count(fire) == 1, "A1 失效操作不重复制造弃牌")
+
+	reset_case()
+	var dodge = CardBase.create(CardData.CardSubType.DODGE)
+	p.determined_cards.append(dodge)
+	game._dodge_override = func(): return true
+	var chain = game._new_damage_chain(target, p, null, 1, EffectChain.DamageType.PHYSICAL)
+	check(await game._on_chain_response_check(chain, p, CardData.CardSubType.DODGE, target), "A1 杀的出闪入口可使用第二牌区闪")
+	check(game.deck._discard == [dodge] and p.determined_cards.is_empty(), "A1 出闪精确扣除原牌")
+
+	reset_case()
+	var nullify = CardBase.create(CardData.CardSubType.NULLIFICATION)
+	p.determined_cards.append(nullify)
+	game._nullify_override = func(): return true
+	check(await game._ask_nullification_round("A1") == p.player_name, "A1 无懈弹窗预查与最终支付一致")
+	check(game.deck._discard == [nullify] and p.determined_cards.is_empty(), "A1 无懈原实例只弃一次")
+
+	reset_case()
+	var sacrifice = CardBase.create(CardData.CardSubType.SACRIFICE)
+	p.determined_cards.append(sacrifice)
+	game._sacrifice_override = func(): return true
+	check(await game._maybe_sacrifice(game.players[2], target, 1, EffectChain.DamageType.PHYSICAL) == p, "A1 舍己代受预查与最终支付一致")
+	check(game.deck._discard == [sacrifice] and p.determined_cards.is_empty(), "A1 舍己原实例只弃一次")
+	reset_case()
