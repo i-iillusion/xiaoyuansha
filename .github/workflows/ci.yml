@@ -27,7 +27,7 @@ jobs:
           echo "CI_LOG_DIR=$RUNNER_TEMP/godot-ci-logs" >> "$GITHUB_ENV"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -52,7 +52,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run core rule tests
+      - name: Run rule test suite
         run: |
           set -euo pipefail
           failed=0
@@ -60,6 +60,10 @@ jobs:
             test_rule_settlement
             test_confirmed_rules
             test_bill
+            test_hand_payment
+            test_card_transfer
+            test_identity_victory
+            test_free_for_all_victory
           )
           for test in "${tests[@]}"; do
             echo "::group::$test"
@@ -78,7 +82,7 @@ jobs:
 
       - name: Upload Godot logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: godot-ci-logs
           path: ${{ runner.temp }}/godot-ci-logs/*.log

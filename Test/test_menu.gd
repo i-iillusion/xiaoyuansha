@@ -33,20 +33,20 @@ func _run() -> void:
 	# ---- 用例 3：测试模式页面（7 种模式 + 玩法切换按钮） ----
 	_click("测试模式")
 	b = _buttons()
-	var expected = ["1V1", "3人混战", "2V2", "5人标准", "6人奸雄", "7人标准", "8人奸雄"]
+	var expected = ["2人乱斗", "3人乱斗", "2V2", "5人标准", "6人奸雄", "7人标准", "8人奸雄"]
 	var all_ok = true
 	for e in expected:
 		if not b.has(e):
 			all_ok = false
 			print("  缺少: ", e)
 	_check(all_ok, "测试模式 7 种模式齐全: " + str(b))
-	_check(_find_partial("模式：自选武将") != null, "玩法切换按钮显示自选武将")
+	_check(_find_partial("选将：自选武将") != null, "选将切换按钮显示自选武将")
 	_check(MainMenu.random_mode == false, "random_mode = false")
 
 	# ---- 用例 4：未实现模式点击 → 提示 ----
 	var tip = menu.get_node("Tip")
 	_check(not tip.visible, "初始提示隐藏")
-	_click("3人混战")
+	_click("2V2")
 	_check(tip.visible, "点击未实现模式显示提示")
 	_check(tip.text.contains("尚未实现"), "提示文案: " + tip.text)
 
@@ -56,12 +56,13 @@ func _run() -> void:
 	_click("← 返回")
 	_check(_buttons().has("开始游戏"), "开始游戏页返回主页面")
 
-	# ---- 用例 6：自选武将模式：5人标准 / 1V1 → 武将选择页 ----
+	# ---- 用例 6：自选武将模式：5人标准 / 2人乱斗 → 武将选择页 ----
 	_click("开始游戏")
 	_click("测试模式")
 	var game_scene = load("res://Scenes/Game.tscn")
 	_check(game_scene != null, "Game.tscn 可加载（5人标准入口）")
 	_click("5人标准")
+	_check(GameManager.selected_mode == GameManager.MODE_CLASSIC_IDENTITY, "5人标准选择经典身份模式")
 	b = _buttons()
 	_check(_page_has("稻草人") and _page_has("凯文·罗本"), "5人标准进入武将选择页: " + str(b))
 	_check(_page_has("杰基·斯特朗") and _page_has("麦克斯·欧尼斯特"), "武将选择页含全部已实现武将")
@@ -70,16 +71,17 @@ func _run() -> void:
 	_check(_find_partial("稻草人") != null and _find_partial("无技能") != null, "稻草人卡片显示无技能")
 	# 返回链：武将页 → 测试模式
 	_click("← 返回")
-	_check(_buttons().has("1V1"), "武将页返回测试模式")
-	# 1V1 同样进武将选择页
-	_click("1V1")
-	_check(_page_has("稻草人") and _page_has("凯文·罗本"), "1V1 进入武将选择页")
+	_check(_buttons().has("2人乱斗"), "武将页返回测试模式")
+	# 2 人乱斗同样进武将选择页
+	_click("2人乱斗")
+	_check(_page_has("稻草人") and _page_has("凯文·罗本"), "2人乱斗进入武将选择页")
+	_check(GameManager.selected_players == 2 and GameManager.selected_mode == GameManager.MODE_FREE_FOR_ALL, "2人乱斗选择人数与玩法")
 	_check(GameManager.random_identity == false and GameManager.random_general == false, "自选武将模式 statics 为 false")
 
 	# ---- 用例 7：切到随机玩法 → 5人标准直接进入游戏 ----
 	_click("← 返回")  # 武将页 → 测试模式
-	_click_partial("模式")  # 切换玩法
-	_check(_find_partial("模式：随机玩法") != null, "切换到随机玩法")
+	_click_partial("选将")  # 切换选将方式
+	_check(_find_partial("选将：随机武将") != null, "切换到随机武将")
 	_check(MainMenu.random_mode, "random_mode = true")
 	_click("5人标准")
 	await create_timer(0.3).timeout
@@ -88,6 +90,7 @@ func _run() -> void:
 	_check(current_scene != null and current_scene.name == "Game", "随机模式 5人标准直接进入游戏: " + (current_scene.name if current_scene else "null"))
 	_check(current_scene.players.size() == 5, "游戏 5 名玩家: " + str(current_scene.players.size() if current_scene else 0))
 	_check(GameManager.random_identity and GameManager.random_general, "随机玩法 statics 置 true")
+	_check(GameManager.selected_mode == GameManager.MODE_CLASSIC_IDENTITY, "随机5人标准仍为经典身份模式")
 
 	print("RESULT: %d asserts, %d failures" % [asserts, failures])
 	quit(1 if failures > 0 else 0)

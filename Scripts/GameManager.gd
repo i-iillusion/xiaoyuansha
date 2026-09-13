@@ -22,10 +22,15 @@ signal game_over(winner_identity: String)
 @export var player_count: int = 5
 @export var auto_start: bool = true
 
+const MODE_CLASSIC_IDENTITY := "classic_identity"
+const MODE_FREE_FOR_ALL := "free_for_all"
+
 # 主菜单选中的武将（玩家0 使用），静态变量跨场景保留；直接加载游戏（测试）时默认凯文·罗本
 static var selected_general: String = "凯文·罗本"
-# 主菜单选中的对局人数（1V1=2 / 5人标准=5），静态跨场景保留；直接加载默认 5 人
+# 主菜单选中的对局人数（2/3 人乱斗、5 人标准），静态跨场景保留；直接加载默认 5 人
 static var selected_players: int = 5
+static var selected_mode: String = MODE_CLASSIC_IDENTITY
+var game_mode: String = MODE_CLASSIC_IDENTITY
 # 随机身份：true = 身份牌洗牌随机分配（主公仍开局公开）；false = 固定按座位（主公/忠臣/反贼/反贼/内奸）
 static var random_identity: bool = true
 # 随机武将：true = 所有玩家（含玩家0）从已实现武将里随机选；false = 玩家0用主菜单选择、其余稻草人
@@ -82,6 +87,8 @@ var _selector_scene = preload("res://Scenes/CardSelector.tscn")
 # 目标选择模式状态
 var _is_targeting: bool = false
 var _targeting_card_sub: CardData.CardSubType = -1
+# 从「已确定的牌」点击进入出牌流程时，保留待支付的原资源；只在使用真正成立时移除。
+var _pending_determined_card: CardBase = null
 
 # 铁索连环选择模式（1-2 名目标）
 var _is_iron_chain_targeting: bool = false
@@ -314,8 +321,9 @@ const RPS_DRAW = 0
 const RPS_LOSE = -1
 
 func _ready():
-	# 主菜单选择的对局人数（1V1=2 / 5人标准=5）
+	# 主菜单选择的玩法与人数（当前入口：2/3 人乱斗、5 人标准身份局）。
 	player_count = GameManager.selected_players
+	game_mode = GameManager.selected_mode
 	deck = Deck.new()
 	equipment_pool = EquipmentPool.new()
 
@@ -621,16 +629,18 @@ func _update_player_panel(panel: Control, player: Player):
 # ============================
 
 func start_game():
-	# 身份分配：标准局（5人：主公/忠臣/反贼/反贼/内奸）；1V1 无身份
+	_clear_pending_determined_card()
+	# 身份分配：当前经典身份入口为五人标准；乱斗 2～10 人始终无身份。
 	# random_identity = true 时身份牌洗牌随机分配（主公仍开局公开）
 	var identities: Array = []
-	if player_count >= 3:
+	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
 		var full_identities = ["主公", "忠臣", "反贼", "反贼", "内奸"]
-		identities = full_identities.slice(0, player_count)
+		identities = full_identities.duplicate()
 		if random_identity:
 			identities.shuffle()
 	else:
-		identities = ["", ""]
+		identities.resize(player_count)
+		identities.fill("")
 
 	for i in player_count:
 		var p = Player.new()
@@ -661,7 +671,7 @@ func start_game():
 	for i in range(player_count - 1):
 		var seat = i + 1
 		if seat < players.size():
-			# 1V1：对方在正上方（玩家对面）；多人按四周布局
+			# 2 人乱斗：对方在正上方（玩家对面）；多人按四周布局
 			var pos_node = _pos_top if player_count == 2 else _player_positions[i]
 			var panel = _create_player_info_panel(pos_node, players[seat])
 			_update_player_panel(panel, players[seat])
@@ -669,7 +679,7 @@ func start_game():
 
 	_sync_all_ui()
 	_update_debug("—— 校园杀 %d 人局开始 ——" % player_count)
-	if player_count >= 3:
+	if game_mode == MODE_CLASSIC_IDENTITY:
 		var seat_desc = "座位："
 		for i in player_count:
 			seat_desc += "%d→%s | " % [i, identities[i]]
@@ -1087,6 +1097,7 @@ func _exit_targeting_mode():
 func _on_cancel_target_pressed():
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
 	_yes_ah_active = false
+	_clear_pending_determined_card()
 	if _is_zhuangbi_targeting:
 		_exit_zhuangbi_mode()
 		_update_debug("取消【装逼】")
@@ -1226,6 +1237,7 @@ func _on_confirm_multi_target():
 	var sub = _targeting_card_sub
 	_exit_multi_target_mode()
 	await execute_multi_strike(targets, sub)
+	_clear_pending_determined_card()
 
 # ============================
 #  【贤者的加护】激活拼点（入口：详情弹窗装备区点击）
@@ -1303,6 +1315,25 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 #  出牌逻辑
 # ============================
 
+func _has_play_card(p: Player, sub: CardData.CardSubType) -> bool:
+	if _pending_determined_card != null:
+		return _pending_determined_card.sub_type == sub and p.determined_cards.has(_pending_determined_card)
+	return HandPayment.find_index(p.hand, sub) >= 0
+
+# 统一主动出牌支付：普通声明仍从 hand 取同类型/任意牌；点击已确定牌时只接受并移除该原对象。
+func _take_play_card(p: Player, sub: CardData.CardSubType) -> CardBase:
+	if _pending_determined_card == null:
+		return HandPayment.take(p.hand, sub)
+	var selected := _pending_determined_card
+	if selected.sub_type != sub or not p.determined_cards.has(selected):
+		return null
+	p.determined_cards.erase(selected)
+	_pending_determined_card = null
+	return selected
+
+func _clear_pending_determined_card():
+	_pending_determined_card = null
+
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	var p = players[turn_manager.current_player_idx]
 	# 选完目标开始执行：玩家0出牌阶段重置每步倒计时
@@ -1311,7 +1342,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
-			card = HandPayment.take(p.hand, sub)
+			card = _take_play_card(p, sub)
 			if card == null:
 				_update_debug("没有可用的【%s】或任意牌，未使用杀" % CardData.get_type_name(sub))
 				return
@@ -1463,7 +1494,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
 	var p = players[turn_manager.current_player_idx]
-	var card = HandPayment.take(p.hand, sub)
+	var card = _take_play_card(p, sub)
 	if card == null:
 		_update_debug("没有可用的【%s】或任意牌，未使用多目标杀" % CardData.get_type_name(sub))
 		return
@@ -1543,15 +1574,18 @@ func play_card(sub: CardData.CardSubType):
 	if not turn_manager.can_play_card():
 		_update_debug("当前不能出牌")
 		return
-	if p.hand_size() <= 0:
+	if p.hand_size() <= 0 and _pending_determined_card == null:
 		_update_debug("没有手牌了")
+		return
+	if _pending_determined_card != null and not _has_play_card(p, sub):
+		_update_debug("所选的【%s】已不在已确定牌区，未使用其他手牌代替" % CardData.get_type_name(sub))
 		return
 	# 每张牌从干净状态开始（【是~啊~】激活标记：选锦囊时设置，消耗锦囊时消费；取消/中止路径由下次出牌重置）
 	_yes_ah_active = false
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
-			if HandPayment.find_index(p.hand, sub) < 0:
+			if not _has_play_card(p, sub):
 				_update_debug("没有可用的【%s】或任意牌" % CardData.get_type_name(sub))
 				return
 			var strike_limit = p.strike_limit()
@@ -1585,7 +1619,7 @@ func play_card(sub: CardData.CardSubType):
 			if p.get_weapon() != CardData.CardSubType.RAGING_AXE and p.wine_stacks > 0:
 				_update_debug("【酒】的效果尚未消耗，不能连续使用")
 				return
-			var used_wine = HandPayment.take(p.hand, sub)
+			var used_wine = _take_play_card(p, sub)
 			if used_wine == null:
 				_update_debug("没有可用的【酒】或任意牌")
 				return
@@ -1599,7 +1633,7 @@ func play_card(sub: CardData.CardSubType):
 			if p.hp >= p.max_hp:
 				_update_debug("体力已满")
 				return
-			var used_peach = HandPayment.take(p.hand, sub)
+			var used_peach = _take_play_card(p, sub)
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
@@ -1750,7 +1784,10 @@ func play_card(sub: CardData.CardSubType):
 					if not ok:
 						_update_debug("取消替换武器，手牌未消耗")
 						return
-				p.hand.pop_back()
+				var equipped_card = _take_play_card(p, sub)
+				if equipped_card == null:
+					_update_debug("所选装备已不在牌区，取消装备")
+					return
 				if old_is_hidden:
 					p.hidden_equip_slot = ""  # 暗置武器被替换（占位无实际牌可弃）
 				else:
@@ -1765,7 +1802,10 @@ func play_card(sub: CardData.CardSubType):
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
 				return
-			p.hand.pop_back()
+			var equipped_card = _take_play_card(p, sub)
+			if equipped_card == null:
+				_update_debug("所选装备已不在牌区，取消装备")
+				return
 			equipment_pool.claim(sub)
 			p.equipment["weapon"] = sub
 			p.hand_limit_bonus = 0  # 新武器从 0 开始（破风枪加成归属当前武器）
@@ -1796,7 +1836,10 @@ func play_card(sub: CardData.CardSubType):
 					if not ok:
 						_update_debug("取消替换防具，手牌未消耗")
 						return
-				p.hand.pop_back()
+				var equipped_card = _take_play_card(p, sub)
+				if equipped_card == null:
+					_update_debug("所选装备已不在牌区，取消装备")
+					return
 				if old_is_hidden:
 					p.hidden_equip_slot = ""  # 暗置防具被替换（占位无实际牌可弃）
 				else:
@@ -1816,7 +1859,10 @@ func play_card(sub: CardData.CardSubType):
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
 				return
-			p.hand.pop_back()
+			var equipped_card = _take_play_card(p, sub)
+			if equipped_card == null:
+				_update_debug("所选装备已不在牌区，取消装备")
+				return
 			equipment_pool.claim(sub)
 			p.equipment["armor"] = sub
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
@@ -1830,7 +1876,10 @@ func play_card(sub: CardData.CardSubType):
 				return
 			var target_slot: String = ""
 			if p.has_free_mount_slot():
-				p.hand.pop_back()
+				var equipped_card = _take_play_card(p, sub)
+				if equipped_card == null:
+					_update_debug("所选装备已不在牌区，取消装备")
+					return
 				p.equip_mount(sub)
 				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -1850,7 +1899,10 @@ func play_card(sub: CardData.CardSubType):
 				var slots = p.get_mount_slots()
 				target_slot = slots[randi() % slots.size()]
 
-			p.hand.pop_back()
+			var equipped_card = _take_play_card(p, sub)
+			if equipped_card == null:
+				_update_debug("所选装备已不在牌区，取消装备")
+				return
 			var old_sub = p.equipment[target_slot]
 			p.replace_mount(target_slot, sub)
 			if target_slot == p.hidden_equip_slot:
@@ -1864,8 +1916,11 @@ func play_card(sub: CardData.CardSubType):
 
 		_:
 			_update_debug("%s 使用了【%s】（效果待实现）" % [p.player_name, CardData.get_type_name(sub)])
-			p.hand.pop_back()
-			deck.discard(CardBase.create(sub))
+			var used_card = _take_play_card(p, sub)
+			if used_card == null:
+				_update_debug("所选牌已不在牌区，取消使用")
+				return
+			deck.discard(used_card)
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2959,6 +3014,7 @@ func _on_iron_chain_target_click(target: Player):
 
 	# 单目标（否）或已选满两名 → 执行
 	await _execute_iron_chain(_iron_chain_targets)
+	_clear_pending_determined_card()
 	_is_iron_chain_targeting = false
 	_iron_chain_targets.clear()
 	_cancel_target_btn.visible = false
@@ -4213,6 +4269,9 @@ func _do_ping_dian(challenger: Player, opponent: Player) -> int:
 # 使用锦囊牌时询问是否发动【是~啊~】：
 # has_hand = 当前是否有手牌可消耗；返回 "skill"（发动，流失体力不消耗手牌）/ "card"（不发动，照常消耗）/ "cancel"（取消，视为没有打出）
 func _ask_yes_ah(p: Player, card_name: String, has_hand: bool) -> String:
+	# 明确点击了已确定牌时必须使用该原牌，不能改以技能虚拟使用并把原牌留在手中。
+	if _pending_determined_card != null:
+		return "card"
 	if p.general_name != "安普提·斯丢皮得" or not p.is_alive():
 		return "card" if has_hand else "cancel"
 	if _yes_ah_override.is_valid():
@@ -4248,7 +4307,7 @@ func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 		if not await _pay_yes_ah_cost(p):
 			return null
 		return CardBase.create(sub)
-	var card = HandPayment.take(p.hand, sub)
+	var card = _take_play_card(p, sub)
 	if card == null:
 		_update_debug("没有可用的【%s】或任意牌，未支付费用" % CardData.get_type_name(sub))
 	return card
@@ -6513,8 +6572,8 @@ func _handle_death(victim: Player, killer: Player):
 	_update_debug("%s 弃置了所有牌（手牌/装备/判定牌）" % victim.player_name)
 	_sync_all_ui()
 
-	# ---- 阶段4 击杀奖惩（胜负未分时才执行；体力流失致死等无击杀者不触发）----
-	if not _game_over and killer != null and killer.is_alive():
+	# ---- 阶段4 击杀奖惩（仅身份局；乱斗明确没有击杀奖励）----
+	if game_mode == MODE_CLASSIC_IDENTITY and not _game_over and killer != null and killer.is_alive():
 		if victim.identity == "反贼":
 			_draw_blank_cards(killer, 3)
 			_update_debug("奖惩：%s 击杀【反贼】%s，摸 3 张牌！（%d 张）" % [killer.player_name, victim.player_name, killer.hand_size()])
@@ -6549,12 +6608,17 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 		p.determined_cards.clear()
 		p.hidden_equip_slot = ""
 
-# 五人标准身份局判胜；保留旧调用签名，但击杀者只影响奖惩，不决定胜方。
-# 1V1、奸雄、特殊多人死亡时序仍由对应 QA 单独确认。
+# 按显式模式分派判胜；击杀者只影响身份局奖惩，不决定胜方。
+# 经典身份当前只支持五人标准；乱斗支持 2～10 人。奸雄与预大习特殊提交点继续隔离。
 func _check_win_condition(_victim: Player, _killer: Player):
-	if _game_over or player_count != 5 or not _dying_contexts.is_empty():
+	# 任一统一濒死/死亡前上下文尚未提交时，身份局与乱斗都不得提前终局。
+	if _game_over or not _dying_contexts.is_empty():
 		return
-	var outcome = IdentityVictory.evaluate(players)
+	var outcome: Dictionary = {}
+	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
+		outcome = IdentityVictory.evaluate(players)
+	elif game_mode == MODE_FREE_FOR_ALL:
+		outcome = FreeForAllVictory.evaluate(players)
 	if not outcome.is_empty():
 		_finish_game(outcome["winner"], outcome["reason"])
 
@@ -6567,7 +6631,7 @@ func _finish_game(winner_identity: String, reason: String):
 	if winner_identity == "平局":
 		_update_debug("游戏结束！平局（%s）" % reason)
 	else:
-		_update_debug("游戏结束！【%s】阵营获胜！（%s）" % [winner_identity, reason])
+		_update_debug("游戏结束！【%s】获胜！（%s）" % [winner_identity, reason])
 	game_over.emit(winner_identity)
 
 # 游戏结束弹窗（锚点居中）：显示胜方 + 返回主菜单
@@ -6615,6 +6679,7 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_game_over = false
+	_clear_pending_determined_card()
 	_dead_processed.clear()
 	_dying_contexts.clear()
 	for p in players:
@@ -6864,6 +6929,7 @@ func end_play_phase():
 		_lanzhonghou_pending.clear()
 		_is_meiyong_targeting = false
 		_yes_ah_active = false  # 【是~啊~】：结束出牌时清理未消费的激活标记
+		_clear_pending_determined_card()
 		turn_manager.advance_phase()
 
 # ---- UI 回调 ----
@@ -6872,7 +6938,7 @@ func _on_play_btn_pressed():
 	if turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
 	var p = players[turn_manager.current_player_idx]
-	if p.hand_size() <= 0:
+	if p.hand_size() <= 0 and p.determined_cards.is_empty():
 		_update_debug("没有手牌了")
 		return
 
@@ -6887,6 +6953,7 @@ func _on_end_play_pressed():
 	end_play_phase()
 
 func _on_selector_confirmed(sub: CardData.CardSubType):
+	_clear_pending_determined_card()
 	_reveal_ask_pending = true
 	await play_card(sub)
 	# 【苕】任意玩家行动后询问是否明置
@@ -6896,7 +6963,19 @@ func _on_selector_cancelled():
 	_update_debug("取消出牌")
 
 func _on_determined_card_clicked(card: CardBase):
-	_update_debug("【%s】已确定在手，装备/判定系统开发中，暂不能使用" % card.card_name)
+	if turn_manager.current_phase != TurnManager.Phase.PLAY:
+		return
+	var p = players[turn_manager.current_player_idx]
+	if p.seat_index != 0 or not p.determined_cards.has(card):
+		_update_debug("所选的已确定牌已不在当前玩家牌区")
+		return
+	_pending_determined_card = card
+	_reveal_ask_pending = true
+	await play_card(card.sub_type)
+	# 目标选择期间继续保留原对象；即时牌、非法牌和完成结算均在这里收口残留状态。
+	if not _is_targeting and not _is_multi_targeting and not _is_iron_chain_targeting:
+		_clear_pending_determined_card()
+	await _maybe_ask_reveal()
 
 # ============================
 #  玩家面板点击 → 目标选择 or 详情
@@ -7032,6 +7111,7 @@ func _on_target_click(target: Player):
 	_cancel_target_btn.visible = false
 	_reveal_ask_pending = true
 	await execute_card_on_target(target, _targeting_card_sub)
+	_clear_pending_determined_card()
 	_targeting_card_sub = -1
 	# 【苕】任意玩家行动后询问是否明置
 	await _maybe_ask_reveal()
@@ -7216,7 +7296,7 @@ func _sync_all_ui():
 
 	var my_turn = (turn_manager.current_player_idx == 0)
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
-		_play_btn.disabled = (players[0].hand_size() <= 0 or _is_kneeling(players[0]))
+		_play_btn.disabled = ((players[0].hand_size() <= 0 and players[0].determined_cards.is_empty()) or _is_kneeling(players[0]))
 	else:
 		_play_btn.disabled = true
 

@@ -35,6 +35,7 @@ func _run() -> void:
 	GameManager.random_identity = false
 	GameManager.random_general = false
 	GameManager.selected_players = 5
+	GameManager.selected_mode = GameManager.MODE_CLASSIC_IDENTITY
 	GameManager.selected_general = "稻草人"
 	var game_scene = load("res://Scenes/Game.tscn")
 	game = game_scene.instantiate()
@@ -187,8 +188,9 @@ func _run() -> void:
 	game.queue_free()
 	await process_frame
 
-	# ---- 用例11：1V1 无身份 → 阵亡不判定胜负/不翻开身份 ----
+	# ---- 用例11：2 人无身份乱斗 → 唯一生还者获胜/无身份可翻 ----
 	GameManager.selected_players = 2
+	GameManager.selected_mode = GameManager.MODE_FREE_FOR_ALL
 	GameManager.selected_general = "稻草人"
 	var game2_scene = load("res://Scenes/Game.tscn")
 	var game2 = game2_scene.instantiate()
@@ -201,17 +203,20 @@ func _run() -> void:
 	game2._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game2.start_game()
 	game2._stop_countdown()
+	var game2_winners: Array[String] = []
+	game2.game_over.connect(func(winner: String): game2_winners.append(winner))
 	for i in range(6):
 		await process_frame
 	var q0 = game2.players[0]
 	q0.hp = 1
 	await game2._deal_damage(game2.players[1], q0, 1, EffectChain.DamageType.PHYSICAL)
-	_check(q0.is_dead(), "1V1 玩家0 阵亡")
-	_check(not game2._game_over, "1V1 无身份不判定胜负")
-	_check(not q0.identity_revealed, "1V1 无身份不翻开")
+	_check(q0.is_dead(), "2 人乱斗玩家0 阵亡")
+	_check(game2._game_over and game2_winners == ["玩家 2"], "2 人乱斗唯一生还者获胜")
+	_check(not q0.identity_revealed, "2 人乱斗无身份不翻开")
 	game2.queue_free()
 	await process_frame
 	GameManager.selected_players = 5
+	GameManager.selected_mode = GameManager.MODE_CLASSIC_IDENTITY
 
 	# ---- 用例12：阵亡效果·【装傻】濒死拼点全胜 → 回 1 血，不触发阵亡管线 ----
 	GameManager.selected_general = "安普提·斯丢皮得"
