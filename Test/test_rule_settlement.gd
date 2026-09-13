@@ -735,5 +735,7 @@ func _run():
 	await hand_selection_cases.run(self)
 	var skill_selection_cases = load("res://Test/skill_selection_cases.gd").new()
 	await skill_selection_cases.run(self)
+	var chixiong_selection_cases = load("res://Test/chixiong_selection_cases.gd").new()
+	await chixiong_selection_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

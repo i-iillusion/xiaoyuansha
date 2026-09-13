@@ -2735,6 +2735,12 @@ func _ask_chixiong_activate(target_name: String) -> bool:
 # 结算雌雄双股剑：目标选择「弃置一张手牌」或「令使用者摸一张牌」
 # 目标没有手牌时只能选择令使用者摸一张牌（原版规则）
 func _resolve_chixiong(p: Player, target: Player):
+	if _game_over or p == null or target == null or not p.is_alive() or not target.is_alive():
+		return
+	var phase = turn_manager.current_phase
+	var actor = turn_manager.current_player_idx
+	var valid = func():
+		return not _game_over and p.is_alive() and target.is_alive() and turn_manager.current_phase == phase and turn_manager.current_player_idx == actor
 	_update_debug("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
 
 	if target.hand_size() <= 0:
@@ -2752,13 +2758,18 @@ func _resolve_chixiong(p: Player, target: Player):
 		# AI 目标：50% 概率弃一张手牌
 		discard = randi() % 2 == 0
 
+	if not valid.call():
+		return
 	if discard:
 		# 【烈火盾】：可流失 1 点体力代替弃置这张手牌
 		if await _maybe_liehuo_save(target):
 			_update_debug("%s 的【烈火盾】保住了手牌！" % target.player_name)
 		else:
-			_discard_hand_cards(target, 1)
-			_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
+			# 已选择弃牌分支；选牌窗口无取消选项，快照失效则重新选择。
+			while valid.call() and target.hand_size() > 0:
+				if await _select_hand_discard(target, 1, true, valid):
+					_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
+					break
 	else:
 		_draw_blank_cards(p, 1)
 		_update_debug("%s 选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
