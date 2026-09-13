@@ -201,10 +201,25 @@ func remove_from_hand(card: CardBase) -> bool:
 		hand.remove_at(idx)
 		hand_updated.emit()
 		return true
+	if card != null and determined_cards.has(card):
+		determined_cards.erase(card)
+		hand_updated.emit()
+		return true
 	return false
 
 func hand_size() -> int:
-	return hand.size()
+	return hand.size() + determined_cards.size()
+
+# 只做原子取牌，不决定用途/弃牌去向；null 是真实任意牌占位，不等于取牌失败。
+# 空结果表示数量不足或无效请求。沿用自动从 hand 尾部取牌，再取 determined 尾部。
+# 不逐张发 hand_updated，调用者完成整段效果后统一同步，避免中途错误触发觉醒。
+func take_hand_cards(count: int) -> Array[CardBase]:
+	var taken: Array[CardBase] = []
+	if count <= 0 or count > hand_size():
+		return taken
+	for i in count:
+		taken.append(hand.pop_back() if not hand.is_empty() else determined_cards.pop_back())
+	return taken
 
 # ---- 牌区域查询（过河拆桥/顺手牵羊用）----
 

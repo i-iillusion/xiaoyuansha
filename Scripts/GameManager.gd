@@ -941,7 +941,7 @@ func _do_discard(pid: int):
 			# 【烈火盾】：可流失 1 点体力代替弃置这张手牌（弃牌阶段）
 			if await _maybe_liehuo_save(p):
 				continue
-			p.hand.pop_back()
+			_discard_hand_cards(p, 1)
 		_sync_all_ui()
 	_refresh_status_line()
 	turn_manager.advance_phase()
@@ -1294,7 +1294,7 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	if target == wearer or not target.is_alive():
 		return false
-	var c = wearer.hand.pop_back()
+	var c = wearer.take_hand_cards(1)[0]
 	if c != null:
 		deck.discard(c)
 	_update_debug("%s 弃置一张手牌，与 %s 进行拼点（【贤者的加护】）" % [wearer.player_name, target.player_name])
@@ -2273,9 +2273,9 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 		_update_debug("%s 的【烈火盾】保住了这张手牌！" % target.player_name)
 		return
 	# 等待失牌替代期间牌区可能改变，不能从已清空的牌区生成一张假牌。
-	if target.is_dead() or target.hand.is_empty():
+	if target.is_dead() or target.hand_size() == 0:
 		return
-	var taken: CardBase = target.hand.pop_back()
+	var taken: CardBase = target.take_hand_cards(1)[0]
 	if is_snatch:
 		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
 		attacker.hand.append(taken)
@@ -2750,7 +2750,7 @@ func _resolve_chixiong(p: Player, target: Player):
 		if await _maybe_liehuo_save(target):
 			_update_debug("%s 的【烈火盾】保住了手牌！" % target.player_name)
 		else:
-			target.hand.pop_back()
+			_discard_hand_cards(target, 1)
 			_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
 	else:
 		_draw_blank_cards(p, 1)
@@ -3806,9 +3806,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		if record.from_strike and weapon_enabled:
 			if weapon == CardData.CardSubType.ICE_SWORD and actual.hand_size() >= 2:
 				var use_ice = subject.seat_index != 0 or await _ask_ice_sword(actual.player_name)
-				if use_ice:
-					for i in range(2):
-						deck.discard(actual.hand.pop_back())
+				if use_ice and actual.is_alive() and _discard_hand_cards(actual, 2):
 					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s 两张手牌" % [subject.player_name, actual.player_name])
 					_sync_all_ui()
 					return true
@@ -4715,7 +4713,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> bool:
 			return false
 	# 发动：来源需弃一张手牌
 	if source.hand_size() > 0:
-		source.hand.pop_back()
+		_discard_hand_cards(source, 1)
 		_update_debug("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
 		_sync_all_ui()
 		return false
@@ -4835,10 +4833,10 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	if p.hand_size() <= 0:
 		_update_debug("你没有手牌，【装逼】未发动")
 		return
-	p.hand.pop_back()
+	_discard_hand_cards(p, 1)
 	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
 	for t in valid:
-		t.hand.pop_back()
+		_discard_hand_cards(t, 1)
 	_update_debug("各目标弃置一张手牌，依次与 %s 拼点！" % p.player_name)
 	_sync_all_ui()
 
@@ -4973,8 +4971,8 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if p.hand_size() <= 0:
 		_update_debug("你没有手牌，【校园霸主】未发动")
 		return
-	p.hand.pop_back()
-	target.hand.pop_back()
+	_discard_hand_cards(p, 1)
+	_discard_hand_cards(target, 1)
 	_update_debug("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
 
@@ -5183,10 +5181,10 @@ func _execute_gay(p: Player, target: Player) -> void:
 		_update_debug("取消【Gay】")
 		_sync_all_ui()
 		return
+	# 弹窗返回后重新验证，数量不足不得部分支付或获得效果。
+	if not p.is_alive() or not target.is_alive() or not _discard_hand_cards(p, x):
+		return
 	_gay_used = true
-	# 弃 X 张手牌（从手牌尾部弃）
-	for i in x:
-		p.hand.pop_back()
 	var p_before = p.hp
 	var t_before = target.hp
 	p.heal(x)
@@ -5324,9 +5322,10 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 	if x <= 0:
 		_update_debug("没有选择任何区域，取消【烂忠厚】")
 		return
-	# 弃 X 张牌
-	for i in x:
-		p.hand.pop_back()
+	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
+	if not p.is_alive() or not _discard_hand_cards(p, x):
+		_lanzhonghou_pending.clear()
+		return
 	# 统一执行交换
 	var swapped = 0
 	for entry in _lanzhonghou_pending:
@@ -6182,9 +6181,8 @@ func _try_soul_blade(source: Player, victim: Player):
 	if source.seat_index == 0:
 		if not await _ask_soul_blade_discard(victim.player_name, need):
 			return
-	# 弃 need 张手牌（手牌即资源，直接移除）
-	for i in need:
-		source.hand.pop_back()
+	if not source.is_alive() or not victim.is_alive() or not _discard_hand_cards(source, need):
+		return
 	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
 	_sync_all_ui()
 	_flip_character(victim)
@@ -6585,12 +6583,14 @@ func _handle_death(victim: Player, killer: Player):
 	_check_win_condition(victim, killer)
 
 # 弃置一名角色的所有牌（死亡弃置 / 主公杀忠臣惩罚共用）
-# include_judgment = true 时连判定区/已确定牌一起弃（死亡用）；false 只弃手牌+装备（主公惩罚用）
+# include_judgment 只控制判定区；已确定牌属于手牌，死亡和主公惩罚均须弃置。
 func _discard_all_cards(p: Player, include_judgment: bool):
-	for c in p.hand:
-		if c != null:
-			deck.discard(c)
-	p.hand.clear()
+	# 全清沿用区内原顺序；普通数量费用仍使用自动尾部选择策略。
+	for cards in [p.hand, p.determined_cards]:
+		for card in cards:
+			if card != null:
+				deck.discard(card)
+		cards.clear()
 	for slot in p.get_equip_slots():
 		var sub = p.equipment[slot]
 		# 暗置占位是假牌，不产生实体牌进弃牌堆
@@ -6602,11 +6602,19 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 			if c != null:
 				deck.discard(c)
 		p.judgment_cards.clear()
-		for c in p.determined_cards:
-			if c != null:
-				deck.discard(c)
-		p.determined_cards.clear()
 		p.hidden_equip_slot = ""
+
+# 弃牌/技能费用的公共记账，不调用烈火盾替代。替代只在允许的调用处询问。
+# 不把任意牌占位制造为某种具体牌；具体牌则以原实例入弃牌堆一次。
+func _discard_hand_cards(p: Player, count: int) -> bool:
+	if p == null or count < 0 or p.hand_size() < count:
+		return false
+	if count == 0:
+		return true
+	for card in p.take_hand_cards(count):
+		if card != null:
+			deck.discard(card)
+	return true
 
 # 按显式模式分派判胜；击杀者只影响身份局奖惩，不决定胜方。
 # 经典身份当前只支持五人标准；乱斗支持 2～10 人。奸雄与预大习特殊提交点继续隔离。

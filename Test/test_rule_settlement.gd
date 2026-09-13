@@ -728,5 +728,7 @@ func _run():
 	await rescue_cases.run(self)
 	var yudaxi_cases = load("res://Test/yudaxi_cases.gd").new()
 	await yudaxi_cases.run(self)
+	var hand_zone_cases = load("res://Test/hand_zone_cases.gd").new()
+	await hand_zone_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
