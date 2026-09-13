@@ -74,6 +74,13 @@ jobs:
               || ! grep -Eq '^RESULT: [1-9][0-9]* asserts, 0 failures[[:space:]]*$' "$log" \
               || grep -Eq '(^|[[:space:]])(SCRIPT ERROR:|ERROR:|Parse Error:|FAIL:)|^RESULT: .* [1-9][0-9]* failures' "$log"; then
               echo "::error::$test failed, timed out, or did not produce a successful RESULT (exit $status)."
+              # 将失败前的进度和运行时错误暴露到公开注释，便于无日志下载权限时定位。
+              # 日志来自仓库的合成测试；不改变超时、退出码或零失败门槛。
+              while IFS= read -r line; do
+                line="${line//'%'/'%25'}"
+                line="${line//$'\r'/'%0D'}"
+                echo "::error title=$test diagnostic::$line"
+              done < <(tail -n 16 "$log")
               failed=1
             fi
             echo '::endgroup::'
