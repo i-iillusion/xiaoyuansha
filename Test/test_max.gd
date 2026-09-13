@@ -17,6 +17,7 @@ func _run() -> void:
 	GameManager.selected_general = "麦克斯·欧尼斯特"
 	var game_scene = load("res://Scenes/Game.tscn")
 	game = game_scene.instantiate()
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	# 手动开局：先设置钩子再 start_game（【没用】在回合开始阶段询问，避免开局卡弹窗）
 	game.auto_start = false
 	root.add_child(game)

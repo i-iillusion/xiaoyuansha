@@ -12,6 +12,7 @@ func _run() -> void:
 	GameManager.random_general = false
 	var game_scene = load("res://Scenes/Game.tscn")
 	var game = game_scene.instantiate()
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	root.add_child(game)
 	for i in range(8):
 		await process_frame

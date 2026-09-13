@@ -1300,9 +1300,10 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	if target == wearer or not target.is_alive():
 		return false
-	var c = wearer.take_hand_cards(1)[0]
-	if c != null:
-		deck.discard(c)
+	var valid = func():
+		return target != wearer and target.is_alive() and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
+	if not await _select_hand_discard(wearer, 1, false, valid):
+		return false
 	_update_debug("%s 弃置一张手牌，与 %s 进行拼点（【贤者的加护】）" % [wearer.player_name, target.player_name])
 	var r = await _do_ping_dian(wearer, target)
 	if r == RPS_WIN:
@@ -5331,7 +5332,9 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		_update_debug("没有选择任何区域，取消【烂忠厚】")
 		return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
-	if not p.is_alive() or not _discard_hand_cards(p, x):
+	var valid = func():
+		return a.is_alive() and b.is_alive() and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
+	if not await _select_hand_discard(p, x, false, valid):
 		_lanzhonghou_pending.clear()
 		return
 	# 统一执行交换
@@ -6189,7 +6192,9 @@ func _try_soul_blade(source: Player, victim: Player):
 	if source.seat_index == 0:
 		if not await _ask_soul_blade_discard(victim.player_name, need):
 			return
-	if not source.is_alive() or not victim.is_alive() or not _discard_hand_cards(source, need):
+	var valid = func():
+		return victim.is_alive() and source.get_weapon() == CardData.CardSubType.SOUL_BLADE and source.soul_blade_activated and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+	if not await _select_hand_discard(source, need, false, valid):
 		return
 	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
 	_sync_all_ui()
