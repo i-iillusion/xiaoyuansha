@@ -1,4 +1,4 @@
-# ST-09 局部：物理手牌支付与即时/延时锦囊去向。只覆盖已接入的入口。
+# ST-09：物理手牌支付、即时/延时锦囊去向，以及「已确定的牌」主动再使用入口。
 extends SceneTree
 
 var checks := 0
@@ -37,8 +37,10 @@ func reset_case():
 	for p in game.players:
 		p.hp = p.max_hp
 		p.hand.clear()
+		p.determined_cards.clear()
 		p.judgment_cards.clear()
 		p.equipment.clear()
+		p.chained = false
 		p.wine_stacks = 0
 		p.mount_minus = 0
 		p.mount_plus = 0
@@ -48,10 +50,15 @@ func reset_case():
 	game._stop_countdown()
 	game.deck._discard.clear()
 	game._yes_ah_active = false
+	game._clear_pending_determined_card()
+	game._is_targeting = false
+	game._is_multi_targeting = false
+	game._is_iron_chain_targeting = false
 	game._dying_peach_override = func(): return false
 	game._nullify_override = func(): return false
 	game._sacrifice_override = func(): return false
 	game._dodge_override = func(): return false
+	game._target_confirm_override = func(): return true
 
 func _run():
 	check_selection()
@@ -149,6 +156,118 @@ func _run():
 	check(game.deck._discard.count(paid_strike) == 1 and owner.hand.is_empty(), "多目标杀只支付并弃置一张原牌")
 	check(game.turn_manager.strike_count_this_turn == 1, "多目标杀只记录一次使用")
 	check(other.hp == before_first - 1 and second.hp == before_second - 1, "两个目标分别结算同一次使用")
+
+	# ST-09：从「已确定的牌」进入同一主动出牌流程，确认前保留、支付时精确移除原对象。
+	reset_case()
+	owner.hp = 2
+	var determined_peach := CardBase.create(CardData.CardSubType.PEACH)
+	determined_peach.source_seat = 3
+	owner.determined_cards.append(determined_peach)
+	owner.hand.append(spare)
+	await game._on_determined_card_clicked(determined_peach)
+	check(owner.hp == 3, "点击已确定桃沿用主动桃合法性与回复流程")
+	check(owner.determined_cards.is_empty() and owner.hand == [spare], "已确定桃只移除所选对象，不误扣普通手牌")
+	check(game.deck._discard.count(determined_peach) == 1, "已确定桃原实例只进入弃牌堆一次")
+
+	reset_case()
+	var response_only := CardBase.create(CardData.CardSubType.DODGE)
+	owner.determined_cards.append(response_only)
+	await game._on_determined_card_clicked(response_only)
+	check(owner.determined_cards == [response_only] and game.deck.discard_count() == 0, "响应牌不能主动使用且仍保留原实例")
+	check(game._pending_determined_card == null, "非法主动使用后清理待支付状态")
+
+	reset_case()
+	var cancelled_strike := CardBase.create(CardData.CardSubType.STRIKE)
+	owner.determined_cards.append(cancelled_strike)
+	await game._on_determined_card_clicked(cancelled_strike)
+	check(game._is_targeting and game._pending_determined_card == cancelled_strike, "已确定杀选目标期间保留原对象")
+	game._on_cancel_target_pressed()
+	check(owner.determined_cards == [cancelled_strike] and game.deck.discard_count() == 0, "取消目标不丢弃已确定杀")
+	check(game._pending_determined_card == null and game.turn_manager.strike_count_this_turn == 0, "取消目标不留下支付状态或次数")
+
+	reset_case()
+	var determined_strike := CardBase.create(CardData.CardSubType.STRIKE)
+	determined_strike.source_seat = 4
+	owner.determined_cards.append(determined_strike)
+	owner.hand.append(peach)
+	var determined_target_hp := other.hp
+	await game._on_determined_card_clicked(determined_strike)
+	await game._on_target_click(other)
+	check(not owner.determined_cards.has(determined_strike) and owner.hand == [peach], "确认目标后只支付所选已确定杀")
+	check(game.deck._discard.count(determined_strike) == 1 and other.hp == determined_target_hp - 1, "已确定杀以原实例结算并只弃置一次")
+	check(game.turn_manager.strike_count_this_turn == 1 and game._pending_determined_card == null, "已确定杀成功后记录次数并清理待支付状态")
+
+	reset_case()
+	var moved_strike := CardBase.create(CardData.CardSubType.STRIKE)
+	owner.determined_cards.append(moved_strike)
+	owner.hand.append(peach)
+	var moved_target_hp := other.hp
+	await game._on_determined_card_clicked(moved_strike)
+	owner.determined_cards.erase(moved_strike)
+	await game._on_target_click(other)
+	check(owner.hand == [peach] and game.deck.discard_count() == 0, "确认前所选牌离手时不改扣其他手牌")
+	check(other.hp == moved_target_hp and game.turn_manager.strike_count_this_turn == 0, "确认前所选牌离手时不产生效果或次数")
+	check(game._pending_determined_card == null, "确认前所选牌离手后清理待支付状态")
+
+	reset_case()
+	var determined_delay := CardBase.create(CardData.CardSubType.INDULGENCE)
+	determined_delay.source_seat = 4
+	owner.determined_cards.append(determined_delay)
+	await game._on_determined_card_clicked(determined_delay)
+	await game._on_target_click(other)
+	check(other.judgment_cards == [determined_delay] and owner.determined_cards.is_empty(), "已确定延时锦囊原实例进入目标判定区")
+	check(determined_delay.source_seat == owner.seat_index and game.deck.discard_count() == 0, "再次放置延时锦囊更新来源且不重复弃置")
+
+	reset_case()
+	var determined_mount := CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	owner.determined_cards.append(determined_mount)
+	owner.hand.append(peach)
+	await game._on_determined_card_clicked(determined_mount)
+	check(owner.determined_cards.is_empty() and owner.hand == [peach], "已确定装备只移除所选对象")
+	check(owner.mount_plus == 1 and game.deck.discard_count() == 0, "已确定坐骑进入现有装备流程且不作为使用牌弃置")
+
+	reset_case()
+	var determined_chain := CardBase.create(CardData.CardSubType.IRON_CHAIN)
+	owner.determined_cards.append(determined_chain)
+	await game._on_determined_card_clicked(determined_chain)
+	check(game._is_iron_chain_targeting and owner.determined_cards == [determined_chain], "已确定铁索在专用目标选择期间保留")
+	game._iron_chain_targets.append(owner)
+	await game._on_iron_chain_target_click(other)
+	check(owner.chained and other.chained, "已确定铁索复用一至两名目标结算")
+	check(game.deck._discard.count(determined_chain) == 1 and game._pending_determined_card == null, "已确定铁索原实例只弃置一次并清理待支付状态")
+
+	reset_case()
+	owner.equipment["weapon"] = CardData.CardSubType.FANGTIAN_HALBERD
+	owner.equipment["mount_1"] = CardData.CardSubType.MOUNT_MINUS
+	owner.mount_minus = 1
+	var determined_multi := CardBase.create(CardData.CardSubType.STRIKE)
+	owner.determined_cards.append(determined_multi)
+	var multi_first_hp := other.hp
+	var multi_second_hp := second.hp
+	await game._on_determined_card_clicked(determined_multi)
+	check(game._is_multi_targeting and owner.determined_cards == [determined_multi], "已确定杀在方天画戟多目标选择期间保留")
+	game._on_multi_target_click(other)
+	game._on_multi_target_click(second)
+	await game._on_confirm_multi_target()
+	check(other.hp == multi_first_hp - 1 and second.hp == multi_second_hp - 1, "已确定杀复用方天画戟多目标结算")
+	check(game.deck._discard.count(determined_multi) == 1 and game.turn_manager.strike_count_this_turn == 1 and game._pending_determined_card == null, "多目标已确定杀只支付一次")
+
+	reset_case()
+	owner.general_name = "安普提·斯丢皮得"
+	owner.hp = owner.max_hp
+	var determined_disarm := CardBase.create(CardData.CardSubType.DISARM)
+	owner.determined_cards.append(determined_disarm)
+	game._yes_ah_override = func(): return "skill"
+	await game._on_determined_card_clicked(determined_disarm)
+	check(owner.hp == owner.max_hp and game.deck._discard.count(determined_disarm) == 1, "明确点击已确定锦囊时不改用是啊虚拟支付")
+	owner.general_name = "稻草人"
+	game._yes_ah_override = Callable()
+
+	reset_case()
+	var only_determined := CardBase.create(CardData.CardSubType.PEACH)
+	owner.determined_cards.append(only_determined)
+	game._sync_all_ui()
+	check(not game._play_btn.disabled, "只有已确定牌时出牌按钮仍可打开选择器")
 
 	game.queue_free()
 	await process_frame

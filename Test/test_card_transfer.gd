@@ -27,6 +27,8 @@ func reset_case():
 	game._stop_countdown()
 	game._liehuo_override = func(): return false
 	game._nullify_override = func(): return false
+	# 本脚本只验证牌区流转；显式拒绝远端已实现的多人/AI 救援，保持死亡前置条件确定。
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._zone_pick_override = func(): return "hand"
 
 func _run():

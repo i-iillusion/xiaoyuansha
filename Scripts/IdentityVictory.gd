@@ -5,7 +5,7 @@ extends RefCounted
 
 const STANDARD_COUNTS = {"主公": 1, "忠臣": 1, "反贼": 2, "内奸": 1}
 
-# 空字典表示继续/等待/不在支持范围；不代填 1V1、奸雄及特殊死亡规则。
+# 空字典表示继续/等待/不在支持范围；不代填乱斗、奸雄及特殊死亡规则。
 static func evaluate(players: Array[Player]) -> Dictionary:
 	if players.size() != 5:
 		return {}
