@@ -310,6 +310,7 @@ const SAO_MOUNT_SUBS: Array[int] = [
 # _soul_blade_discard_override：返回 true = 玩家0弃手牌令目标翻面
 var _soul_blade_activate_override: Callable = Callable()
 var _soul_blade_discard_override: Callable = Callable()
+var _hand_discard_override: Callable = Callable()
 
 # 猜拳拼点（石头/剪刀/布）
 const RPS_ROCK = 0
@@ -941,8 +942,13 @@ func _do_discard(pid: int):
 			# 【烈火盾】：可流失 1 点体力代替弃置这张手牌（弃牌阶段）
 			if await _maybe_liehuo_save(p):
 				continue
-			_discard_hand_cards(p, 1)
+			# 牌区在等待中变化则重新选，不擅自改扣另一张，也不能跳过强制弃牌。
+			while not _game_over and p.is_alive() and p.hand_size() > 0:
+				if await _select_hand_discard(p, 1, true):
+					break
 		_sync_all_ui()
+	if _game_over:
+		return
 	_refresh_status_line()
 	turn_manager.advance_phase()
 
@@ -5182,7 +5188,9 @@ func _execute_gay(p: Player, target: Player) -> void:
 		_sync_all_ui()
 		return
 	# 弹窗返回后重新验证，数量不足不得部分支付或获得效果。
-	if not p.is_alive() or not target.is_alive() or not _discard_hand_cards(p, x):
+	if not p.is_alive() or not target.is_alive():
+		return
+	if not await _select_hand_discard(p, x, false, func(): return target.is_alive()):
 		return
 	_gay_used = true
 	var p_before = p.hp
@@ -6612,6 +6620,43 @@ func _discard_hand_cards(p: Player, count: int) -> bool:
 	if count == 0:
 		return true
 	for card in p.take_hand_cards(count):
+		if card != null:
+			deck.discard(card)
+	return true
+
+func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Callable = Callable()) -> bool:
+	if _game_over or not p.is_alive() or count <= 0 or p.hand_size() < count:
+		return false
+	var snapshot = HandSelection.new(p)
+	var phase = turn_manager.current_phase
+	var actor = turn_manager.current_player_idx
+	var indices: Array[int] = []
+	if _hand_discard_override.is_valid():
+		indices.assign(await _hand_discard_override.call(snapshot, count, mandatory))
+	elif p.seat_index != 0:
+		indices = snapshot.defaults(count)
+	else:
+		var prompt = HandDiscardPrompt.new()
+		$UI.add_child(prompt)
+		prompt.setup(snapshot, count, mandatory)
+		var stop = func(_winner): prompt.submit([])
+		game_over.connect(stop)
+		_start_response_countdown(prompt, p.player_name, prompt.timeout)
+		indices = await prompt.answered
+		game_over.disconnect(stop)
+		# 先清理答复计时；费用结束后由调用者恢复阶段，等待时不重开出牌计时。
+		_halt_countdown()
+		if not prompt.is_queued_for_deletion():
+			prompt.queue_free()
+	_refresh_status_line()
+	if _game_over or not p.is_alive() or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
+		return false
+	if allowed.is_valid() and not allowed.call():
+		return false
+	var paid = snapshot.take(indices, count)
+	if paid.size() != count:
+		return false
+	for card in paid:
 		if card != null:
 			deck.discard(card)
 	return true

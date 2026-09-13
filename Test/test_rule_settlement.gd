@@ -28,6 +28,7 @@ func check(ok: bool, message: String):
 	print(("PASS: " if ok else "FAIL: ") + message)
 
 func reset_players():
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	game.reset_game_over_state()
 	game._sacrifice_override = func(): return false
 	game._dodge_override = func(): return false
@@ -730,5 +731,7 @@ func _run():
 	await yudaxi_cases.run(self)
 	var hand_zone_cases = load("res://Test/hand_zone_cases.gd").new()
 	await hand_zone_cases.run(self)
+	var hand_selection_cases = load("res://Test/hand_selection_cases.gd").new()
+	await hand_selection_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

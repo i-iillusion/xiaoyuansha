@@ -35,6 +35,7 @@ func _run() -> void:
 	GameManager.selected_general = "比尔·盖伊"
 	var game_scene = load("res://Scenes/Game.tscn")
 	game = game_scene.instantiate()
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	game.auto_start = false
 	root.add_child(game)
 	for i in range(6):
