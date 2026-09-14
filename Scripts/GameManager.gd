@@ -4695,7 +4695,7 @@ func _show_awaken_pick() -> int:
 #  【拍胸脯】史蒂芬·彼特先斯：将要受到伤害时，可发动；发动则伤害来源需弃一张手牌才能造成伤害
 # ============================
 
-# 返回 true = 伤害被防止（来源没有手牌可弃）；false = 伤害照常（未发动或来源弃牌）
+# 返回 true = 伤害被防止（来源没有手牌或选择不弃）；false = 伤害照常（未发动或来源弃牌）
 func _try_paixiong_block(victim: Player, source: Player) -> bool:
 	if victim.general_name != "史蒂芬·彼特先斯" or not victim.is_alive():
 		return false
@@ -4714,13 +4714,17 @@ func _try_paixiong_block(victim: Player, source: Player) -> bool:
 		var use = await _show_paixiong_prompt(source.player_name)
 		if not use:
 			return false
-	# 发动：来源需弃一张手牌
+	# 发动：来源可选择弃一张手牌使整次伤害照常结算，也可拒绝并防止整次伤害。
 	if source.hand_size() > 0:
-		_discard_hand_cards(source, 1)
-		_update_debug("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
-		_sync_all_ui()
-		return false
-	_update_debug("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+		var paid = await _select_hand_discard(source, 1, false, func():
+			return victim.is_alive() and source.is_alive())
+		if paid:
+			_update_debug("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），整次伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
+			_sync_all_ui()
+			return false
+		_update_debug("%s 发动【拍胸脯】！%s 选择不弃牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+	else:
+		_update_debug("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
 	_sync_all_ui()
 	return true
 
@@ -4836,10 +4840,15 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	if p.hand_size() <= 0:
 		_update_debug("你没有手牌，【装逼】未发动")
 		return
-	_discard_hand_cards(p, 1)
+	# 发动者确认目标后，自己与全部目标都必须支付；只能选择牌，不能拒绝。
+	if not await _select_hand_discard(p, 1, true, func():
+		return p.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+		return
 	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
 	for t in valid:
-		_discard_hand_cards(t, 1)
+		if not await _select_hand_discard(t, 1, true, func():
+			return p.is_alive() and t.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+			return
 	_update_debug("各目标弃置一张手牌，依次与 %s 拼点！" % p.player_name)
 	_sync_all_ui()
 
@@ -4974,8 +4983,13 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if p.hand_size() <= 0:
 		_update_debug("你没有手牌，【校园霸主】未发动")
 		return
-	_discard_hand_cards(p, 1)
-	_discard_hand_cards(target, 1)
+	# 指定目标并确认发动后，双方都必须支付；只能选择牌，不能拒绝。
+	if not await _select_hand_discard(p, 1, true, func():
+		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+		return
+	if not await _select_hand_discard(target, 1, true, func():
+		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+		return
 	_update_debug("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
 

@@ -28,6 +28,7 @@ func _run():
 	game._nullify_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._zhuangbi_again_override = func(): return false
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	for p in game.players:
 		p.hp = 10
 		p.max_hp = 10
@@ -36,11 +37,11 @@ func _run():
 	owner.general_name = "史蒂芬·彼特先斯"
 	owner.awoken = true # 本测试不触发另一个技能的交互弹窗。
 	for i in range(3):
-		owner.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+		owner.hand.append(null)
 	var opponents: Array[Player] = []
 	for i in range(1, 5):
 		var p = game.players[i]
-		p.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+		p.hand.append(null)
 		opponents.append(p)
 	game._rps_override = func(p):
 		if p == owner: return game.RPS_ROCK
@@ -51,7 +52,7 @@ func _run():
 	check(owner.hand_size() == 2, "本次已支付的费用不退回")
 	for p in opponents:
 		check(p.hp == 10 and p.hand_size() == 0, "目标已付费用但不受到装逼伤害")
-		p.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
+		p.hand.append(null)
 	await game._execute_zhuangbi(opponents)
 	check(owner.hand_size() == 2 and opponents[0].hand_size() == 1, "再次调用不执行、不收取费用")
 	await game._on_zhuangbi_skill_clicked(owner)

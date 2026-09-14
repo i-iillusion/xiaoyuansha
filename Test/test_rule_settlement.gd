@@ -740,5 +740,7 @@ func _run():
 	await chixiong_selection_cases.run(self)
 	var equipment_instance_cases = load("res://Test/equipment_instance_cases.gd").new()
 	await equipment_instance_cases.run(self)
+	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
+	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
