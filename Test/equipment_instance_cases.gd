@@ -65,3 +65,56 @@ func run(host):
 	check(p.equipment.is_empty() and p.equipment_cards.is_empty(), "全牌区清理同步清空装备类型与实例表")
 	check(game.deck._discard.count(weapon) == 1 and game.deck._discard.count(new_armor) == 1 and game.deck._discard.count(mount) == 1, "死亡清理按原实例弃置全部装备")
 	check(game.deck._discard.count(judgment) == 1, "装备实例迁移不影响判定牌原实例清理")
+
+	# B3：偷取、交换和装备技能转移不再按类型重建卡牌。
+	suite.reset_players()
+	game.deck._discard.clear()
+	var attacker = game.players[0]
+	var victim = game.players[1]
+	var stolen = CardBase.create(CardData.CardSubType.QIXING_PAO)
+	stolen.source_seat = 7
+	victim.equip_card_to_slot("armor", stolen)
+	game._equip_pick_override = func(): return "armor"
+	await game._steal_equip(attacker, victim, true, "顺手牵羊")
+	game._equip_pick_override = Callable()
+	check(attacker.determined_cards == [stolen] and victim.get_armor() == -1, "顺手牵羊获得装备原实例")
+	check(stolen.source_seat == 7 and game.deck._discard.is_empty(), "偷取装备保留来源且不误入弃牌堆")
+
+	var first_weapon = CardBase.create(CardData.CardSubType.LIANNU)
+	var second_weapon = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
+	attacker.equip_card_to_slot("weapon", first_weapon)
+	victim.equip_card_to_slot("weapon", second_weapon)
+	check(game._swap_equip_slot(attacker, "weapon", victim, "weapon"), "两件明置装备可以交换")
+	check(attacker.get_equipment_card("weapon") == second_weapon and victim.get_equipment_card("weapon") == first_weapon, "交换后两张装备对象互换而非重建")
+	check(game.deck._discard.is_empty(), "交换不把任一装备送入弃牌堆")
+
+	suite.reset_players()
+	game.deck._discard.clear()
+	var source = game.players[1]
+	var target = game.players[2]
+	var calamity = CardBase.create(CardData.CardSubType.CALAMITY_SWORD)
+	var replaced_weapon = CardBase.create(CardData.CardSubType.GUDING_BLADE)
+	source.equip_card_to_slot("weapon", calamity)
+	target.equip_card_to_slot("weapon", replaced_weapon)
+	game._calamity_target_override = func(): return target
+	await game._try_calamity_transfer(source)
+	game._calamity_target_override = Callable()
+	check(target.get_equipment_card("weapon") == calamity and source.get_weapon() == -1, "灾厄剑向目标转移同一对象")
+	check(game.deck._discard.count(replaced_weapon) == 1, "灾厄剑顶掉的旧武器原实例弃置一次")
+
+	suite.reset_players()
+	game.deck._discard.clear()
+	source = game.players[1]
+	target = game.players[2]
+	var mule = CardBase.create(CardData.CardSubType.MULE_MINUS)
+	mule.source_seat = 8
+	source.equip_mount_card(mule)
+	var replaced_mount = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	target.equip_mount_card(replaced_mount)
+	for i in range(3):
+		target.equip_mount_card(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
+	game._minus_mule_target_override = func(): return target
+	await game._try_mule_transfer(source, CardData.CardSubType.MULE_MINUS, true)
+	game._minus_mule_target_override = Callable()
+	check(target.get_equipment_card("mount_1") == mule and mule.source_seat == 8, "劣马转移与满槽顶替保留原实例")
+	check(game.deck._discard.count(replaced_mount) == 1 and source.get_mount_slots().is_empty(), "满槽目标被顶坐骑原实例弃置一次")

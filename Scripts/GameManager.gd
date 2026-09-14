@@ -2313,9 +2313,11 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		sage_transfer = true
 		sage_tokens_save = target.sage_tokens
 		sage_activated_save = target.sage_activated
-	target.remove_equipment(slot)
+	var equipment_card = target.remove_equipment(slot)
+	if equipment_card == null:
+		return
 	if is_snatch:
-		attacker.determined_cards.append(CardBase.create(sub))
+		attacker.determined_cards.append(equipment_card)
 		if sage_transfer:
 			attacker.sage_tokens = sage_tokens_save
 			attacker.sage_activated = sage_activated_save
@@ -2323,9 +2325,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		else:
 			_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
-		# 装备区目前只存类型，因此沿用死亡弃牌的资源重建约定；暗置占位不造实体。
-		if sub != CardData.CardSubType.HIDDEN_EQUIPMENT:
-			deck.discard(CardBase.create(sub))
+		deck.discard(equipment_card)
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
@@ -5529,10 +5529,17 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		sage_a = {"t": pA.sage_tokens, "a": pA.sage_activated}
 	if subB == CardData.CardSubType.SAGE_PROTECTION:
 		sage_b = {"t": pB.sage_tokens, "a": pB.sage_activated}
-	_detach_equip(pA, slot_a, subA)
-	_detach_equip(pB, slot_b, subB)
-	_apply_equip_to_slot(pA, slot_a, subB)
-	_apply_equip_to_slot(pB, slot_b, subA)
+	var card_a = pA.detach_equipment_quiet(slot_a)
+	var card_b = pB.detach_equipment_quiet(slot_b)
+	if card_a == null or card_b == null:
+		# 前置检查后不应失败；若旧入口状态异常，尽量原位恢复，绝不凭类型造第二张牌。
+		if card_a != null:
+			pA.equip_card_to_slot(slot_a, card_a)
+		if card_b != null:
+			pB.equip_card_to_slot(slot_b, card_b)
+		return false
+	pA.equip_card_to_slot(slot_a, card_b)
+	pB.equip_card_to_slot(slot_b, card_a)
 	if subA == CardData.CardSubType.SAGE_PROTECTION:
 		pB.sage_tokens = sage_a.t
 		pB.sage_activated = sage_a.a
@@ -5541,39 +5548,6 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		pA.sage_activated = sage_b.a
 	_update_debug("交换了 %s 的【%s】与 %s 的【%s】" % [pA.player_name, CardData.get_type_name(subA), pB.player_name, CardData.get_type_name(subB)])
 	return true
-
-# 轻量卸下装备（不触发白银狮子回血）：坐骑计数-1；破风枪加成清零；摄魂刀跟踪清空；贤者标记清空
-func _detach_equip(p: Player, slot: String, sub: CardData.CardSubType):
-	p.equipment.erase(slot)
-	match sub:
-		CardData.CardSubType.MOUNT_PLUS:
-			p.mount_plus = maxi(p.mount_plus - 1, 0)
-		CardData.CardSubType.MOUNT_MINUS:
-			p.mount_minus = maxi(p.mount_minus - 1, 0)
-		CardData.CardSubType.POFENG_SPEAR:
-			p.hand_limit_bonus = 0  # 失去破风枪：手牌上限加成清零
-		CardData.CardSubType.SOUL_BLADE:
-			p.soul_blade_track_target = null
-			p.soul_blade_track_count = 0
-		CardData.CardSubType.SAGE_PROTECTION:
-			p.sage_tokens = 0
-			p.sage_activated = false
-
-# 装备到指定槽位（坐骑计数+1；破风枪加成归零重新累计；摄魂刀重置跟踪）
-func _apply_equip_to_slot(p: Player, slot: String, sub: CardData.CardSubType):
-	p.equipment[slot] = sub
-	match sub:
-		CardData.CardSubType.MOUNT_PLUS:
-			p.mount_plus += 1
-		CardData.CardSubType.MOUNT_MINUS:
-			p.mount_minus += 1
-		CardData.CardSubType.POFENG_SPEAR:
-			p.hand_limit_bonus = 0
-		CardData.CardSubType.SOUL_BLADE:
-			p.soul_blade_track_target = null
-			p.soul_blade_track_count = 0
-
-
 
 # ============================
 #  【没用】麦克斯·欧尼斯特：回合开始阶段摸一张牌，跳过自己的一个阶段，令其他角色立刻获得对应阶段
@@ -5811,11 +5785,13 @@ func _try_calamity_transfer(source: Player):
 		return
 	# 目标武器槽：已有武器则替换（旧武器进弃牌堆）
 	if target.equipment.has("weapon"):
-		var old = target.equipment["weapon"]
-		target.remove_equipment("weapon")
-		deck.discard(CardBase.create(old))
-	source.remove_equipment("weapon")
-	target.equipment["weapon"] = CardData.CardSubType.CALAMITY_SWORD
+		var old_card = target.remove_equipment("weapon")
+		if old_card != null:
+			deck.discard(old_card)
+	var calamity_sword = source.remove_equipment("weapon")
+	if calamity_sword == null:
+		return
+	target.equip_card_to_slot("weapon", calamity_sword)
 	_update_debug("%s 将【灾厄剑】移至 %s 的装备区（%s 造成的伤害-1）" % [source.player_name, target.player_name, target.player_name])
 	_sync_all_ui()
 
@@ -5910,11 +5886,13 @@ func _try_calamity_robe_transfer(victim: Player):
 		return
 	# 目标防具槽：已有防具则替换（旧防具进弃牌堆）
 	if target.equipment.has("armor"):
-		var old = target.equipment["armor"]
-		target.remove_equipment("armor")
-		deck.discard(CardBase.create(old))
-	victim.remove_equipment("armor")
-	target.equipment["armor"] = CardData.CardSubType.CALAMITY_ROBE
+		var old_card = target.remove_equipment("armor")
+		if old_card != null:
+			deck.discard(old_card)
+	var calamity_robe = victim.remove_equipment("armor")
+	if calamity_robe == null:
+		return
+	target.equip_card_to_slot("armor", calamity_robe)
 	_update_debug("%s 将【灾厄袍】移至 %s 的装备区（%s 受到的火焰伤害+1）" % [victim.player_name, target.player_name, target.player_name])
 	_sync_all_ui()
 
@@ -6013,12 +5991,19 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 	if target == null or target == p or not target.is_alive():
 		return
 	# 源移除一匹劣马
+	var mule_card: CardBase = null
+	var source_slot := ""
 	for s in Player.MOUNT_SLOTS:
 		if p.equipment.get(s, -1) == mule_sub:
-			p.equipment.erase(s)
+			source_slot = s
+			mule_card = p.remove_equipment(s)
 			break
+	if mule_card == null:
+		return
 	# 目标放入坐骑槽
-	_place_mount_for(target, mule_sub)
+	if not _place_mount_for(target, mule_card):
+		p.equip_card_to_slot(source_slot, mule_card)
+		return
 	var mule_name = "-1劣马" if is_minus else "+1劣马"
 	_update_debug("%s 将一匹【%s】移至 %s 的装备区" % [p.player_name, mule_name, target.player_name])
 	_sync_all_ui()
@@ -6115,14 +6100,16 @@ func _emit_plus_mule_target(overlay: ColorRect, target: Player):
 	_plus_mule_target_result.emit(target)
 
 # 将指定坐骑放入目标坐骑槽（空槽自动装；满槽顶替第一匹）
-func _place_mount_for(target: Player, sub: CardData.CardSubType) -> bool:
-	if target.equip_mount(sub):
+func _place_mount_for(target: Player, card: CardBase) -> bool:
+	if target.equip_mount_card(card):
 		return true
 	var slots = target.get_mount_slots()
 	if slots.is_empty():
 		return false
-	target.replace_mount(slots[0], sub)
-	return true
+	var replaced = target.replace_mount_card(slots[0], card)
+	if replaced != null:
+		deck.discard(replaced)
+	return replaced != null
 
 # ============================
 #  【摄魂刀】激活 + 拼点翻面
