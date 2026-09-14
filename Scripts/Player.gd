@@ -31,6 +31,9 @@ const GENERAL_STATE_FIELDS = ["general_name", "gender", "max_hp", "awoken",
 	"shensu_used_this_turn"]
 var hand: Array[CardBase] = []
 var equipment: Dictionary = {}
+# 装备区的真实卡牌实例。equipment 继续作为“槽位 -> 类型”的兼容查询层，
+# 供现有技能/UI/旧测试读取；所有正式装卸流程必须同步维护本表。
+var equipment_cards: Dictionary = {}
 
 # 铁索连环状态：受到属性伤害后传导
 var chained: bool = false
@@ -235,10 +238,42 @@ func get_equip_slots() -> Array[String]:
 			slots.append(s)
 	return slots
 
-# 卸下指定槽位装备（同时重置对应属性）
-func remove_equipment(slot: String):
+# 获取装备区中的真实卡牌。旧测试仍可能直接向 equipment 写入类型；这种旧入口
+# 没有原实例可保留，只能在首次取出时补建一次兼容实例，之后仍保持同一对象。
+func get_equipment_card(slot: String, materialize_legacy: bool = true) -> CardBase:
+	if not equipment.has(slot):
+		equipment_cards.erase(slot)
+		return null
 	var sub = equipment.get(slot, -1)
+	if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
+		equipment_cards.erase(slot)
+		return null
+	var stored = equipment_cards.get(slot, null)
+	if stored is CardBase and stored.sub_type == sub:
+		return stored
+	# 类型兼容表被旧入口直接改写时，旧实例已不再对应当前装备。
+	equipment_cards.erase(slot)
+	if not materialize_legacy:
+		return null
+	var card = CardBase.create(sub)
+	equipment_cards[slot] = card
+	return card
+
+# 将一张真实装备牌装入空槽；属性变化集中在这里，避免转移时丢失对象。
+func equip_card_to_slot(slot: String, card: CardBase) -> bool:
+	if not EQUIP_SLOTS.has(slot) or card == null or equipment.has(slot):
+		return false
+	equipment[slot] = card.sub_type
+	equipment_cards[slot] = card
+	_apply_equipment_state(card.sub_type)
+	return true
+
+# 卸下指定槽位装备（同时重置对应属性），返回原始卡牌实例。
+func remove_equipment(slot: String) -> CardBase:
+	var sub = equipment.get(slot, -1)
+	var card = get_equipment_card(slot)
 	equipment.erase(slot)
+	equipment_cards.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
 	if sub == CardData.CardSubType.SILVER_LION and is_alive():
 		heal(1)
@@ -262,6 +297,45 @@ func remove_equipment(slot: String):
 		CardData.CardSubType.HIDDEN_EQUIPMENT:
 			# 【苕】暗置装备被卸下：清空暗置状态
 			hidden_equip_slot = ""
+	return card
+
+# 交换装备时使用：空间上确实卸下，但规则上“不算失去”，所以不触发白银狮子。
+func detach_equipment_quiet(slot: String) -> CardBase:
+	if not equipment.has(slot):
+		return null
+	var sub = equipment.get(slot, -1)
+	var card = get_equipment_card(slot)
+	equipment.erase(slot)
+	equipment_cards.erase(slot)
+	_clear_equipment_state(sub)
+	return card
+
+func _apply_equipment_state(sub: CardData.CardSubType):
+	match sub:
+		CardData.CardSubType.MOUNT_PLUS:
+			mount_plus += 1
+		CardData.CardSubType.MOUNT_MINUS:
+			mount_minus += 1
+		CardData.CardSubType.POFENG_SPEAR:
+			hand_limit_bonus = 0
+		CardData.CardSubType.SOUL_BLADE:
+			soul_blade_track_target = null
+			soul_blade_track_count = 0
+
+func _clear_equipment_state(sub: CardData.CardSubType):
+	match sub:
+		CardData.CardSubType.MOUNT_PLUS:
+			mount_plus = maxi(mount_plus - 1, 0)
+		CardData.CardSubType.MOUNT_MINUS:
+			mount_minus = maxi(mount_minus - 1, 0)
+		CardData.CardSubType.POFENG_SPEAR:
+			hand_limit_bonus = 0
+		CardData.CardSubType.SOUL_BLADE:
+			soul_blade_track_target = null
+			soul_blade_track_count = 0
+		CardData.CardSubType.SAGE_PROTECTION:
+			sage_tokens = 0
+			sage_activated = false
 
 # ============================
 #  攻击距离计算（标准三国杀）
@@ -319,13 +393,19 @@ func equip_mount(sub_type: CardData.CardSubType) -> bool:
 		return false
 	for slot in MOUNT_SLOTS:
 		if not equipment.has(slot):
-			equipment[slot] = sub_type
-			if sub_type == CardData.CardSubType.MOUNT_PLUS:
-				mount_plus += 1
-			elif sub_type == CardData.CardSubType.MOUNT_MINUS:
-				mount_minus += 1
-			# 劣马：全局效果，不计入个人 +1/-1 计数
-			return true
+			return equip_card_to_slot(slot, CardBase.create(sub_type))
+	return false
+
+func equip_mount_card(card: CardBase) -> bool:
+	if card == null:
+		return false
+	var sub_type = card.sub_type
+	if sub_type != CardData.CardSubType.MOUNT_PLUS and sub_type != CardData.CardSubType.MOUNT_MINUS \
+			and sub_type != CardData.CardSubType.MULE_PLUS and sub_type != CardData.CardSubType.MULE_MINUS:
+		return false
+	for slot in MOUNT_SLOTS:
+		if not equipment.has(slot):
+			return equip_card_to_slot(slot, card)
 	return false
 
 # 是否还有空坐骑槽位
@@ -350,17 +430,23 @@ func replace_mount(slot: String, sub_type: CardData.CardSubType) -> bool:
 	if sub_type != CardData.CardSubType.MOUNT_PLUS and sub_type != CardData.CardSubType.MOUNT_MINUS \
 			and sub_type != CardData.CardSubType.MULE_PLUS and sub_type != CardData.CardSubType.MULE_MINUS:
 		return false
-	var old = equipment[slot]
-	equipment[slot] = sub_type
-	if old == CardData.CardSubType.MOUNT_PLUS:
-		mount_plus -= 1
-	elif old == CardData.CardSubType.MOUNT_MINUS:
-		mount_minus -= 1
-	if sub_type == CardData.CardSubType.MOUNT_PLUS:
-		mount_plus += 1
-	elif sub_type == CardData.CardSubType.MOUNT_MINUS:
-		mount_minus += 1
-	return true
+	remove_equipment(slot)
+	return equip_card_to_slot(slot, CardBase.create(sub_type))
+
+func replace_mount_card(slot: String, card: CardBase) -> CardBase:
+	if card == null or not MOUNT_SLOTS.has(slot) or not equipment.has(slot):
+		return null
+	var sub_type = card.sub_type
+	if sub_type != CardData.CardSubType.MOUNT_PLUS and sub_type != CardData.CardSubType.MOUNT_MINUS \
+			and sub_type != CardData.CardSubType.MULE_PLUS and sub_type != CardData.CardSubType.MULE_MINUS:
+		return null
+	var old_card = remove_equipment(slot)
+	if not equip_card_to_slot(slot, card):
+		# 理论上槽位刚被清空；若异常失败，恢复旧装备，避免吞牌。
+		if old_card != null:
+			equip_card_to_slot(slot, old_card)
+		return null
+	return old_card
 
 # 当前已装备的马数量（含劣马，占用的坐骑槽数）
 func mount_count() -> int:

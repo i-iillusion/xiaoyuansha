@@ -50,6 +50,7 @@ func reset_players():
 		p.hand.clear()
 		p.determined_cards.clear() # 两个手牌存储区均须隔离，避免前例牌参与后例救援。
 		p.equipment.clear()
+		p.equipment_cards.clear()
 		p.chained = false
 		p.kneeling = false
 		p.wine_stacks = 0
@@ -737,5 +738,7 @@ func _run():
 	await skill_selection_cases.run(self)
 	var chixiong_selection_cases = load("res://Test/chixiong_selection_cases.gd").new()
 	await chixiong_selection_cases.run(self)
+	var equipment_instance_cases = load("res://Test/equipment_instance_cases.gd").new()
+	await equipment_instance_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
