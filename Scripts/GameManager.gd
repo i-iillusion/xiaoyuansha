@@ -6120,10 +6120,10 @@ func _place_mount_for(target: Player, card: CardBase) -> bool:
 	var slots = target.get_mount_slots()
 	if slots.is_empty():
 		return false
-	var replaced = target.replace_mount_card(slots[0], card)
-	if replaced != null:
-		deck.discard(replaced)
-	return replaced != null
+	var result = target.replace_mount_card_result(slots[0], card)
+	if result.success and result.replaced_card != null:
+		deck.discard(result.replaced_card)
+	return result.success
 
 # ============================
 #  【摄魂刀】激活 + 拼点翻面

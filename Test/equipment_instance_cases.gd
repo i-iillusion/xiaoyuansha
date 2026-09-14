@@ -118,3 +118,61 @@ func run(host):
 	game._minus_mule_target_override = Callable()
 	check(target.get_equipment_card("mount_1") == mule and mule.source_seat == 8, "劣马转移与满槽顶替保留原实例")
 	check(game.deck._discard.count(replaced_mount) == 1 and source.get_mount_slots().is_empty(), "满槽目标被顶坐骑原实例弃置一次")
+
+	# DEV-B01a：只验证现有暗置占位兼容路径的所有权，不裁定暗置牌离区明置规则。
+	for mule_sub in [CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		for player in game.players:
+			player.hidden_equip_slot = ""
+			player.mount_plus = 0
+			player.mount_minus = 0
+		source = game.players[1]
+		target = game.players[2]
+		mule = CardBase.create(mule_sub)
+		mule.source_seat = 9
+		source.equip_mount_card(mule)
+		target.equipment["mount_1"] = CardData.CardSubType.HIDDEN_EQUIPMENT
+		target.hidden_equip_slot = "mount_1"
+		for i in range(3):
+			target.equip_mount_card(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
+		game._minus_mule_target_override = func(): return target
+		game._plus_mule_target_override = func(): return target
+		await game._try_mule_transfer(source, mule_sub, mule_sub == CardData.CardSubType.MULE_MINUS)
+		game._minus_mule_target_override = Callable()
+		game._plus_mule_target_override = Callable()
+		check(target.get_equipment_card("mount_1") == mule and mule.source_seat == 9, "暗置首槽满马转移保留劣马原对象")
+		check(source.get_mount_slots().is_empty(), "替掉暗置成功后来源不恢复同一张劣马")
+		var owners := 0
+		for player in game.players:
+			for stored in player.equipment_cards.values():
+				if stored == mule:
+					owners += 1
+		check(owners == 1 and game.deck._discard.is_empty(), "转移坐骑恰好一个装备所有者且不伪造旧牌弃置")
+		check(target.hidden_equip_slot == "" and target.mount_count() == 4 and target.mount_minus == 3, "成功替换清暗置状态并保留其他三匹坐骑")
+
+	# 无旧牌的成功与非法输入失败不能继续共享 null 这一种结果。
+	suite.reset_players()
+	target = game.players[2]
+	target.hidden_equip_slot = "mount_1"
+	target.equipment["mount_1"] = CardData.CardSubType.HIDDEN_EQUIPMENT
+	var invalid = target.replace_mount_card_result("mount_1", CardBase.create(CardData.CardSubType.PEACH))
+	check(not invalid.success and invalid.replaced_card == null, "非坐骑输入明确报告失败")
+	check(target.get_hidden_equip_type() == "mount", "非法替换不移除原暗置")
+	invalid = target.replace_mount_card_result("mount_2", CardBase.create(CardData.CardSubType.MOUNT_PLUS))
+	check(not invalid.success and not target.equipment.has("mount_2"), "替换空槽失败且不安装新牌")
+	invalid = target.replace_mount_card_result("mount_1", null)
+	check(not invalid.success and target.has_hidden_equip(), "空输入失败且保留原占位")
+	var incoming = CardBase.create(CardData.CardSubType.MULE_PLUS)
+	var changed = target.replace_mount_card_result("mount_1", incoming)
+	check(changed.success and changed.replaced_card == null, "替掉暗置明确成功但没有具体旧牌")
+	check(target.get_equipment_card("mount_1") == incoming, "成功结果对应已落位的原资源")
+	var next_mount = CardBase.create(CardData.CardSubType.MOUNT_MINUS)
+	changed = target.replace_mount_card_result("mount_1", next_mount)
+	check(changed.success and changed.replaced_card == incoming, "替掉明置装备返回旧牌原对象")
+	check(target.get_equipment_card("mount_1") == next_mount, "替换后新原对象仅在目标槽")
+	suite.reset_players()
+	for player in game.players:
+		player.hidden_equip_slot = ""
+		player.mount_plus = 0
+		player.mount_minus = 0

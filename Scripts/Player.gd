@@ -434,19 +434,31 @@ func replace_mount(slot: String, sub_type: CardData.CardSubType) -> bool:
 	return equip_card_to_slot(slot, CardBase.create(sub_type))
 
 func replace_mount_card(slot: String, card: CardBase) -> CardBase:
+	# 兼容只需要旧牌的调用者；旧牌为 null 不能用来判断替换是否成功。
+	return replace_mount_card_result(slot, card).replaced_card
+
+# 成功替换暗置占位时没有具体旧牌，但替换本身已经成功。
+# success 与 replaced_card 分开，避免转移方把同一张坐骑错误恢复到来源。
+func replace_mount_card_result(slot: String, card: CardBase) -> Dictionary:
+	var failed = {"success": false, "replaced_card": null}
 	if card == null or not MOUNT_SLOTS.has(slot) or not equipment.has(slot):
-		return null
+		return failed
 	var sub_type = card.sub_type
 	if sub_type != CardData.CardSubType.MOUNT_PLUS and sub_type != CardData.CardSubType.MOUNT_MINUS \
 			and sub_type != CardData.CardSubType.MULE_PLUS and sub_type != CardData.CardSubType.MULE_MINUS:
-		return null
+		return failed
+	var old_was_hidden = equipment[slot] == CardData.CardSubType.HIDDEN_EQUIPMENT
+	var old_hidden_slot = hidden_equip_slot
 	var old_card = remove_equipment(slot)
 	if not equip_card_to_slot(slot, card):
 		# 理论上槽位刚被清空；若异常失败，恢复旧装备，避免吞牌。
 		if old_card != null:
 			equip_card_to_slot(slot, old_card)
-		return null
-	return old_card
+		elif old_was_hidden:
+			equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
+			hidden_equip_slot = old_hidden_slot
+		return failed
+	return {"success": true, "replaced_card": old_card}
 
 # 当前已装备的马数量（含劣马，占用的坐骑槽数）
 func mount_count() -> int:
