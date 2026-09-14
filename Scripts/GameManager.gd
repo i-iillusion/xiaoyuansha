@@ -1430,8 +1430,9 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				var slot: String = await _show_mount_discard_picker(p) if p.seat_index == 0 else slots.pick_random()
 				if not p.equipment.has(slot):
 					return false
-				deck.discard(CardBase.create(p.equipment[slot]))
-				p.remove_equipment(slot)
+				var discarded_mount = p.remove_equipment(slot)
+				if discarded_mount != null:
+					deck.discard(discarded_mount)
 				_update_debug("%s 发动【贯石斧】：此【杀】依然造成伤害" % p.player_name)
 				var hit = _new_damage_chain(p, actual, card, base_damage, element)
 				hit.damage.original_target = chain.damage.original_target
@@ -1465,19 +1466,23 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 	# 【烈火盾】vs【寒冰剑】：装备寒冰剑者杀装备烈火盾者 → 双方分别弃置这两张装备，再进行之后的结算
 	# 时机在雌雄/响应/伤害之前；装备弃置后寒冰剑的「防止伤害弃两张」不再触发
 	if p.get_weapon() == CardData.CardSubType.ICE_SWORD and target.get_armor() == CardData.CardSubType.LIEHUO_SHIELD:
-		p.remove_equipment("weapon")
-		deck.discard(CardBase.create(CardData.CardSubType.ICE_SWORD))
-		target.remove_equipment("armor")
-		deck.discard(CardBase.create(CardData.CardSubType.LIEHUO_SHIELD))
+		var ice_sword = p.remove_equipment("weapon")
+		var fire_shield = target.remove_equipment("armor")
+		if ice_sword != null:
+			deck.discard(ice_sword)
+		if fire_shield != null:
+			deck.discard(fire_shield)
 		_update_debug("%s 的【寒冰剑】与 %s 的【烈火盾】相撞，双双进入弃牌堆！" % [p.player_name, target.player_name])
 		_sync_all_ui()
 
 	# 【青釭盾】vs【青釭剑】：装备青釭剑者杀装备青釭盾者 → 双方分别弃置这两张装备，再进行之后的结算
 	if p.get_weapon() == CardData.CardSubType.QINGGANG_SWORD and target.get_armor() == CardData.CardSubType.QINGGANG_SHIELD:
-		p.remove_equipment("weapon")
-		deck.discard(CardBase.create(CardData.CardSubType.QINGGANG_SWORD))
-		target.remove_equipment("armor")
-		deck.discard(CardBase.create(CardData.CardSubType.QINGGANG_SHIELD))
+		var qinggang_sword = p.remove_equipment("weapon")
+		var qinggang_shield = target.remove_equipment("armor")
+		if qinggang_sword != null:
+			deck.discard(qinggang_sword)
+		if qinggang_shield != null:
+			deck.discard(qinggang_shield)
 		_update_debug("%s 的【青釭剑】与 %s 的【青釭盾】相撞，双双进入弃牌堆！" % [p.player_name, target.player_name])
 		_sync_all_ui()
 
@@ -1795,16 +1800,11 @@ func play_card(sub: CardData.CardSubType):
 				if equipped_card == null:
 					_update_debug("所选装备已不在牌区，取消装备")
 					return
-				if old_is_hidden:
-					p.hidden_equip_slot = ""  # 暗置武器被替换（占位无实际牌可弃）
-				else:
-					deck.discard(CardBase.create(old_weapon))
+				var old_card = p.remove_equipment("weapon")
+				if old_card != null:
+					deck.discard(old_card)
 				equipment_pool.claim(sub)
-				p.equipment["weapon"] = sub
-				p.hand_limit_bonus = 0  # 换武器：破风枪手牌上限加成清零（旧破风枪失去 / 新破风枪重新开始）
-				if sub == CardData.CardSubType.SOUL_BLADE:
-					p.soul_blade_track_target = null  # 摄魂刀：重新装备时重置激活计数跟踪
-					p.soul_blade_track_count = 0
+				p.equip_card_to_slot("weapon", equipped_card)
 				_update_debug("%s 弃置了原武器【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_weapon), CardData.get_type_name(sub)])
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
@@ -1814,11 +1814,7 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
 			equipment_pool.claim(sub)
-			p.equipment["weapon"] = sub
-			p.hand_limit_bonus = 0  # 新武器从 0 开始（破风枪加成归属当前武器）
-			if sub == CardData.CardSubType.SOUL_BLADE:
-				p.soul_blade_track_target = null  # 摄魂刀：装备时重置激活计数跟踪
-				p.soul_blade_track_count = 0
+			p.equip_card_to_slot("weapon", equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1847,21 +1843,11 @@ func play_card(sub: CardData.CardSubType):
 				if equipped_card == null:
 					_update_debug("所选装备已不在牌区，取消装备")
 					return
-				if old_is_hidden:
-					p.hidden_equip_slot = ""  # 暗置防具被替换（占位无实际牌可弃）
-				else:
-					deck.discard(CardBase.create(old_armor))
+				var old_card = p.remove_equipment("armor")
+				if old_card != null:
+					deck.discard(old_card)
 				equipment_pool.claim(sub)
-				p.equipment["armor"] = sub
-				# 【白银狮子】：替换（失去）装备区里的白银狮子时回复 1 点体力
-				if old_armor == CardData.CardSubType.SILVER_LION:
-					p.heal(1)
-					_update_debug("%s 失去【白银狮子】，回复 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
-				# 【贤者的加护】：贤者标记跟随装备移动（替换失去时清空）
-				if old_armor == CardData.CardSubType.SAGE_PROTECTION:
-					p.sage_tokens = 0
-					p.sage_activated = false
-					_update_debug("%s 失去【贤者的加护】，贤者标记随之清空" % p.player_name)
+				p.equip_card_to_slot("armor", equipped_card)
 				_update_debug("%s 弃置了原防具【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_armor), CardData.get_type_name(sub)])
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
@@ -1871,7 +1857,7 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
 			equipment_pool.claim(sub)
-			p.equipment["armor"] = sub
+			p.equip_card_to_slot("armor", equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -1887,7 +1873,7 @@ func play_card(sub: CardData.CardSubType):
 				if equipped_card == null:
 					_update_debug("所选装备已不在牌区，取消装备")
 					return
-				p.equip_mount(sub)
+				p.equip_mount_card(equipped_card)
 				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
 				])
@@ -1911,9 +1897,9 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
 			var old_sub = p.equipment[target_slot]
-			p.replace_mount(target_slot, sub)
-			if target_slot == p.hidden_equip_slot:
-				p.hidden_equip_slot = ""  # 暗置坐骑被顶掉
+			var old_card = p.replace_mount_card(target_slot, equipped_card)
+			if old_card != null:
+				deck.discard(old_card)
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
 				CardData.get_type_name(old_sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -2213,7 +2199,9 @@ func _play_disarm():
 			# 【烈火盾】：可流失 1 点体力代替失去这件装备
 			if await _maybe_liehuo_save(target):
 				continue
-			target.remove_equipment(slot)
+			var removed_card = target.remove_equipment(slot)
+			if removed_card != null:
+				deck.discard(removed_card)
 			removed_count += 1
 		if removed_count > 0:
 			_draw_blank_cards(target, removed_count)
@@ -4059,8 +4047,9 @@ func _try_fate_blade_save(victim: Player, amount: int) -> bool:
 		return false
 
 	# 弃置命运之刃（进入弃牌堆）；装备占用永久保留（唯一性规则）
-	victim.remove_equipment("weapon")
-	deck.discard(CardBase.create(CardData.CardSubType.FATE_BLADE))
+	var fate_blade = victim.remove_equipment("weapon")
+	if fate_blade != null:
+		deck.discard(fate_blade)
 	_update_debug("%s 弃置【命运之刃】，防止了 %d 点致命伤害！" % [victim.player_name, amount])
 	_sync_all_ui()
 	return true
@@ -4162,8 +4151,9 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 		slot = slots[randi() % slots.size()]
 
 	var sub = victim.equipment[slot]
-	victim.remove_equipment(slot)
-	var card = CardBase.create(sub)
+	var card = victim.remove_equipment(slot)
+	if card == null:
+		return
 	source.determined_cards.append(card)
 	_update_debug("%s 发动【勾镰爪】：获得 %s 的坐骑【%s】（已确定的牌 %d 张）" % [
 		source.player_name, victim.player_name, CardData.get_type_name(sub), source.determined_cards.size()
@@ -4456,15 +4446,10 @@ func _reveal_hidden_as(p: Player, sub: CardData.CardSubType):
 	var slot = p.hidden_equip_slot
 	if slot == "":
 		return
-	p.equipment[slot] = sub
-	p.hidden_equip_slot = ""
-	if sub == CardData.CardSubType.MOUNT_PLUS:
-		p.mount_plus += 1
-	elif sub == CardData.CardSubType.MOUNT_MINUS:
-		p.mount_minus += 1
-	elif sub == CardData.CardSubType.MULE_PLUS or sub == CardData.CardSubType.MULE_MINUS:
-		pass  # 劣马：无个人计数、无唯一性
-	else:
+	p.remove_equipment(slot)
+	p.equip_card_to_slot(slot, CardBase.create(sub))
+	if sub != CardData.CardSubType.MOUNT_PLUS and sub != CardData.CardSubType.MOUNT_MINUS \
+			and sub != CardData.CardSubType.MULE_PLUS and sub != CardData.CardSubType.MULE_MINUS:
 		equipment_pool.claim(sub)
 	_update_debug("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 	_sync_all_ui()
@@ -6616,11 +6601,10 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 				deck.discard(card)
 		cards.clear()
 	for slot in p.get_equip_slots():
-		var sub = p.equipment[slot]
-		# 暗置占位是假牌，不产生实体牌进弃牌堆
-		if sub != CardData.CardSubType.HIDDEN_EQUIPMENT:
-			deck.discard(CardBase.create(sub))
-		p.remove_equipment(slot)
+		var equipment_card = p.remove_equipment(slot)
+		# 暗置占位是假牌，remove_equipment 会返回 null。
+		if equipment_card != null:
+			deck.discard(equipment_card)
 	if include_judgment:
 		for c in p.judgment_cards:
 			if c != null:

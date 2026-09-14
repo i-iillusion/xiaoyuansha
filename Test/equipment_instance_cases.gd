@@ -32,3 +32,36 @@ func run(host):
 	p.hidden_equip_slot = "armor"
 	check(p.get_equipment_card("armor") == null, "暗置占位不虚构实体装备牌")
 	check(p.remove_equipment("armor") == null and p.hidden_equip_slot == "", "移除暗置占位只清状态")
+
+	# B2：正式出牌、主动替换和全牌区清理均沿用真实对象。
+	suite.reset_players()
+	game.deck._discard.clear()
+	game.equipment_pool.clear()
+	game.turn_manager.current_player_idx = 0
+	p = game.players[0]
+	weapon = CardBase.create(CardData.CardSubType.LIANNU)
+	weapon.source_seat = 6
+	p.hand.append(weapon)
+	await game.play_card(CardData.CardSubType.LIANNU)
+	check(p.get_equipment_card("weapon") == weapon and p.hand.is_empty(), "从手牌装备武器保留原实例")
+
+	var old_armor = CardBase.create(CardData.CardSubType.SILVER_LION)
+	var new_armor = CardBase.create(CardData.CardSubType.RENWANG_DUN)
+	p.hp = 8
+	p.equip_card_to_slot("armor", old_armor)
+	p.hand.append(new_armor)
+	game._weapon_replace_override = func(): return true
+	await game.play_card(CardData.CardSubType.RENWANG_DUN)
+	game._weapon_replace_override = Callable()
+	check(p.get_equipment_card("armor") == new_armor, "主动替换后新防具仍是打出的对象")
+	check(game.deck._discard.count(old_armor) == 1, "被替换防具的原实例恰好弃置一次")
+	check(p.hp == 9, "主动替换算失去装备并触发白银狮子一次")
+
+	var mount = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	p.equip_mount_card(mount)
+	var judgment = CardBase.create(CardData.CardSubType.INDULGENCE)
+	p.judgment_cards.append(judgment)
+	game._discard_all_cards(p, true)
+	check(p.equipment.is_empty() and p.equipment_cards.is_empty(), "全牌区清理同步清空装备类型与实例表")
+	check(game.deck._discard.count(weapon) == 1 and game.deck._discard.count(new_armor) == 1 and game.deck._discard.count(mount) == 1, "死亡清理按原实例弃置全部装备")
+	check(game.deck._discard.count(judgment) == 1, "装备实例迁移不影响判定牌原实例清理")
