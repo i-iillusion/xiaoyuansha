@@ -67,6 +67,51 @@ func run(host):
 		check(not game._countdown_active and not game._countdown_on_timeout.is_valid(), "弃牌阶段结束响应计时无残留")
 		await game.get_tree().process_frame
 		check(game.get_node("UI").get_children().filter(func(c): return c is HandDiscardPrompt).is_empty(), "弹窗已释放")
+	await check_mandatory_prompt_rebuild(p, first, second)
 	suite.reset_players()
 	game = null
 	suite = null
+
+func current_prompt() -> HandDiscardPrompt:
+	for child in game.get_node("UI").get_children():
+		if child is HandDiscardPrompt and not child.is_queued_for_deletion():
+			return child
+	return null
+
+func answer_rebuilt_prompt(p: Player, first: CardBase, second: CardBase):
+	var original = current_prompt()
+	check(original != null, "强制重建前实际弹窗存在")
+	if original == null:
+		game._finish_game("平局", "缺失测试窗口")
+		return
+	p.hand.clear()
+	var original_id = original.get_instance_id()
+	original.submit([1]) # 原索引1指向具体牌，当前已变为索引0。
+	original.submit([0]) # 已答复窗口的重复信号不能变为第二次支付。
+	for _frame in range(10):
+		await game.get_tree().process_frame
+		var rebuilt = current_prompt()
+		if rebuilt == null or rebuilt.get_instance_id() == original_id:
+			continue
+		check(game.deck._discard.is_empty() and p.determined_cards == [second], "重建前不误扣旧索引")
+		var buttons = rebuilt.find_children("*", "CheckButton", true, false)
+		check(buttons.size() == 1 and rebuilt.fallback == [0], "重建按钮和超时默认索引均来自当前牌区")
+		game._countdown_on_timeout.call()
+		check(not game.deck._discard.has(first), "过期窗口不能弃置已离手原牌")
+		return
+	check(false, "有效强制选择应重新打开窗口")
+	game._finish_game("平局", "测试保护：未重建窗口")
+
+func check_mandatory_prompt_rebuild(p: Player, first: CardBase, second: CardBase):
+	suite.reset_players()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.DISCARD
+	game._hand_discard_override = Callable()
+	p.hand.append(first)
+	p.determined_cards.append(second)
+	answer_rebuilt_prompt.call_deferred(p, first, second)
+	var paid = await game._select_hand_discard(p, 1, true)
+	check(paid and p.hand_size() == 0 and game.deck._discard == [second], "实际UI过期后重建，超时支付当前原牌一次")
+	check(not game._countdown_active and not game._countdown_on_timeout.is_valid(), "重建窗口结束无残留响应计时")
+	await game.get_tree().process_frame
+	check(current_prompt() == null, "重建的强制窗口已清理")

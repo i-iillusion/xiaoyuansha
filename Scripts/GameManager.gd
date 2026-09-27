@@ -6626,41 +6626,51 @@ func _discard_hand_cards(p: Player, count: int) -> bool:
 	return true
 
 func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Callable = Callable()) -> bool:
-	if _game_over or not p.is_alive() or count <= 0 or p.hand_size() < count:
+	if p == null or count <= 0:
 		return false
-	var snapshot = HandSelection.new(p)
 	var phase = turn_manager.current_phase
 	var actor = turn_manager.current_player_idx
-	var indices: Array[int] = []
-	if _hand_discard_override.is_valid():
-		indices.assign(await _hand_discard_override.call(snapshot, count, mandatory))
-	elif p.seat_index != 0:
-		indices = snapshot.defaults(count)
-	else:
-		var prompt = HandDiscardPrompt.new()
-		$UI.add_child(prompt)
-		prompt.setup(snapshot, count, mandatory)
-		var stop = func(_winner): prompt.submit([])
-		game_over.connect(stop)
-		_start_response_countdown(prompt, p.player_name, prompt.timeout)
-		indices = await prompt.answered
-		game_over.disconnect(stop)
-		# 先清理答复计时；费用结束后由调用者恢复阶段，等待时不重开出牌计时。
-		_halt_countdown()
-		if not prompt.is_queued_for_deletion():
-			prompt.queue_free()
-	_refresh_status_line()
-	if _game_over or not p.is_alive() or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
-		return false
-	if allowed.is_valid() and not allowed.call():
-		return false
-	var paid = snapshot.take(indices, count)
-	if paid.size() != count:
-		return false
-	for card in paid:
-		if card != null:
-			deck.discard(card)
-	return true
+	while true:
+		if _game_over or not p.is_alive() or p.hand_size() < count or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
+			return false
+		if allowed.is_valid() and not allowed.call():
+			return false
+		var snapshot = HandSelection.new(p)
+		var indices: Array[int] = []
+		if _hand_discard_override.is_valid():
+			indices.assign(await _hand_discard_override.call(snapshot, count, mandatory))
+		elif p.seat_index != 0:
+			indices = snapshot.defaults(count)
+		else:
+			var prompt = HandDiscardPrompt.new()
+			$UI.add_child(prompt)
+			prompt.setup(snapshot, count, mandatory)
+			var stop = func(_winner): prompt.submit([])
+			game_over.connect(stop)
+			_start_response_countdown(prompt, p.player_name, prompt.timeout)
+			indices = await prompt.answered
+			game_over.disconnect(stop)
+			# 旧窗口的计时及信号先清理；重选不重开出牌阶段计时。
+			_halt_countdown()
+			if not prompt.is_queued_for_deletion():
+				prompt.queue_free()
+		_refresh_status_line()
+		if _game_over or not p.is_alive() or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
+			return false
+		if allowed.is_valid() and not allowed.call():
+			return false
+		var paid = snapshot.take(indices, count)
+		if paid.size() == count:
+			for card in paid:
+				if card != null:
+					deck.discard(card)
+			return true
+		if not mandatory:
+			return false # 拍胸脯等自愿支付保持可拒绝，不强行重问。
+		# 强制答复无效/快照过期不是拒绝支付；动作仍有效时按当前牌区重选。
+		# 让出一帧以释放旧UI并处理终局，避免失效回调导致同步忙循环。
+		await get_tree().process_frame
+	return false
 
 # 按显式模式分派判胜；击杀者只影响身份局奖惩，不决定胜方。
 # 经典身份当前只支持五人标准；乱斗支持 2～10 人。奸雄与预大习特殊提交点继续隔离。

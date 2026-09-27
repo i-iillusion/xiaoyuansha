@@ -73,6 +73,69 @@ func run(host):
 	check(actor.hand_size() == 0 and game.deck._discard.is_empty(), "来源可用一张任意牌支付且不制造具体牌")
 	check(target.hp == 7, "支付一张后整次三点伤害正常造成")
 
+	await check_selection_recovery(actor, target)
 	reset_case()
 	game = null
 	suite = null
+
+func check_selection_recovery(actor: Player, target: Player):
+	# 已支付的发动者不能因为目标快照过期而被静默中断或重复收费。
+	reset_case()
+	actor.general_name = "杰基·斯特朗"
+	actor.hand.append(null)
+	var retained = CardBase.create(CardData.CardSubType.PEACH)
+	target.hand.append(null)
+	target.determined_cards.append(retained)
+	var owners: Array = []
+	game._hand_discard_override = func(snapshot, count, mandatory):
+		owners.append(snapshot.owner)
+		check(mandatory and count == 1, "重选仍是同一次强制弃一张")
+		if owners.size() == 2:
+			target.hand.clear() # 另一项已完成的移动使旧索引过期；不由本次费用回滚。
+			return [1]
+		return snapshot.defaults(count)
+	game._rps_override = func(p): return 0 if p == actor else 2
+	await game._execute_campus_dominator(actor, target)
+	check(owners == [actor, target, target], "校园霸主只重问过期目标，不重收发动者费用")
+	check(actor.hand_size() == 0 and target.hand_size() == 0 and game.deck._discard == [retained], "跨区旧索引不误扣，当前原牌只入弃牌一次")
+	check(target.hp == 9, "目标重选成功后外层拼点和伤害继续一次")
+
+	for invalid in [[], [2], [0, 0]]:
+		reset_case()
+		actor.hand.append(null)
+		var attempts: Array = []
+		game._hand_discard_override = func(snapshot, count, _mandatory):
+			attempts.append(true)
+			return invalid if attempts.size() == 1 else snapshot.defaults(count)
+		var paid = await game._select_hand_discard(actor, 1, true)
+		check(paid and attempts.size() == 2 and actor.hand_size() == 0, "强制空答复/越界/数量错误不能当作自愿拒绝：" + str(invalid))
+		check(game.deck._discard.is_empty(), "重选任意牌不生成具体弃牌")
+
+	for mode in ["phase", "actor", "dead", "empty", "ended", "disallowed"]:
+		reset_case()
+		actor.hand.append(retained)
+		var attempts: Array = []
+		var permitted: Array[bool] = [true]
+		game._hand_discard_override = func(_snapshot, _count, _mandatory):
+			attempts.append(true)
+			match mode:
+				"phase": game.turn_manager.current_phase = TurnManager.Phase.END
+				"actor": game.turn_manager.current_player_idx = 1
+				"dead": actor.hp = 0
+				"empty": actor.hand.clear()
+				"ended": game._finish_game("平局", "强制选择中终局")
+				"disallowed": permitted[0] = false
+			return [0]
+		var paid = await game._select_hand_discard(actor, 1, true, func(): return permitted[0])
+		check(not paid and attempts.size() == 1, "失效动作停止，不无限重问：" + mode)
+		check(game.deck._discard.is_empty(), "失效动作不补扣费用：" + mode)
+		check(actor.hand_size() == (0 if mode == "empty" else 1), "保留独立状态变化而不伪造回滚：" + mode)
+
+	reset_case()
+	actor.hand.append(null)
+	var queries: Array = []
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		queries.append(true)
+		return snapshot.defaults(count)
+	check(not await game._select_hand_discard(actor, 1, true, func(): return false), "动作已失效时不打开窗口")
+	check(queries.is_empty() and actor.hand_size() == 1, "前置合法性检查不询问、不收费")
