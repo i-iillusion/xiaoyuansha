@@ -78,9 +78,43 @@ func run(host):
 	check(target.hp == 7, "支付一张后整次三点伤害正常造成")
 
 	await check_selection_recovery(actor, target)
+	await check_context_invalidation(actor, target)
 	reset_case()
 	game = null
 	suite = null
+
+func check_context_invalidation(actor: Player, target: Player):
+	for skill in ["campus", "zhuangbi"]:
+		for transition in ["phase_return", "actor_return"]:
+			reset_case()
+			actor.general_name = "杰基·斯特朗" if skill == "campus" else "史蒂芬·彼特先斯"
+			actor.awoken = true # 支付案例不引入跨例延迟觉醒。
+			actor.hand.append(null)
+			var retained = CardBase.create(CardData.CardSubType.PEACH)
+			target.determined_cards.append(retained)
+			var queries: Array = []
+			var rps_calls: Array = []
+			game._hand_discard_override = func(snapshot, count, _mandatory):
+				queries.append(snapshot.owner)
+				if snapshot.owner == target:
+					if transition == "phase_return":
+						game.turn_manager.current_phase = TurnManager.Phase.END
+						game.turn_manager.current_phase = TurnManager.Phase.PLAY
+					else:
+						game.turn_manager.current_player_idx = 1
+						game.turn_manager.current_player_idx = 0
+				return snapshot.defaults(count)
+			game._rps_override = func(p):
+				rps_calls.append(p)
+				return 0 if p == actor else 2
+			game._zhuangbi_again_override = func(): return false
+			if skill == "campus":
+				await game._execute_campus_dominator(actor, target)
+			else:
+				await game._execute_zhuangbi([target])
+			check(queries == [actor, target], "上下文离开又恢复后停止，不重问或重扣：" + skill + transition)
+			check(actor.hand_size() == 0 and target.determined_cards == [retained] and game.deck._discard.is_empty(), "保留已付费，拒绝目标旧答复，原牌不误弃：" + skill + transition)
+			check(rps_calls.is_empty() and target.hp == 10 and actor.hp == 10, "旧外层不继续拼点及伤害：" + skill + transition)
 
 func check_selection_recovery(actor: Player, target: Player):
 	# 已支付的发动者不能因为目标快照过期而被静默中断或重复收费。

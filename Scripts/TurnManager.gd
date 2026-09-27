@@ -21,8 +21,19 @@ signal turn_ended(player_idx: int)
 @export var player_count: int = 4
 @export var debug_log: bool = true
 
-var current_player_idx: int = 0
-var current_phase: Phase = Phase.START
+# 交互上下文代次：字段离开又回到同值也不能重新授权旧答复。
+# 不是规则中的轮数/回合次数，不参与技能次数刷新。
+var _context_revision: int = 0
+var current_player_idx: int = 0:
+	set(value):
+		if value != current_player_idx:
+			_context_revision += 1
+		current_player_idx = value
+var current_phase: Phase = Phase.START:
+	set(value):
+		if value != current_phase:
+			_context_revision += 1
+		current_phase = value
 # 本回合已使用的【杀】次数（摸牌阶段重置；上限由武器决定，-1 = 无限制）
 var strike_count_this_turn: int = 0
 # 每个座位本回合是否已经使用/打出过杀；与主动杀使用次数分开。
@@ -58,7 +69,11 @@ var granted_play_target_idx: int = -1    # 跳过自己的出牌阶段 → 目�
 var waiting_responder_idx: int = -1
 var waiting_response_type: String = ""  # 如 "dodge_for_strike", "strike_for_barbarian"
 
+func get_context_revision() -> int:
+	return _context_revision
+
 func start_game():
+	_context_revision += 1
 	current_player_idx = 0
 	_strike_actors_this_turn.clear()
 	disarm_count_this_turn = 0
@@ -66,6 +81,8 @@ func start_game():
 
 func _change_phase(new_phase: Phase):
 	var old = current_phase
+	if old == new_phase:
+		_context_revision += 1 # 显式进入同名阶段仍是新上下文。
 	current_phase = new_phase
 	phase_changed.emit(old, new_phase, current_player_idx)
 	if debug_log:
@@ -106,6 +123,7 @@ func advance_phase():
 		Phase.END:     turn_ended.emit(current_player_idx)
 
 func next_turn():
+	_context_revision += 1
 	current_player_idx = (current_player_idx + 1) % player_count
 	_strike_actors_this_turn.clear()
 	disarm_count_this_turn = 0

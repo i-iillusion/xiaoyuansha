@@ -6625,16 +6625,33 @@ func _discard_hand_cards(p: Player, count: int) -> bool:
 			deck.discard(card)
 	return true
 
+enum HandDiscardOutcome {
+	PAID,
+	DECLINED,
+	STALE_SELECTION,
+	ACTION_INVALIDATED,
+	INSUFFICIENT_CARDS,
+	GAME_ENDED,
+}
+
+# 兼容尚未迁移的调用者；不能用false推断玩家主动拒绝。
 func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Callable = Callable()) -> bool:
+	var outcome = await _select_hand_discard_result(p, count, mandatory, allowed)
+	return outcome == HandDiscardOutcome.PAID
+
+func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed: Callable = Callable()) -> HandDiscardOutcome:
 	if p == null or count <= 0:
-		return false
-	var phase = turn_manager.current_phase
-	var actor = turn_manager.current_player_idx
+		return HandDiscardOutcome.ACTION_INVALIDATED
+	var revision = turn_manager.get_context_revision()
 	while true:
-		if _game_over or not p.is_alive() or p.hand_size() < count or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
-			return false
+		if _game_over:
+			return HandDiscardOutcome.GAME_ENDED
+		if not p.is_alive() or revision != turn_manager.get_context_revision():
+			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
-			return false
+			return HandDiscardOutcome.ACTION_INVALIDATED
+		if p.hand_size() < count:
+			return HandDiscardOutcome.INSUFFICIENT_CARDS
 		var snapshot = HandSelection.new(p)
 		var indices: Array[int] = []
 		if _hand_discard_override.is_valid():
@@ -6655,22 +6672,28 @@ func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Calla
 			if not prompt.is_queued_for_deletion():
 				prompt.queue_free()
 		_refresh_status_line()
-		if _game_over or not p.is_alive() or phase != turn_manager.current_phase or actor != turn_manager.current_player_idx:
-			return false
+		if _game_over:
+			return HandDiscardOutcome.GAME_ENDED
+		if not p.is_alive() or revision != turn_manager.get_context_revision():
+			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
-			return false
+			return HandDiscardOutcome.ACTION_INVALIDATED
+		if p.hand_size() < count:
+			return HandDiscardOutcome.INSUFFICIENT_CARDS
+		if not mandatory and indices.is_empty():
+			return HandDiscardOutcome.DECLINED
 		var paid = snapshot.take(indices, count)
 		if paid.size() == count:
 			for card in paid:
 				if card != null:
 					deck.discard(card)
-			return true
+			return HandDiscardOutcome.PAID
 		if not mandatory:
-			return false # 拍胸脯等自愿支付保持可拒绝，不强行重问。
+			return HandDiscardOutcome.STALE_SELECTION # 非空无效答复不是主动拒绝。
 		# 强制答复无效/快照过期不是拒绝支付；动作仍有效时按当前牌区重选。
 		# 让出一帧以释放旧UI并处理终局，避免失效回调导致同步忙循环。
 		await get_tree().process_frame
-	return false
+	return HandDiscardOutcome.ACTION_INVALIDATED
 
 # 按显式模式分派判胜；击杀者只影响身份局奖惩，不决定胜方。
 # 经典身份当前只支持五人标准；乱斗支持 2～10 人。奸雄与预大习特殊提交点继续隔离。
