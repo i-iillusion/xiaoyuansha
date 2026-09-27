@@ -77,11 +77,77 @@ func run(host):
 	check(actor.hand_size() == 0 and game.deck._discard.is_empty(), "来源可用一张任意牌支付且不制造具体牌")
 	check(target.hp == 7, "支付一张后整次三点伤害正常造成")
 
+	await check_paixiong_result_boundaries(actor, target)
+
 	await check_selection_recovery(actor, target)
 	await check_context_invalidation(actor, target)
 	reset_case()
 	game = null
 	suite = null
+
+func check_paixiong_result_boundaries(actor: Player, target: Player):
+	# 非空过期答复重选；具体牌只以原实例入弃牌堆一次。
+	reset_case()
+	target.general_name = "史蒂芬·彼特先斯"
+	actor.awoken = true
+	var concrete = CardBase.create(CardData.CardSubType.PEACH)
+	actor.determined_cards.append(concrete)
+	game._paixiong_override = func(): return true
+	var attempts: Array = []
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		attempts.append(true)
+		return [99] if attempts.size() == 1 else snapshot.defaults(count)
+	await game._deal_damage(actor, target, 3, EffectChain.DamageType.PHYSICAL)
+	check(attempts.size() == 2 and actor.hand_size() == 0 and game.deck._discard == [concrete], "拍胸脯旧答复重问，具体原牌只弃一次")
+	check(target.hp == 7, "重选支付后完整三点伤害继续")
+
+	# 同值恢复也属于旧动作；不能在日志中称作主动拒绝或防止伤害。
+	reset_case()
+	target.general_name = "史蒂芬·彼特先斯"
+	actor.hand.append(null)
+	game._paixiong_override = func(): return true
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		game.turn_manager.current_phase = TurnManager.Phase.END
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		return snapshot.defaults(count)
+	var chain = game._new_damage_chain(actor, target, null, 3, EffectChain.DamageType.PHYSICAL)
+	chain.skip_targeting = true
+	chain.skip_response = true
+	await chain.start()
+	check(chain.is_cancelled and not chain.damage.committed and target.hp == 10, "动作过期中止当前链而非技能防伤")
+	check(actor.hand_size() == 1 and game.deck._discard.is_empty(), "过期选择不误扣来源手牌")
+	actor.hand.append(null)
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
+	check(await game._select_hand_discard(actor, 1, true) and actor.hand_size() == 1, "过期伤害后下一合法选择仍能支付")
+
+	# 来源在选择期间最终死亡，原伤害继续结算且改为无来源。
+	reset_case()
+	target.general_name = "史蒂芬·彼特先斯"
+	actor.hand.append(null)
+	game._paixiong_override = func(): return true
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		actor.mark_dead()
+		return snapshot.defaults(count)
+	chain = game._new_damage_chain(actor, target, null, 3, EffectChain.DamageType.PHYSICAL)
+	chain.skip_targeting = true
+	chain.skip_response = true
+	await chain.start()
+	check(chain.damage.committed and target.hp == 7 and chain.damage.source == null, "来源最终死亡后剩余三点伤害无来源结算")
+	check(actor.hand_size() == 1 and game.deck._discard.is_empty(), "来源死亡时不冒称已付费或主动拒绝")
+
+	# 失牌导致无法支付时，已发动技能按原文防止整次伤害。
+	reset_case()
+	target.general_name = "史蒂芬·彼特先斯"
+	actor.hand.append(null)
+	game._paixiong_override = func(): return true
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		actor.hand.clear()
+		return snapshot.defaults(count)
+	chain = game._new_damage_chain(actor, target, null, 3, EffectChain.DamageType.PHYSICAL)
+	chain.skip_targeting = true
+	chain.skip_response = true
+	await chain.start()
+	check(chain.is_cancelled and not chain.damage.committed and target.hp == 10, "等待期间无法支付时防止整次伤害")
 
 func check_context_invalidation(actor: Player, target: Player):
 	for skill in ["campus", "zhuangbi"]:

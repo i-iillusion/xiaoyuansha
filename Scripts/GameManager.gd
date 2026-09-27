@@ -3838,9 +3838,16 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		record.target_modifiers_applied = true
 		if subject == null or subject.is_dead():
 			return true
-		if await _try_paixiong_block(subject, source):
+		var paixiong = await _try_paixiong_block(subject, source)
+		if paixiong == PaixiongOutcome.PREVENTED:
 			data["value"] = 0
 			return true
+		if paixiong == PaixiongOutcome.INVALIDATED:
+			chain.is_cancelled = true
+			return true
+		# 选择期间来源可能最终死亡；后续目标侧效果只能读取当前来源。
+		record.refresh_source()
+		source = record.source
 		var ignore_armor = record.from_strike and not record.is_chain and source != null \
 			and source.get_weapon() == CardData.CardSubType.QINGGANG_SWORD
 		var armor = subject.get_armor()
@@ -4695,38 +4702,73 @@ func _show_awaken_pick() -> int:
 #  【拍胸脯】史蒂芬·彼特先斯：将要受到伤害时，可发动；发动则伤害来源需弃一张手牌才能造成伤害
 # ============================
 
-# 返回 true = 伤害被防止（来源没有手牌或选择不弃）；false = 伤害照常（未发动或来源弃牌）
-func _try_paixiong_block(victim: Player, source: Player) -> bool:
+# 失去来源但目标仍有效时伤害继续；动作过期与主动不弃必须分别处理。
+enum PaixiongOutcome { NOT_USED, PAID, PREVENTED, INVALIDATED }
+
+func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 	if victim.general_name != "史蒂芬·彼特先斯" or not victim.is_alive():
-		return false
+		return PaixiongOutcome.NOT_USED
 	if source == null:
 		# 无伤害来源（闪电/火烧连营）：没有来源可弃牌 → 不能发动
-		return false
+		return PaixiongOutcome.NOT_USED
 	if source == victim:
 		# 来源是自己（舍己为人自转移等）：无需弃牌，伤害照常
-		return false
+		return PaixiongOutcome.NOT_USED
+	var action_revision = turn_manager.get_context_revision()
 	if _paixiong_override.is_valid():
 		if not _paixiong_override.call():
-			return false
+			return PaixiongOutcome.NOT_USED
 	else:
 		if victim.seat_index != 0:
-			return false  # AI 暂不发动
+			return PaixiongOutcome.NOT_USED  # AI 暂不发动
 		var use = await _show_paixiong_prompt(source.player_name)
+		if _game_over or not victim.is_alive():
+			return PaixiongOutcome.INVALIDATED
+		if source.is_dead():
+			return PaixiongOutcome.NOT_USED
+		if action_revision != turn_manager.get_context_revision():
+			return PaixiongOutcome.INVALIDATED
 		if not use:
-			return false
+			return PaixiongOutcome.NOT_USED
 	# 发动：来源可选择弃一张手牌使整次伤害照常结算，也可拒绝并防止整次伤害。
-	if source.hand_size() > 0:
-		var paid = await _select_hand_discard(source, 1, false, func():
+	while source.hand_size() > 0:
+		if _game_over or not victim.is_alive():
+			return PaixiongOutcome.INVALIDATED
+		if source.is_dead():
+			return PaixiongOutcome.NOT_USED
+		if action_revision != turn_manager.get_context_revision():
+			return PaixiongOutcome.INVALIDATED
+		var result = await _select_hand_discard_result(source, 1, false, func():
 			return victim.is_alive() and source.is_alive())
-		if paid:
+		if _game_over or not victim.is_alive():
+			return PaixiongOutcome.INVALIDATED
+		if result == HandDiscardOutcome.PAID:
 			_update_debug("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），整次伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
 			_sync_all_ui()
-			return false
-		_update_debug("%s 发动【拍胸脯】！%s 选择不弃牌，本次伤害被防止！" % [victim.player_name, source.player_name])
-	else:
-		_update_debug("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+			return PaixiongOutcome.PAID
+		if source.is_dead():
+			return PaixiongOutcome.NOT_USED # TIME-04：剩余伤害由链条改为无来源。
+		if action_revision != turn_manager.get_context_revision():
+			return PaixiongOutcome.INVALIDATED
+		if result == HandDiscardOutcome.ACTION_INVALIDATED or result == HandDiscardOutcome.GAME_ENDED:
+			return PaixiongOutcome.INVALIDATED
+		if result == HandDiscardOutcome.STALE_SELECTION:
+			await get_tree().process_frame # 非空旧答复不是拒绝；重建当前选择。
+			continue
+		if result == HandDiscardOutcome.DECLINED:
+			_update_debug("%s 发动【拍胸脯】！%s 选择不弃牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+			_sync_all_ui()
+			return PaixiongOutcome.PREVENTED
+		break # 牌在等待中耗尽，已无法支付。
+	if _game_over or not victim.is_alive():
+		return PaixiongOutcome.INVALIDATED
+	if source.is_dead():
+		return PaixiongOutcome.NOT_USED
+	if action_revision != turn_manager.get_context_revision():
+		return PaixiongOutcome.INVALIDATED
+	_update_debug("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
 	_sync_all_ui()
-	return true
+	return PaixiongOutcome.PREVENTED
 
 # 玩家0 的【拍胸脯】发动确认弹窗
 func _show_paixiong_prompt(source_name: String) -> bool:
