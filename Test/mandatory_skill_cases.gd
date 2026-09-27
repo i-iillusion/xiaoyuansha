@@ -78,6 +78,7 @@ func run(host):
 	check(target.hp == 7, "支付一张后整次三点伤害正常造成")
 
 	await check_paixiong_result_boundaries(actor, target)
+	await check_paid_rps_context(actor, target, second)
 
 	await check_selection_recovery(actor, target)
 	await check_context_invalidation(actor, target)
@@ -148,6 +149,64 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	chain.skip_response = true
 	await chain.start()
 	check(chain.is_cancelled and not chain.damage.committed and target.hp == 10, "等待期间无法支付时防止整次伤害")
+
+func check_paid_rps_context(actor: Player, target: Player, second: Player):
+	# 双方已付费后，第一名出拳者的旧回合答复不应继续询问对手。
+	reset_case()
+	actor.general_name = "杰基·斯特朗"
+	actor.hand.append(null)
+	var retained = CardBase.create(CardData.CardSubType.PEACH)
+	target.determined_cards.append(retained)
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
+	var choices: Array = []
+	game._rps_override = func(p):
+		choices.append(p)
+		game.turn_manager.current_phase = TurnManager.Phase.END
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		return 0
+	await game._execute_campus_dominator(actor, target)
+	check(choices == [actor] and actor.hp == 10 and target.hp == 10, "校园霸主已付费后旧出拳不继续问对手或造成伤害")
+	check(actor.hand_size() == 0 and target.hand_size() == 0 and game.deck._discard == [retained], "旧拼点中止不回滚已付双方费用或复制原牌")
+
+	# 下一次合法发动不受旧拼点污染。
+	actor.hand.append(null)
+	target.hand.append(null)
+	game._rps_override = func(p): return 0 if p == actor else 2
+	await game._execute_campus_dominator(actor, target)
+	check(target.hp == 9 and actor.hand_size() == 0 and target.hand_size() == 0, "旧校园霸主中止后下一次合法拼点仍可结算")
+
+	# 默认平局须重猜；重猜期间行动者离开又恢复则旧拼点停止。
+	reset_case()
+	actor.general_name = "杰基·斯特朗"
+	actor.hand.append(null)
+	target.hand.append(null)
+	choices.clear()
+	game._rps_override = func(p):
+		choices.append(p)
+		if choices.size() == 3:
+			game.turn_manager.current_player_idx = 1
+			game.turn_manager.current_player_idx = 0
+		return 0
+	await game._execute_campus_dominator(actor, target)
+	check(choices == [actor, target, actor] and actor.hp == 10 and target.hp == 10, "校园霸主平局重猜时旧行动者答复不继续结算")
+	check(actor.hand_size() == 0 and target.hand_size() == 0, "平局重猜中止仍保留双方已付费用")
+
+	# 装逼所有人已付费；第二人出拳期间目标死亡，不继续下一人或计算输赢。
+	reset_case()
+	actor.general_name = "史蒂芬·彼特先斯"
+	actor.awoken = true # 此例隔离异步觉醒，另立组合回归。
+	actor.hand.append(null)
+	target.determined_cards.append(retained)
+	second.hand.append(null)
+	choices.clear()
+	game._rps_override = func(p):
+		choices.append(p)
+		if p == target:
+			target.mark_dead()
+		return 0 if p == actor else 2
+	await game._execute_zhuangbi([target, second])
+	check(choices == [actor, target] and actor.hp == 10 and second.hp == 10, "装逼目标在拼点等待时死亡，不继续其他目标或伤害")
+	check(actor.hand_size() == 0 and target.hand_size() == 0 and second.hand_size() == 0 and game.deck._discard == [retained], "已支付三方费用不回滚，具体原牌仅弃一次")
 
 func check_context_invalidation(actor: Player, target: Player):
 	for skill in ["campus", "zhuangbi"]:

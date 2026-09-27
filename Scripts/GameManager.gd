@@ -320,6 +320,7 @@ const RPS_SCISSORS = 2
 const RPS_WIN = 1
 const RPS_DRAW = 0
 const RPS_LOSE = -1
+const RPS_INVALID = 2 # 只表示异步等待后原拼点动作失效，不参与胜负。
 
 func _ready():
 	# 主菜单选择的玩法与人数（当前入口：2/3 人乱斗、5 人标准身份局）。
@@ -4248,9 +4249,15 @@ func _emit_rps_pick(overlay: ColorRect, choice: int):
 
 # 进行一次拼点（猜拳一轮）：返回发起者视角结果（RPS_WIN / RPS_DRAW / RPS_LOSE）
 # 结果只在实时日志显示（上一行），不覆盖中间提示句（当前进行）——所有拼点统一行为
-func _do_ping_dian_once(challenger: Player, opponent: Player) -> int:
+func _do_ping_dian_once(challenger: Player, opponent: Player, allowed: Callable = Callable()) -> int:
+	if allowed.is_valid() and not allowed.call():
+		return RPS_INVALID
 	var a = await _rps_choice(challenger, opponent.player_name)
+	if allowed.is_valid() and not allowed.call():
+		return RPS_INVALID
 	var b = await _rps_choice(opponent, challenger.player_name)
+	if allowed.is_valid() and not allowed.call():
+		return RPS_INVALID
 	var r = _rps_result(a, b)
 	# 猜拳常量：石头=0 / 布=1 / 剪刀=2（与按钮映射一致，勿把 names 写成 剪刀/布 顺序）
 	var names = ["石头", "布", "剪刀"]
@@ -4268,12 +4275,20 @@ func _do_ping_dian_once(challenger: Player, opponent: Player) -> int:
 	return r
 
 # 进行拼点（平局后继续，直到分出胜负）：返回发起者视角结果（RPS_WIN / RPS_LOSE）
-func _do_ping_dian(challenger: Player, opponent: Player) -> int:
-	var r = await _do_ping_dian_once(challenger, opponent)
+func _do_ping_dian(challenger: Player, opponent: Player, allowed: Callable = Callable()) -> int:
+	var r = await _do_ping_dian_once(challenger, opponent, allowed)
 	while r == RPS_DRAW:
 		_update_debug("平局，继续拼点！")
-		r = await _do_ping_dian_once(challenger, opponent)
+		r = await _do_ping_dian_once(challenger, opponent, allowed)
 	return r
+
+# 已支付费用不回滚；旧阶段/行动者或死去的目标不能继续拼点及其技能伤害。
+func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool:
+	return not _game_over and revision == turn_manager.get_context_revision() \
+		and turn_manager.current_phase == TurnManager.Phase.PLAY \
+		and turn_manager.current_player_idx >= 0 and turn_manager.current_player_idx < players.size() \
+		and players[turn_manager.current_player_idx] == actor \
+		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target)))
 
 # ============================
 #  【是~啊~】锦囊白嫖（安普提·斯丢皮得）
@@ -4870,6 +4885,7 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	var p = players[0]
 	if p.general_name != "史蒂芬·彼特先斯" or not p.is_alive():
 		return
+	var revision = turn_manager.get_context_revision()
 	# 过滤：当前无手牌的目标剔除（选择时已保证，执行时防变化）
 	var valid: Array[Player] = []
 	for t in targets:
@@ -4886,10 +4902,14 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	if not await _select_hand_discard(p, 1, true, func():
 		return p.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
 		return
+	if not _paid_skill_rps_valid(p, valid[0], revision):
+		return
 	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
 	for t in valid:
 		if not await _select_hand_discard(t, 1, true, func():
 			return p.is_alive() and t.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+			return
+		if not _paid_skill_rps_valid(p, t, revision):
 			return
 	_update_debug("各目标弃置一张手牌，依次与 %s 拼点！" % p.player_name)
 	_sync_all_ui()
@@ -4899,7 +4919,11 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	var losses := 0
 	var losers: Array[Player] = []  # 输给 p 的目标
 	for t in valid:
-		var r = await _do_ping_dian(p, t)
+		if not _paid_skill_rps_valid(p, t, revision):
+			return
+		var r = await _do_ping_dian(p, t, func(): return _paid_skill_rps_valid(p, t, revision))
+		if r == RPS_INVALID:
+			return
 		if r == RPS_WIN:
 			wins += 1
 			losers.append(t)
@@ -4928,13 +4952,13 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		if not p.is_alive():
 			break  # 自己已死（如荆棘反伤），不再继续
 	# 赢了一半及以上 → 可以再次使用此技能
-	if p.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY:
+	if _paid_skill_rps_valid(p, null, revision):
 		var again = false
 		if _zhuangbi_again_override.is_valid():
 			again = _zhuangbi_again_override.call()
 		else:
 			again = await _show_zhuangbi_again_prompt()
-		if again:
+		if again and _paid_skill_rps_valid(p, null, revision):
 			_start_zhuangbi_mode()  # 重新进入选择模式
 
 # 装逼输局：立即进入弃牌阶段（清理选择状态）
@@ -5019,6 +5043,7 @@ func _on_campus_target_click(target: Player):
 func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if p.general_name != "杰基·斯特朗" or not p.is_alive():
 		return
+	var revision = turn_manager.get_context_revision()
 	if not target.is_alive() or target.hand_size() <= 0:
 		_update_debug("目标没有手牌，【校园霸主】未发动")
 		return
@@ -5029,14 +5054,20 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if not await _select_hand_discard(p, 1, true, func():
 		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
 		return
+	if not _paid_skill_rps_valid(p, target, revision):
+		return
 	if not await _select_hand_discard(target, 1, true, func():
 		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+		return
+	if not _paid_skill_rps_valid(p, target, revision):
 		return
 	_update_debug("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
 
 	# 进行拼点（平局继续直到分出胜负）
-	var r = await _do_ping_dian(p, target)
+	var r = await _do_ping_dian(p, target, func(): return _paid_skill_rps_valid(p, target, revision))
+	if r == RPS_INVALID:
+		return
 	if r == RPS_WIN:
 		_update_debug("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
