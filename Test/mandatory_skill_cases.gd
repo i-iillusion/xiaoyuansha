@@ -38,6 +38,10 @@ func run(host):
 	reset_case()
 	var second = game.players[2]
 	actor.general_name = "史蒂芬·彼特先斯"
+	# 本例只验证装逼支付；使用已觉醒角色，避免空手时排入延迟觉醒，
+	# 在后续案例让出帧后给已 reset 的同一 Player 补牌、污染跨例断言。
+	actor.awoken = true
+	actor.awake_choice = 1
 	actor.hand.append(null)
 	target.hand.append(null)
 	second.hand.append(null)
