@@ -4940,6 +4940,12 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	var losses := 0
 	var losers: Array[Player] = []  # 输给 p 的目标
 	for t in valid:
+		if not _paid_skill_rps_valid(p, null, revision):
+			return
+		# 已付费但在轮到出拳前最终死亡的目标不参与此次拼点；
+		# 保留此前胜负，继续后续目标，费用不返还。
+		if t.is_dead():
+			continue
 		if not _paid_skill_rps_valid(p, t, revision):
 			return
 		var r = await _do_ping_dian(p, t, func(): return _paid_skill_rps_valid(p, t, revision))
@@ -4951,7 +4957,9 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		else:
 			losses += 1
 
-	var n = valid.size()
+	var n = wins + losses  # 已实际参与拼点的人数，不含跳过的死者
+	if n == 0:
+		return
 	if wins == losses:
 		_zhuangbi_blocked_this_phase = true
 		_update_debug("【装逼】胜负各半：既不成功也不失败，不造成伤害；本出牌阶段不能再发动")

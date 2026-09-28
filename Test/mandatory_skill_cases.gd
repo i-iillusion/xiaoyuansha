@@ -15,6 +15,7 @@ func reset_case():
 	game._zhuangbi_again_override = Callable()
 	game._paixiong_override = Callable()
 	game._awaken_pick_override = Callable()
+	game._zhuangbi_blocked_this_phase = false
 
 func run(host):
 	suite = host
@@ -80,6 +81,7 @@ func run(host):
 
 	await check_paixiong_result_boundaries(actor, target)
 	await check_paid_rps_context(actor, target, second)
+	await check_zhuangbi_skipped_dead_target(actor, target, second)
 	await check_zhuangbi_last_card_awaken(actor, target)
 
 	await check_selection_recovery(actor, target)
@@ -303,6 +305,60 @@ func check_paid_rps_context(actor: Player, target: Player, second: Player):
 	await game._execute_zhuangbi([target, second])
 	check(choices == [actor, target] and actor.hp == 10 and second.hp == 10, "装逼目标在拼点等待时死亡，不继续其他目标或伤害")
 	check(actor.hand_size() == 0 and target.hand_size() == 0 and second.hand_size() == 0 and game.deck._discard == [retained], "已支付三方费用不回滚，具体原牌仅弃一次")
+
+func check_zhuangbi_skipped_dead_target(actor: Player, target: Player, second: Player):
+	var third = game.players[3]
+	for use_concrete in [false, true]:
+		reset_case()
+		actor.general_name = "史蒂芬·彼特先斯"
+		actor.awoken = true
+		actor.hand.append(null)
+		actor.hand.append(null)
+		var retained: CardBase = null
+		if use_concrete:
+			retained = CardBase.create(CardData.CardSubType.PEACH)
+			target.determined_cards.append(retained)
+		else:
+			target.hand.append(null)
+		second.hand.append(null)
+		third.hand.append(null)
+		third.hand.append(null)
+		var choices: Array = []
+		game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
+		game._rps_override = func(p):
+			choices.append(p)
+			if p == target:
+				# 已完成第一组拼点；下一目标最终死亡，另一目标剩余手牌也独立离开。
+				second.mark_dead()
+				third.hand.clear()
+			return 0 if p == actor else 2
+		game._zhuangbi_again_override = func(): return false
+		await game._execute_zhuangbi([target, second, third])
+		check(choices == [actor, target, actor, third], "待出拳目标最终死亡后跳过，后续零手牌目标仍拼点")
+		check(target.hp == 9 and third.hp == 9 and second.hp == 10, "保留前一胜并结算后续胜；死者不受技能伤害")
+		check(actor.hand_size() == 1 and target.hand_size() == 0 and second.hand_size() == 0 and third.hand_size() == 0,
+			"多方已付费用不返还，独立手牌变化不重复收费")
+		check(game.deck._discard == ([retained] if use_concrete else []), "任意牌不虚构实体，具体原牌只弃一次")
+
+	# 一名目标跳过后，仅已实际拼点者进入过半门槛。
+	reset_case()
+	actor.general_name = "史蒂芬·彼特先斯"
+	actor.awoken = true
+	actor.hand.append(null)
+	target.hand.append(null)
+	second.hand.append(null)
+	var later_choices: Array = []
+	game._rps_override = func(p):
+		later_choices.append(p)
+		if p == target:
+			second.mark_dead()
+		return 0 if p == actor else 2
+	game._zhuangbi_again_override = func(): return false
+	await game._execute_zhuangbi([target, second])
+	check(later_choices == [actor, target] and target.hp == 9 and second.hp == 10,
+		"两目标一人最终死亡：一次实际拼点胜利即成功，不误判胜负各半")
+	check(not game._zhuangbi_blocked_this_phase and actor.hand_size() == 0 and second.hand_size() == 0,
+		"跳过死者不封锁再次发动资格，已付费用不返还")
 
 func check_context_invalidation(actor: Player, target: Player):
 	for skill in ["campus", "zhuangbi"]:
