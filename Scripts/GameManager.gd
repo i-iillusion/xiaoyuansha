@@ -7462,19 +7462,24 @@ func _show_toast(msg: String):
 
 func _sync_all_ui():
 	# 【觉醒】（史蒂芬·彼特先斯）：手牌为 0 时立即自动觉醒（觉醒技）
+	print("A01e trace sync enter: ", players[0].general_name, " hand=", players[0].hand_size())
 	_check_awaken_trigger()
+	print("A01e trace sync awake check done")
 	_update_player_panel(_self_info_panel, players[0])
+	print("A01e trace sync self panel done")
 
 	for i in range(4):
 		var seat = i + 1
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])
+			print("A01e trace sync other panel done: ", seat)
 
 	var my_turn = (turn_manager.current_player_idx == 0)
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
 		_play_btn.disabled = ((players[0].hand_size() <= 0 and players[0].determined_cards.is_empty()) or _is_kneeling(players[0]))
 	else:
 		_play_btn.disabled = true
+	print("A01e trace sync done")
 
 func _process(delta: float):
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
