@@ -123,6 +123,7 @@ func run(host):
 	game._calamity_target_override = Callable()
 	check(target.get_equipment_card("weapon") == calamity and source.get_weapon() == -1, "灾厄剑向目标转移同一对象")
 	check(game.deck._discard.count(replaced_weapon) == 1, "灾厄剑顶掉的旧武器原实例弃置一次")
+	await check_calamity_transfer_ownership()
 
 	suite.reset_players()
 	game.deck._discard.clear()
@@ -198,3 +199,70 @@ func run(host):
 		player.hidden_equip_slot = ""
 		player.mount_plus = 0
 		player.mount_minus = 0
+
+func check_calamity_transfer_ownership():
+	# DEV-B01c-1：等待目标选择期间，原牌可能已离开或来源改装；不可因此丢弃目标装备。
+	for is_weapon in [true, false]:
+		var slot = "weapon" if is_weapon else "armor"
+		var original_sub = CardData.CardSubType.CALAMITY_SWORD if is_weapon else CardData.CardSubType.CALAMITY_ROBE
+		var replacement_sub = CardData.CardSubType.QINGLONG_BLADE if is_weapon else CardData.CardSubType.RENWANG_DUN
+		var target_sub = CardData.CardSubType.GUDING_BLADE if is_weapon else CardData.CardSubType.QIXING_PAO
+		var label = "灾厄剑" if is_weapon else "灾厄袍"
+		var source = game.players[1]
+		var target = game.players[2]
+
+		suite.reset_players()
+		game.deck._discard.clear()
+		var original = CardBase.create(original_sub)
+		var target_card = CardBase.create(target_sub)
+		source.equip_card_to_slot(slot, original)
+		target.equip_card_to_slot(slot, target_card)
+		if is_weapon:
+			game._calamity_target_override = func(): return "cancel"
+			await game._try_calamity_transfer(source)
+			game._calamity_target_override = Callable()
+		else:
+			game._calamity_robe_target_override = func(): return "cancel"
+			await game._try_calamity_robe_transfer(source)
+			game._calamity_robe_target_override = Callable()
+		check(source.get_equipment_card(slot) == original and target.get_equipment_card(slot) == target_card
+			and game.deck._discard.is_empty(), label + "取消时双方装备原对象不动")
+
+		# 旧目标答复到达前，来源原牌进入已确定手牌、同槽换上另一件装备。
+		var replacement = CardBase.create(replacement_sub)
+		var move_source = func():
+			var moved = source.remove_equipment(slot)
+			source.determined_cards.append(moved)
+			source.equip_card_to_slot(slot, replacement)
+			return target
+		if is_weapon:
+			game._calamity_target_override = move_source
+			await game._try_calamity_transfer(source)
+			game._calamity_target_override = Callable()
+		else:
+			game._calamity_robe_target_override = move_source
+			await game._try_calamity_robe_transfer(source)
+			game._calamity_robe_target_override = Callable()
+		check(source.get_equipment_card(slot) == replacement and source.determined_cards == [original],
+			label + "原牌离区后不转走后来换上的装备")
+		check(target.get_equipment_card(slot) == target_card and game.deck._discard.is_empty(),
+			label + "过期目标答复不弃目标原装备或制造弃牌")
+
+		# 下一次合法转移仍沿同一原实例正常执行，目标旧牌只弃一次。
+		suite.reset_players()
+		game.deck._discard.clear()
+		original = CardBase.create(original_sub)
+		target_card = CardBase.create(target_sub)
+		source.equip_card_to_slot(slot, original)
+		target.equip_card_to_slot(slot, target_card)
+		if is_weapon:
+			game._calamity_target_override = func(): return target
+			await game._try_calamity_transfer(source)
+			game._calamity_target_override = Callable()
+		else:
+			game._calamity_robe_target_override = func(): return target
+			await game._try_calamity_robe_transfer(source)
+			game._calamity_robe_target_override = Callable()
+		check(target.get_equipment_card(slot) == original and source.get_equipment_card(slot) == null,
+			label + "下一次合法转移保持原对象且来源不再持有")
+		check(game.deck._discard == [target_card], label + "目标旧装备只入弃牌堆一次")

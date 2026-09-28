@@ -5893,11 +5893,18 @@ func _try_calamity_transfer(source: Player):
 		return
 	if source.get_weapon() != CardData.CardSubType.CALAMITY_SWORD:
 		return
+	var original_card = source.get_equipment_card("weapon")
+	if original_card == null:
+		return
 	var target = await _ask_calamity_target(source)
 	if target == null:
 		_update_debug("%s 放弃转移【灾厄剑】" % source.player_name)
 		return
-	if target == source or not target.is_alive():
+	if _game_over or not source.is_alive() or target == source or not target.is_alive():
+		return
+	# 等待目标选择期间若原剑离区或同槽换牌，不得先弃掉目标原装备。
+	if source.equipment.get("weapon", -1) != CardData.CardSubType.CALAMITY_SWORD \
+			or source.equipment_cards.get("weapon", null) != original_card:
 		return
 	# 目标武器槽：已有武器则替换（旧武器进弃牌堆）
 	if target.equipment.has("weapon"):
@@ -5994,11 +6001,18 @@ func _try_calamity_robe_transfer(victim: Player):
 		return
 	if victim.get_armor() != CardData.CardSubType.CALAMITY_ROBE:
 		return
+	var original_card = victim.get_equipment_card("armor")
+	if original_card == null:
+		return
 	var target = await _ask_calamity_robe_target(victim)
 	if target == null:
 		_update_debug("%s 放弃转移【灾厄袍】" % victim.player_name)
 		return
-	if target == victim or not target.is_alive():
+	if _game_over or not victim.is_alive() or target == victim or not target.is_alive():
+		return
+	# 同一原袍仍在来源装备区，才允许替换目标现有防具。
+	if victim.equipment.get("armor", -1) != CardData.CardSubType.CALAMITY_ROBE \
+			or victim.equipment_cards.get("armor", null) != original_card:
 		return
 	# 目标防具槽：已有防具则替换（旧防具进弃牌堆）
 	if target.equipment.has("armor"):
