@@ -2297,6 +2297,10 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if slots.is_empty():
 		_update_debug("目标没有装备牌")
 		return
+	# 选槽弹窗可能等待其他动作；记录当时各槽实体，而不是仅记类型。
+	var offered_cards := {}
+	for offered_slot in slots:
+		offered_cards[offered_slot] = target.get_equipment_card(offered_slot)
 
 	var slot: String
 	if attacker.seat_index == 0:
@@ -2307,14 +2311,18 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	else:
 		slot = slots[randi() % slots.size()]
 
-	if not target.equipment.has(slot):
+	if _game_over or target.is_dead() or not slots.has(slot) or not target.equipment.has(slot):
+		return
+	var selected_card: CardBase = offered_cards.get(slot, null)
+	if selected_card != null and target.equipment_cards.get(slot, null) != selected_card:
 		return
 	var sub = target.equipment[slot]
 	# 【烈火盾】：可流失 1 点体力代替失去这件装备
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了【%s】！" % [target.player_name, CardData.get_type_name(sub)])
 		return
-	if target.is_dead() or target.equipment.get(slot, -1) != sub:
+	if _game_over or target.is_dead() or target.equipment.get(slot, -1) != sub \
+			or (selected_card != null and target.equipment_cards.get(slot, null) != selected_card):
 		return
 	# 【贤者的加护】标记跟随装备：被顺手牵羊时标记/激活状态一并转移给新持有者（被拆/卸甲进弃牌堆则清空）
 	var sage_transfer := false

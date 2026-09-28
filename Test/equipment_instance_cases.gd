@@ -101,6 +101,7 @@ func run(host):
 	game._equip_pick_override = Callable()
 	check(attacker.determined_cards == [stolen] and victim.get_armor() == -1, "顺手牵羊获得装备原实例")
 	check(stolen.source_seat == 7 and game.deck._discard.is_empty(), "偷取装备保留来源且不误入弃牌堆")
+	await check_equip_pick_ownership()
 
 	var first_weapon = CardBase.create(CardData.CardSubType.LIANNU)
 	var second_weapon = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
@@ -330,3 +331,47 @@ func check_mule_transfer_ownership():
 			label + "下一次合法满槽转移只保留一个原牌所有者")
 		check(game.deck._discard == [target_card] and target.mount_count() == 4 and target.mount_plus == 0,
 			label + "满槽转移只弃目标旧牌并同步计数")
+
+func check_equip_pick_ownership():
+	# DEV-B01c-3：拆/顺选中装备槽后，不把等待中换上的同名实体当成原目标。
+	for is_snatch in [true, false]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		var attacker = game.players[0]
+		var target = game.players[1]
+		var label = "顺手牵羊" if is_snatch else "过河拆桥"
+		var original = CardBase.create(CardData.CardSubType.QIXING_PAO)
+		original.source_seat = 3
+		var replacement = CardBase.create(CardData.CardSubType.QIXING_PAO)
+		replacement.source_seat = 4
+		target.equip_card_to_slot("armor", original)
+
+		game._equip_pick_override = func(): return "cancel"
+		await game._steal_equip(attacker, target, is_snatch, label)
+		game._equip_pick_override = Callable()
+		check(target.get_equipment_card("armor") == original and attacker.determined_cards.is_empty()
+			and game.deck._discard.is_empty(), label + "取消选装备不移动原对象")
+
+		var replace_during_pick = func():
+			target.determined_cards.append(target.remove_equipment("armor"))
+			target.equip_card_to_slot("armor", replacement)
+			return "armor"
+		game._equip_pick_override = replace_during_pick
+		await game._steal_equip(attacker, target, is_snatch, label)
+		game._equip_pick_override = Callable()
+		check(target.get_equipment_card("armor") == replacement and target.determined_cards == [original],
+			label + "旧装备离槽后不处理同名后来者")
+		check(attacker.determined_cards.is_empty() and game.deck._discard.is_empty(),
+			label + "过期槽位答复不错误转移或弃牌")
+
+		game._equip_pick_override = func(): return "armor"
+		await game._steal_equip(attacker, target, is_snatch, label)
+		game._equip_pick_override = Callable()
+		check(target.get_equipment_card("armor") == null and target.determined_cards == [original],
+			label + "下一次合法选择移出当前装备且保留旧原牌")
+		if is_snatch:
+			check(attacker.determined_cards == [replacement] and game.deck._discard.is_empty(),
+				"顺手牵羊只获得当次选中的原对象")
+		else:
+			check(attacker.determined_cards.is_empty() and game.deck._discard == [replacement],
+				"过河拆桥只弃当次选中的原对象一次")
