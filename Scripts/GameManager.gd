@@ -3425,7 +3425,8 @@ func _ask_nullification_round(desc: String) -> String:
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
-			await _maybe_ask_reveal()
+			if _reveal_ask_pending and not _game_over:
+				await _maybe_ask_reveal()
 			return p.player_name
 	return ""
 
@@ -4018,19 +4019,15 @@ func _show_kaiwen_prompt(opponent_name: String, is_receive: bool) -> bool:
 func _deal_damage(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Player:
 	if target == null or target.is_dead() or amount <= 0:
 		return target
-	print("A01e trace damage enter: ", source.general_name if source != null else "none", " -> ", target.general_name)
 	var chain = _new_damage_chain(source, target, null, amount, element)
 	chain.skip_targeting = true
 	chain.skip_response = true
 	await chain.start()
-	print("A01e trace chain done")
 	await _finish_damage_chain(chain)
-	print("A01e trace finish done")
 	if chain.damage.committed:
 		await _try_calamity_transfer(chain.source_player)
-	print("A01e trace calamity done")
-	await _maybe_ask_reveal()
-	print("A01e trace reveal done")
+	if _reveal_ask_pending and not _game_over:
+		await _maybe_ask_reveal()
 	return chain.target_player
 
 func _trigger_pofeng(source: Player, amount: int):
@@ -4515,14 +4512,11 @@ func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）
 func _maybe_ask_reveal() -> void:
-	print("A01e trace reveal entry: pending=", _reveal_ask_pending, " owner=", players[0].general_name)
 	if _game_over or not _reveal_ask_pending:
-		print("A01e trace reveal early no pending")
 		return
 	_reveal_ask_pending = false
 	var owner = players[0]
 	if owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
-		print("A01e trace reveal early other general")
 		return
 	if not owner.has_hidden_equip():
 		return
@@ -7132,7 +7126,8 @@ func _on_selector_confirmed(sub: CardData.CardSubType):
 	_reveal_ask_pending = true
 	await play_card(sub)
 	# 【苕】任意玩家行动后询问是否明置
-	await _maybe_ask_reveal()
+	if _reveal_ask_pending and not _game_over:
+		await _maybe_ask_reveal()
 
 func _on_selector_cancelled():
 	_update_debug("取消出牌")
@@ -7150,7 +7145,8 @@ func _on_determined_card_clicked(card: CardBase):
 	# 目标选择期间继续保留原对象；即时牌、非法牌和完成结算均在这里收口残留状态。
 	if not _is_targeting and not _is_multi_targeting and not _is_iron_chain_targeting:
 		_clear_pending_determined_card()
-	await _maybe_ask_reveal()
+	if _reveal_ask_pending and not _game_over:
+		await _maybe_ask_reveal()
 
 # ============================
 #  玩家面板点击 → 目标选择 or 详情
@@ -7289,7 +7285,8 @@ func _on_target_click(target: Player):
 	_clear_pending_determined_card()
 	_targeting_card_sub = -1
 	# 【苕】任意玩家行动后询问是否明置
-	await _maybe_ask_reveal()
+	if _reveal_ask_pending and not _game_over:
+		await _maybe_ask_reveal()
 	# 恢复出牌按钮
 	_play_btn.visible = true
 	_end_play_btn.visible = true
