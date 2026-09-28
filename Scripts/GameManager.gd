@@ -224,6 +224,7 @@ var _yes_ah_override: Callable = Callable()
 var _sao_type_override: Callable = Callable()
 var _sao_reveal_override: Callable = Callable()
 var _sao_reveal_sub_override: Callable = Callable()
+var _sao_transfer_declare_override: Callable = Callable()  # 测试钩子：暗置装备离区后由原持有者声明
 var _sao_menu_override: Callable = Callable()
 
 # 【是~啊~】本张锦囊是否已激活技能（激活后消耗手牌改为流失体力）
@@ -2401,9 +2402,6 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card:
 		return
 	var sub = target.equipment[slot]
-	# 顺走暗置须由原持有者声明；窗口尚未迁移前不能无声明地移进已确定手牌。
-	if is_snatch and sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
-		return
 	# 【烈火盾】：可流失 1 点体力代替失去这件装备
 	if await _maybe_liehuo_save(target):
 		_update_debug("%s 的【烈火盾】保住了【%s】！" % [target.player_name, CardData.get_type_name(sub)])
@@ -2424,6 +2422,8 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		return
 	if is_snatch:
 		attacker.determined_cards.append(equipment_card)
+		if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
+			await _declare_stolen_hidden_equipment(target, attacker, equipment_card)
 		if sage_transfer:
 			attacker.sage_tokens = sage_tokens_save
 			attacker.sage_activated = sage_activated_save
@@ -2433,6 +2433,61 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	else:
 		deck.discard(equipment_card)
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
+
+# E-03：暗置装备被顺走后，原持有者声明；无可用名称仍以原对象暗置在新持有者手中。
+func _hidden_declaration_options(card: CardBase) -> Array[int]:
+	var options: Array[int] = []
+	match card.hidden_category:
+		"weapon":
+			for sub in SAO_WEAPON_SUBS:
+				if not equipment_pool.is_claimed(sub):
+					options.append(sub)
+		"armor":
+			for sub in SAO_ARMOR_SUBS:
+				if not equipment_pool.is_claimed(sub):
+					options.append(sub)
+		"mount":
+			options.append_array(SAO_MOUNT_SUBS)
+	if card.hidden_original_sub_type >= 0:
+		for i in range(options.size() - 1, -1, -1):
+			if options[i] != card.hidden_original_sub_type:
+				options.remove_at(i)
+	return options
+
+func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player, card: CardBase) -> void:
+	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
+			or not recipient.determined_cards.has(card):
+		return
+	var options = _hidden_declaration_options(card)
+	if options.is_empty():
+		_update_debug("暗置装备无可声明名称，仍保持暗置")
+		return
+	var chosen: int = -1
+	if _sao_transfer_declare_override.is_valid():
+		chosen = _sao_transfer_declare_override.call()
+	elif original_holder.seat_index == 0:
+		var names: Array = []
+		for sub in options:
+			names.append(CardData.get_type_name(sub))
+		var idx = await _show_sao_reveal_picker(names)
+		if idx >= 0 and idx < options.size():
+			chosen = options[idx]
+	else:
+		# AI 的确定性声明策略；不改变人类玩家的名称选择。
+		chosen = options[0]
+	if _game_over or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
+			or not recipient.determined_cards.has(card) \
+			or not options.has(chosen) or not _hidden_declaration_options(card).has(chosen):
+		return
+	card.sub_type = chosen
+	card.card_name = CardData.get_type_name(chosen)
+	card.description = CardData.CARD_DESCRIPTIONS.get(chosen, "")
+	card.hidden_category = ""
+	card.hidden_original_sub_type = -1
+	if chosen != CardData.CardSubType.MOUNT_PLUS and chosen != CardData.CardSubType.MOUNT_MINUS \
+			and chosen != CardData.CardSubType.MULE_PLUS and chosen != CardData.CardSubType.MULE_MINUS:
+		equipment_pool.claim(chosen)
+	_update_debug("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
 func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String):
