@@ -2287,13 +2287,18 @@ func _play_disarm():
 
 		var removed_count = 0
 		for slot in slots:
+			var offered_card = _equipment_resource_for_pick(target, slot)
+			if offered_card == null:
+				continue
 			# 【烈火盾】：可流失 1 点体力代替失去这件装备
 			if await _maybe_liehuo_save(target):
 				continue
+			if _game_over or target.is_dead() or _equipment_resource_for_pick(target, slot) != offered_card:
+				continue
 			var removed_card = target.remove_equipment(slot)
-			if removed_card != null:
+			if removed_card == offered_card:
 				deck.discard(removed_card)
-			removed_count += 1
+				removed_count += 1
 		if removed_count > 0:
 			_draw_blank_cards(target, removed_count)
 		_update_debug("%s 弃置 %d 件装备，摸 %d 张牌（手牌 %d 张）" % [target.player_name, removed_count, removed_count, target.hand_size()])
@@ -6937,7 +6942,7 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 		cards.clear()
 	for slot in p.get_equip_slots():
 		var equipment_card = p.remove_equipment(slot)
-		# 暗置占位是假牌，remove_equipment 会返回 null。
+		# 暗置装备也有原牌资源；最终死亡/惩罚弃置时保持暗置，不凭空明置。
 		if equipment_card != null:
 			deck.discard(equipment_card)
 	if include_judgment:

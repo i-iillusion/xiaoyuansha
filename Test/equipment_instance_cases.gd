@@ -201,6 +201,7 @@ func run(host):
 	await check_first_sao_hide_resource()
 	await check_hidden_dismantle_resource()
 	await check_hidden_snatch_declaration()
+	await check_hidden_death_and_disarm()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -723,4 +724,73 @@ func check_hidden_snatch_declaration():
 	game._sao_transfer_declare_override = Callable()
 	game._equip_pick_override = Callable()
 	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_hidden_death_and_disarm():
+	# DEV-B02b-3：真实卸甲入口按实际弃置件数摸牌；最终死亡清理仍弃暗置原对象。
+	var previous_phase = game.turn_manager.current_phase
+	for concrete in [false, true]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game.turn_manager.disarm_count_this_turn = 0
+		var actor = game.players[0]
+		var target = game.players[1]
+		target.general_name = "安普提·斯丢皮得"
+		target.hidden_equip_slot = ""
+		target.hidden_equip_card = null
+		var original: CardBase = null
+		if concrete:
+			original = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
+			original.source_seat = 8
+			target.determined_cards.append(original)
+		else:
+			target.hand.append(null)
+		game.turn_manager.current_player_idx = 1
+		game._sao_type_override = func(): return "weapon"
+		await game._do_sao_hide(target, false)
+		game._sao_type_override = Callable()
+		var hidden = target.hidden_equip_card
+		var armor = CardBase.create(CardData.CardSubType.RENWANG_DUN)
+		check(target.equip_card_to_slot("armor", armor), "卸甲前可装备普通防具")
+		actor.hand.append(null)
+		game.turn_manager.current_player_idx = 0
+		await game._play_disarm()
+		var label = "具体来源" if concrete else "任意来源"
+		check(target.equipment.is_empty() and target.hidden_equip_card == null
+			and game.deck._discard.count(hidden) == 1 and game.deck._discard.count(armor) == 1
+			and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+			and (hidden == original and hidden.source_seat == 8 if concrete else true),
+			label + "卸甲只弃暗置原对象一次且不明置")
+		check(target.hand_size() == 2, label + "卸甲确实弃两件才摸两张")
+		var after_first = target.hand_size()
+		await game._play_disarm()
+		check(target.hand_size() == after_first and game.deck._discard.count(hidden) == 1,
+			label + "同回合再次卸甲不重复弃或摸")
+
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		target = game.players[1]
+		target.general_name = "安普提·斯丢皮得"
+		target.hidden_equip_slot = ""
+		target.hidden_equip_card = null
+		if concrete:
+			original = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
+			original.source_seat = 9
+			target.determined_cards.append(original)
+		else:
+			target.hand.append(null)
+		game.turn_manager.current_player_idx = 1
+		game._sao_type_override = func(): return "weapon"
+		await game._do_sao_hide(target, false)
+		game._sao_type_override = Callable()
+		hidden = target.hidden_equip_card
+		target.hp = 0
+		target.reset_death_state()
+		game._handle_death(target, null)
+		check(target.is_dead() and not target.has_hidden_equip() and target.hidden_equip_card == null
+			and game.deck._discard.count(hidden) == 1 and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+			and (hidden == original and hidden.source_seat == 9 if concrete else true),
+			label + "最终死亡后清暗置原牌一次，不提前明置")
 	game.turn_manager.current_phase = previous_phase
