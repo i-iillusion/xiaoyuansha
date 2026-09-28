@@ -203,6 +203,7 @@ func run(host):
 	await check_hidden_snatch_declaration()
 	await check_hidden_snatch_default_declaration()
 	await check_hidden_death_and_disarm()
+	await check_meiyong_one_empty_visible_slot()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -895,4 +896,95 @@ func check_hidden_death_and_disarm():
 			and game.deck._discard.count(hidden) == 1 and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
 			and (hidden == original and hidden.source_seat == 9 if concrete else true),
 			label + "最终死亡后清暗置原牌一次，不提前明置")
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_one_empty_visible_slot():
+	# DEV-B02b-4a：一侧空槽可接另一侧明置原牌；等待中换牌使旧选择过期。
+	var previous_phase = game.turn_manager.current_phase
+	for zone in ["weapon", "armor"]:
+		for source_is_a in [true, false]:
+			suite.reset_players()
+			game.deck._discard.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			game.turn_manager.current_player_idx = 0
+			game._lanzhonghou_used = false
+			var actor = game.players[0]
+			var a = game.players[1]
+			var b = game.players[2]
+			actor.general_name = "麦克斯·欧尼斯特"
+			actor.hand.append(null)
+			var source = a if source_is_a else b
+			var dest = b if source_is_a else a
+			var sub = CardData.CardSubType.LIANNU if zone == "weapon" else CardData.CardSubType.RENWANG_DUN
+			var card = CardBase.create(sub)
+			card.source_seat = 8
+			check(source.equip_card_to_slot(zone, card), "单边空槽前保存原装备")
+			var zones: Array = ["cancel"]
+			game._lanzhonghou_zone_override = func(): return zones.pop_front()
+			await game._run_lanzhonghou(a, b)
+			check(source.get_equipment_card(zone) == card and not dest.equipment.has(zone)
+				and actor.hand_size() == 1 and not game._lanzhonghou_used,
+				zone + "取消选对不付费、不移牌")
+			zones.assign(["weapon" if zone == "weapon" else "armor", "done"])
+			await game._run_lanzhonghou(a, b)
+			check(not source.equipment.has(zone) and dest.get_equipment_card(zone) == card
+				and card.source_seat == 8 and actor.hand_size() == 0 and game._lanzhonghou_used,
+				zone + ("A到B" if source_is_a else "B到A") + "空槽交换只移动原对象并付一张")
+			game._lanzhonghou_zone_override = Callable()
+
+	# 已确认的E-01：白银狮子移至空槽也算失去装备，原持有者回血。
+	suite.reset_players()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game.turn_manager.current_player_idx = 0
+	game._lanzhonghou_used = false
+	var actor = game.players[0]
+	var a = game.players[1]
+	var b = game.players[2]
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	a.hp = 2
+	a.max_hp = 4
+	var lion = CardBase.create(CardData.CardSubType.SILVER_LION)
+	a.equip_card_to_slot("armor", lion)
+	var zones: Array = ["armor", "done"]
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	await game._run_lanzhonghou(a, b)
+	check(a.hp == 3 and b.get_equipment_card("armor") == lion and not a.equipment.has("armor"),
+		"白银狮子交换至空槽时原持有者回血且原对象只在新槽")
+	game._lanzhonghou_zone_override = Callable()
+
+	# 选择后、支付前同槽换上另一张合法牌：旧答复不支付、不动后来者，随后可重新选择。
+	suite.reset_players()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game.turn_manager.current_player_idx = 0
+	game._lanzhonghou_used = false
+	actor = game.players[0]
+	a = game.players[1]
+	b = game.players[2]
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	var first = CardBase.create(CardData.CardSubType.LIANNU)
+	var later = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
+	a.equip_card_to_slot("weapon", first)
+	zones.assign(["weapon", "done"])
+	game._lanzhonghou_zone_override = func():
+		var choice = zones.pop_front()
+		if choice == "done":
+			a.determined_cards.append(a.remove_equipment("weapon"))
+			a.equip_card_to_slot("weapon", later)
+		return choice
+	await game._run_lanzhonghou(a, b)
+	check(a.get_equipment_card("weapon") == later and b.get_weapon() == -1
+		and a.determined_cards == [first] and actor.hand_size() == 1
+		and not game._lanzhonghou_used and game.deck._discard.is_empty(),
+		"空槽交换旧选择遇同槽换原对象，不误移后来者或付费")
+	zones.assign(["weapon", "done"])
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	await game._run_lanzhonghou(a, b)
+	check(not a.equipment.has("weapon") and b.get_equipment_card("weapon") == later
+		and actor.hand_size() == 0 and game._lanzhonghou_used,
+		"过期选择后下一次有效空槽交换可正常执行")
+	game._lanzhonghou_zone_override = Callable()
 	game.turn_manager.current_phase = previous_phase

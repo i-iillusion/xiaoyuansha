@@ -5569,7 +5569,7 @@ func _show_gay_x_picker(max_x: int) -> int:
 # ============================
 #  【烂忠厚】麦克斯·欧尼斯特：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域
 #  X = 选择的区域类别数（武器/防具/坐骑各最多一次）；坐骑可跨槽位交换（A的坐骑1 ↔ B的坐骑2）
-#  规则：某一方区域为空或为暗置装备 → 装备直接归还，不交换；坐骑只能选有装备的槽位
+#  当前已接入明置武器/防具与单侧空槽；暗置及空坐骑槽另分子项。
 # ============================
 
 # 详情弹窗技能点击：进入两名角色选择模式（与【装逼】等主动技能一致）
@@ -5649,7 +5649,8 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			break
 		match zone:
 			"weapon", "armor":
-				_lanzhonghou_pending.append({"zone": zone, "a": a, "slot_a": zone, "b": b, "slot_b": zone, "ok": true})
+				_lanzhonghou_pending.append({"zone": zone, "a": a, "slot_a": zone, "b": b, "slot_b": zone,
+					"card_a": _equipment_resource_for_pick(a, zone), "card_b": _equipment_resource_for_pick(b, zone), "ok": true})
 			"mount":
 				# 坐骑最多 4 对（防御：UI 已禁用，直调时也拦）
 				if _lanzhonghou_count(_lanzhonghou_pending, "mount") >= 4:
@@ -5686,6 +5687,11 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 	if x <= 0:
 		_update_debug("没有选择任何区域，取消【烂忠厚】")
 		return
+	for entry in _lanzhonghou_pending:
+		if entry.has("card_a") and (_equipment_resource_for_pick(entry.a, entry.slot_a) != entry.card_a \
+				or _equipment_resource_for_pick(entry.b, entry.slot_b) != entry.card_b):
+			_lanzhonghou_pending.clear()
+			return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
 	var valid = func():
 		return a.is_alive() and b.is_alive() and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
@@ -5698,6 +5704,9 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		if not entry.ok:
 			var zone_name = "武器" if entry.zone == "weapon" else ("护甲" if entry.zone == "armor" else "坐骑")
 			_update_debug("%s 区域：一方没有装备（或为暗置装备），装备直接归还，不交换" % zone_name)
+			continue
+		if entry.has("card_a") and (_equipment_resource_for_pick(entry.a, entry.slot_a) != entry.card_a \
+				or _equipment_resource_for_pick(entry.b, entry.slot_b) != entry.card_b):
 			continue
 		if _swap_equip_slot(entry.a, entry.slot_a, entry.b, entry.slot_b):
 			swapped += 1
@@ -5872,15 +5881,38 @@ func _emit_lanzhonghou_mount(overlay: ColorRect, slot: String):
 	_lanzhonghou_mount_result.emit(slot)
 
 # 交换两名角色指定槽位的装备（武器/防具同槽位；坐骑可跨槽位）
-# 规则：任一侧槽位无装备或为暗置装备 → 不交换（装备直接归还），返回 false
-# 轻量装卸：不触发白银狮子回血（交换不算失去）；破风枪加成清零/重置；摄魂刀跟踪重置；贤者标记跟随装备转移
+# 一侧空槽时，将另一侧原牌移入空槽；暗置装备另由后续子项处理。
+# 双方都有装备时的旧轻量装卸仍待B04核对失去效果；单边空槽按失去装备处理。
 func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) -> bool:
-	if not pA.equipment.has(slot_a) or not pB.equipment.has(slot_b):
+	var has_a = pA.equipment.has(slot_a)
+	var has_b = pB.equipment.has(slot_b)
+	if not has_a and not has_b:
 		return false
-	var subA = pA.equipment[slot_a]
-	var subB = pB.equipment[slot_b]
+	var subA = pA.equipment.get(slot_a, -1)
+	var subB = pB.equipment.get(slot_b, -1)
 	if subA == CardData.CardSubType.HIDDEN_EQUIPMENT or subB == CardData.CardSubType.HIDDEN_EQUIPMENT:
-		return false  # 暗置装备不参与交换（装备直接归还）
+		return false  # 暗置交换留后续子项
+	if not has_a or not has_b:
+		var source = pA if has_a else pB
+		var source_slot = slot_a if has_a else slot_b
+		var dest = pB if has_a else pA
+		var dest_slot = slot_b if has_a else slot_a
+		var sage_tokens_before = source.sage_tokens if source.equipment[source_slot] == CardData.CardSubType.SAGE_PROTECTION else 0
+		var sage_active_before = source.sage_activated if source.equipment[source_slot] == CardData.CardSubType.SAGE_PROTECTION else false
+		var moved = source.remove_equipment(source_slot)
+		if moved == null:
+			return false
+		if not dest.equip_card_to_slot(dest_slot, moved):
+			source.equip_card_to_slot(source_slot, moved)
+			if moved.sub_type == CardData.CardSubType.SAGE_PROTECTION:
+				source.sage_tokens = sage_tokens_before
+				source.sage_activated = sage_active_before
+			return false
+		if moved.sub_type == CardData.CardSubType.SAGE_PROTECTION:
+			dest.sage_tokens = sage_tokens_before
+			dest.sage_activated = sage_active_before
+		_update_debug("%s 的【%s】交换至 %s 的空装备槽" % [source.player_name, moved.card_name, dest.player_name])
+		return true
 	# 贤者的加护：贤者标记跟随装备转移
 	var sage_a = {"t": 0, "a": false}
 	var sage_b = {"t": 0, "a": false}
