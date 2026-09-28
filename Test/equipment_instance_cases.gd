@@ -101,7 +101,6 @@ func run(host):
 	game._equip_pick_override = Callable()
 	check(attacker.determined_cards == [stolen] and victim.get_armor() == -1, "顺手牵羊获得装备原实例")
 	check(stolen.source_seat == 7 and game.deck._discard.is_empty(), "偷取装备保留来源且不误入弃牌堆")
-	await check_equip_pick_ownership()
 
 	var first_weapon = CardBase.create(CardData.CardSubType.LIANNU)
 	var second_weapon = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
@@ -110,6 +109,7 @@ func run(host):
 	check(game._swap_equip_slot(attacker, "weapon", victim, "weapon"), "两件明置装备可以交换")
 	check(attacker.get_equipment_card("weapon") == second_weapon and victim.get_equipment_card("weapon") == first_weapon, "交换后两张装备对象互换而非重建")
 	check(game.deck._discard.is_empty(), "交换不把任一装备送入弃牌堆")
+	await check_equip_pick_ownership()
 
 	suite.reset_players()
 	game.deck._discard.clear()
