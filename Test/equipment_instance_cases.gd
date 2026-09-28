@@ -196,6 +196,7 @@ func run(host):
 	changed = target.replace_mount_card_result("mount_1", next_mount)
 	check(changed.success and changed.replaced_card == incoming, "替掉明置装备返回旧牌原对象")
 	check(target.get_equipment_card("mount_1") == next_mount, "替换后新原对象仅在目标槽")
+	await check_active_mount_replace()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -378,3 +379,66 @@ func check_equip_pick_ownership():
 		else:
 			check(attacker.determined_cards.is_empty() and game.deck._discard == [replacement],
 				"过河拆桥只弃当次选中的原对象一次")
+
+func check_active_mount_replace():
+	# DEV-B01c-4：真实出牌入口分别用任意手牌与已具体化坐骑。
+	var previous_phase = game.turn_manager.current_phase
+	for concrete in [false, true]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game._clear_pending_determined_card()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		var p = game.players[0]
+		p.mount_plus = 0
+		p.mount_minus = 0
+		var old_mount = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+		var replacement = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+		p.equip_mount_card(old_mount)
+		for i in range(3):
+			p.equip_mount_card(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
+		var incoming: CardBase = null
+		if concrete:
+			incoming = CardBase.create(CardData.CardSubType.MOUNT_MINUS)
+			incoming.source_seat = 6
+			p.determined_cards.append(incoming)
+			game._pending_determined_card = incoming
+		else:
+			p.hand.append(null)
+		var label = "具体牌" if concrete else "任意牌"
+
+		game._mount_replace_override = func(): return "cancel"
+		await game.play_card(CardData.CardSubType.MOUNT_MINUS)
+		check(p.get_equipment_card("mount_1") == old_mount and game.deck._discard.is_empty()
+			and (p.determined_cards.has(incoming) if concrete else p.hand == [null]),
+			label + "取消满槽替换不支付或移动原牌")
+
+		var change_during_pick = func():
+			p.determined_cards.append(p.remove_equipment("mount_1"))
+			p.equip_card_to_slot("mount_1", replacement)
+			return "mount_1"
+		game._mount_replace_override = change_during_pick
+		await game.play_card(CardData.CardSubType.MOUNT_MINUS)
+		check(p.get_equipment_card("mount_1") == replacement and p.determined_cards.has(old_mount)
+			and p.mount_plus == 1 and p.mount_minus == 3 and game.deck._discard.is_empty(),
+			label + "旧槽位换上同名马后不误顶后来者")
+		check((p.determined_cards.has(incoming) and game._pending_determined_card == incoming) if concrete else p.hand == [null],
+			label + "过期选择不消耗具体牌或任意牌")
+
+		game._mount_replace_override = func(): return "mount_9"
+		await game.play_card(CardData.CardSubType.MOUNT_MINUS)
+		check(p.get_equipment_card("mount_1") == replacement and game.deck._discard.is_empty()
+			and (p.determined_cards.has(incoming) if concrete else p.hand == [null]),
+			label + "非法槽位答复不扣牌且不访问错误槽位")
+
+		game._mount_replace_override = func(): return "mount_1"
+		await game.play_card(CardData.CardSubType.MOUNT_MINUS)
+		var equipped = p.get_equipment_card("mount_1")
+		check(equipped != null and equipped.sub_type == CardData.CardSubType.MOUNT_MINUS
+			and (equipped == incoming if concrete else p.hand.is_empty()),
+			label + "下一次合法替换按原牌或任意牌具体化落位")
+		check(game.deck._discard == [replacement] and p.determined_cards.has(old_mount)
+			and p.mount_count() == 4 and p.mount_plus == 0 and p.mount_minus == 4,
+			label + "成功只弃所选旧坐骑一次并同步四槽计数")
+		game._mount_replace_override = Callable()
+		game._clear_pending_determined_card()
+	game.turn_manager.current_phase = previous_phase

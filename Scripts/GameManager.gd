@@ -154,6 +154,9 @@ var _plus_mule_target_override: Callable = Callable()
 # 武器替换确认测试钩子（正常游戏不设置）：返回 true = 玩家0同意替换武器
 var _weapon_replace_override: Callable = Callable()
 
+# 满坐骑槽替换选择测试钩子（正常游戏不设置）：返回槽位名或 "cancel"
+var _mount_replace_override: Callable = Callable()
+
 # 丈八蛇矛流失测试钩子（正常游戏不设置）：返回 0-3（流失的体力数）
 var _zhangba_override: Callable = Callable()
 
@@ -1893,6 +1896,10 @@ func play_card(sub: CardData.CardSubType):
 				return
 
 			# 槽满：选择顶掉任意一匹
+			var mount_snapshot := {}
+			for slot in p.get_mount_slots():
+				mount_snapshot[slot] = {"sub": p.equipment[slot], "card": p.get_equipment_card(slot)}
+			var play_context = turn_manager.get_context_revision()
 			if p.seat_index == 0:
 				target_slot = await _show_mount_replace_picker(p)
 				if target_slot == "cancel":
@@ -1903,14 +1910,46 @@ func play_card(sub: CardData.CardSubType):
 				var slots = p.get_mount_slots()
 				target_slot = slots[randi() % slots.size()]
 
+			# 选槽期间若行动或所选原牌过期，不先扣手牌，也不顶掉后来换上的马。
+			if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
+					or turn_manager.current_player_idx != p.seat_index \
+					or turn_manager.get_context_revision() != play_context \
+					or not Player.MOUNT_SLOTS.has(target_slot) or not mount_snapshot.has(target_slot) \
+					or not p.equipment.has(target_slot):
+				return
+			var selected_mount: Dictionary = mount_snapshot[target_slot]
+			if p.equipment[target_slot] != selected_mount.sub \
+					or p.get_equipment_card(target_slot) != selected_mount.card:
+				return
+			# 支付失败的兜底需还到原手牌区，并保持任意牌未具体化。
+			var pending_card = _pending_determined_card
+			var payment_zone: Array[CardBase] = p.determined_cards
+			var payment_index := -1
+			if pending_card != null:
+				payment_index = payment_zone.find(pending_card)
+			else:
+				var payment = HandPayment._find_player_card(p, sub, false)
+				if not payment.is_empty():
+					payment_zone = payment.cards
+					payment_index = payment.index
+			if payment_index < 0:
+				return
+			var was_blank = payment_zone[payment_index] == null
 			var equipped_card = _take_play_card(p, sub)
 			if equipped_card == null:
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
 			var old_sub = p.equipment[target_slot]
-			var old_card = p.replace_mount_card(target_slot, equipped_card)
-			if old_card != null:
-				deck.discard(old_card)
+			var result = p.replace_mount_card_result(target_slot, equipped_card)
+			if not result.success:
+				payment_zone.insert(mini(payment_index, payment_zone.size()), null if was_blank else equipped_card)
+				if pending_card != null:
+					_pending_determined_card = pending_card
+				_update_debug("坐骑替换失败，原牌已退回手牌区")
+				_sync_all_ui()
+				return
+			if result.replaced_card != null:
+				deck.discard(result.replaced_card)
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
 				CardData.get_type_name(old_sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -2514,6 +2553,8 @@ func _emit_equip_pick(overlay: ColorRect, slot: String):
 
 # 坐骑槽满时：选择要顶掉的马（锚点居中弹窗）
 func _show_mount_replace_picker(p: Player) -> String:
+	if _mount_replace_override.is_valid():
+		return _mount_replace_override.call()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
