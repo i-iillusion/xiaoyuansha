@@ -8,7 +8,7 @@
 
 实现状态：`CardData.get_equipment_slot_type`显式归类现有实体装备子类型；`Player.equip_card_to_slot`在写入类型槽、原实例表及坐骑计数前核对槽位。已有核心CI挂载的`equipment_instance_cases`补基本牌、防具入武器槽、武器入坐骑槽、坐骑入防具槽、占位伪实体及占槽拒绝反例；合法武器、防具、坐骑保留原对象。暂不处理跨玩家重复持有同一对象、暗置离区或满槽顶替选择。
 
-验证状态：待本批推送后按提交SHA核对项目导入与七组规则CI；本地仅静态检查，未手动运行游戏测试。
+验证状态：`d85ede6`已推送dev，[对应项目导入与七组规则CI成功](https://github.com/i-iillusion/xiaoyuansha/actions/runs/36410050957)；本地仅静态检查，未手动运行游戏测试。已有核心测试入口`test_rule_settlement`调用`equipment_instance_cases`，本批不借用未提交的`equipment_boundary_cases`。
 
 ### QA-T28 / DEV-A01e：已付费多目标拼点跳过待出拳死者
 
