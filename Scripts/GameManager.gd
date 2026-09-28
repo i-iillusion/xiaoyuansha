@@ -330,7 +330,7 @@ const RPS_SCISSORS = 2
 const RPS_WIN = 1
 const RPS_DRAW = 0
 const RPS_LOSE = -1
-const RPS_INVALID = 2 # 只表示异步等待后原拼点动作失效，不参与胜负。
+const RPS_INVALID = -2 # 与石头0/布1/剪刀2及胜负1/0/-1均不同；只表示动作失效。
 
 func _ready():
 	# 主菜单选择的玩法与人数（当前入口：2/3 人乱斗、5 人标准身份局）。
