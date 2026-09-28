@@ -4028,6 +4028,7 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 		await _try_calamity_transfer(chain.source_player)
 	if _reveal_ask_pending and not _game_over:
 		await _maybe_ask_reveal()
+	print("A01e trace damage about to return")
 	return chain.target_player
 
 func _trigger_pofeng(source: Player, amount: int):
@@ -5080,10 +5081,13 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if r == RPS_WIN:
 		_update_debug("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
+		print("A01e trace campus damage returned")
 	else:
 		_update_debug("%s 拼点失败，%s 赢得拼点！对你造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(target, p, 1, EffectChain.DamageType.PHYSICAL)
+	print("A01e trace campus before sync")
 	_sync_all_ui()
+	print("A01e trace campus after sync")
 
 
 
