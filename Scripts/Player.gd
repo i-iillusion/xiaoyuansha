@@ -97,6 +97,8 @@ var shensu_used_this_turn: bool = false
 # 【苕】安普提·斯丢皮得：暗置装备
 # 暗置后装备区对应槽位 = HIDDEN_EQUIPMENT 占位；hidden_equip_slot 记录暗置所在槽位（"" = 无暗置）
 var hidden_equip_slot: String = ""
+# 暗置牌的原资源；任意牌在明置前保持未定名，不公开具体装备名。
+var hidden_equip_card: CardBase = null
 
 # 【觉醒】（史蒂芬·彼特先斯）：觉醒技已发动 / 觉醒三选一（1=不能成为【杀】的目标，2=不能成为【决斗】的目标，3=不能成为【南蛮入侵】和【万箭齐发】的目标）
 var awoken: bool = false
@@ -274,7 +276,7 @@ func equip_card_to_slot(slot: String, card: CardBase) -> bool:
 # 卸下指定槽位装备（同时重置对应属性），返回原始卡牌实例。
 func remove_equipment(slot: String) -> CardBase:
 	var sub = equipment.get(slot, -1)
-	var card = get_equipment_card(slot)
+	var card = hidden_equip_card if sub == CardData.CardSubType.HIDDEN_EQUIPMENT else get_equipment_card(slot)
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
@@ -300,6 +302,7 @@ func remove_equipment(slot: String) -> CardBase:
 		CardData.CardSubType.HIDDEN_EQUIPMENT:
 			# 【苕】暗置装备被卸下：清空暗置状态
 			hidden_equip_slot = ""
+			hidden_equip_card = null
 	return card
 
 # 交换装备时使用：空间上确实卸下，但规则上“不算失去”，所以不触发白银狮子。
@@ -455,11 +458,12 @@ func replace_mount_card_result(slot: String, card: CardBase) -> Dictionary:
 	var old_card = remove_equipment(slot)
 	if not equip_card_to_slot(slot, card):
 		# 理论上槽位刚被清空；若异常失败，恢复旧装备，避免吞牌。
-		if old_card != null:
-			equip_card_to_slot(slot, old_card)
-		elif old_was_hidden:
+		if old_was_hidden:
 			equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
 			hidden_equip_slot = old_hidden_slot
+			hidden_equip_card = old_card
+		elif old_card != null:
+			equip_card_to_slot(slot, old_card)
 		return failed
 	return {"success": true, "replaced_card": old_card}
 

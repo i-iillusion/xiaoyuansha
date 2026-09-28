@@ -1387,11 +1387,12 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	var removed = p.remove_equipment(slot)
 	if not p.equip_card_to_slot(slot, incoming):
-		if removed != null:
-			p.equip_card_to_slot(slot, removed)
-		elif old_sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
+		if old_sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
 			p.equipment[slot] = old_sub
 			p.hidden_equip_slot = slot
+			p.hidden_equip_card = removed
+		elif removed != null:
+			p.equip_card_to_slot(slot, removed)
 		_restore_equipment_payment(receipt, incoming)
 		return false
 	if removed != null:
@@ -4458,7 +4459,7 @@ func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
 #  【苕】暗置装备（安普提·斯丢皮得）
 # ============================
 
-# 点击技能【苕】：未暗置 → 选类型暗置；已暗置 → 明置 / 替换 / 取消
+# 点击技能【苕】：未暗置 → 选类型暗置；已暗置 → 明置 / 取消。
 func _on_sao_skill_clicked(p: Player) -> void:
 	if p.general_name != "安普提·斯丢皮得":
 		return
@@ -4470,16 +4471,22 @@ func _on_sao_skill_clicked(p: Player) -> void:
 		if _sao_menu_override.is_valid():
 			idx = _sao_menu_override.call()
 		else:
-			idx = await _show_choice_popup("你已暗置了一件装备\n要做什么？", ["明置装备", "替换暗置类型"])
+			idx = await _show_choice_popup("你已暗置了一件装备\n要做什么？", ["明置装备", "暂不明置"])
 		if idx == 0:
 			await _do_sao_reveal(p)
-		elif idx == 1:
-			await _do_sao_hide(p, true)
 		return
 	await _do_sao_hide(p, false)
 
-# 暗置：选类型 → 检查槽位 → 放置占位（replace = 替换已有暗置）
+# 暗置：选类型 → 检查槽位与手牌来源 → 支付一张 → 放置暗置资源。
 func _do_sao_hide(p: Player, replace: bool) -> void:
+	# 已裁定放入哪类装备位便不能改为另一类；兼容旧调用参数但不允许替换。
+	if replace or p.has_hidden_equip():
+		_update_debug("已暗置的装备不能更换类别")
+		return
+	if p.hand_size() == 0:
+		_update_debug("没有手牌，无法暗置装备")
+		return
+	var hide_context = turn_manager.get_context_revision()
 	var etype: String
 	if _sao_type_override.is_valid():
 		var ov = _sao_type_override.call()
@@ -4506,9 +4513,31 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 				return
 		_:
 			return
-	# 替换旧暗置（先卸下占位，空出槽位）
-	if p.has_hidden_equip():
-		p.remove_equipment(p.hidden_equip_slot)
+	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
+			or turn_manager.current_player_idx != p.seat_index \
+			or turn_manager.get_context_revision() != hide_context or p.has_hidden_equip():
+		return
+	var source: CardBase = null
+	var blank_index = p.hand.find(null)
+	if blank_index >= 0:
+		p.hand.remove_at(blank_index)
+		source = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	else:
+		var matching: Array[CardBase] = []
+		for card in p.hand + p.determined_cards:
+			if card != null and CardData.get_equipment_slot_type(card.sub_type) == etype:
+				matching.append(card)
+		# 多张不同具体牌需要选原牌；当前入口没有选择窗口，不代玩家决定。
+		if matching.size() != 1:
+			_update_debug("没有唯一可选择的该类具体装备牌，未暗置")
+			return
+		source = matching[0]
+		p.remove_from_hand(source)
+		source.hidden_original_sub_type = source.sub_type
+		source.sub_type = CardData.CardSubType.HIDDEN_EQUIPMENT
+		source.card_name = CardData.get_type_name(CardData.CardSubType.HIDDEN_EQUIPMENT)
+		source.description = ""
+	source.hidden_category = etype
 	var slot: String
 	var type_name: String
 	match etype:
@@ -4523,6 +4552,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 			type_name = "坐骑"
 	p.equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
 	p.hidden_equip_slot = slot
+	p.hidden_equip_card = source
 	_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
 	_sync_all_ui()
 	_refresh_detail_popup()
@@ -4532,6 +4562,10 @@ func _do_sao_reveal(p: Player) -> void:
 	if not p.has_hidden_equip():
 		return
 	var etype = p.get_hidden_equip_type()
+	var source = p.hidden_equip_card
+	if source == null:
+		return
+	var reveal_slot = p.hidden_equip_slot
 	var options: Array[int] = []
 	match etype:
 		"weapon":
@@ -4545,6 +4579,10 @@ func _do_sao_reveal(p: Player) -> void:
 		"mount":
 			for sub in SAO_MOUNT_SUBS:
 				options.append(sub)
+	if source.hidden_original_sub_type >= 0:
+		for i in range(options.size() - 1, -1, -1):
+			if options[i] != source.hidden_original_sub_type:
+				options.remove_at(i)
 	if options.is_empty():
 		_show_toast("该类型的所有装备都已被打出过，无法明置")
 		return
@@ -4565,21 +4603,45 @@ func _do_sao_reveal(p: Player) -> void:
 		if idx < 0:
 			return
 		chosen = options[idx]
+	if _game_over or p.hidden_equip_slot != reveal_slot or p.hidden_equip_card != source:
+		return
 	_reveal_hidden_as(p, chosen)
 
 # 执行明置：占位变为具体装备（武器/防具进唯一性占用；坐骑按类型计数）
-func _reveal_hidden_as(p: Player, sub: CardData.CardSubType):
+func _reveal_hidden_as(p: Player, sub: CardData.CardSubType) -> bool:
 	var slot = p.hidden_equip_slot
-	if slot == "":
-		return
+	var source = p.hidden_equip_card
+	if slot == "" or source == null:
+		return false
+	var slot_type = "mount" if Player.MOUNT_SLOTS.has(slot) else slot
+	if CardData.get_equipment_slot_type(sub) != slot_type \
+			or source.hidden_category != slot_type \
+			or source.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
+			or (source.hidden_original_sub_type >= 0 and source.hidden_original_sub_type != sub):
+		return false
+	if slot_type != "mount" and equipment_pool.is_claimed(sub):
+		return false
 	p.remove_equipment(slot)
-	p.equip_card_to_slot(slot, CardBase.create(sub))
+	source.sub_type = sub
+	source.card_name = CardData.get_type_name(sub)
+	source.description = CardData.CARD_DESCRIPTIONS.get(sub, "")
+	if not p.equip_card_to_slot(slot, source):
+		source.sub_type = CardData.CardSubType.HIDDEN_EQUIPMENT
+		source.card_name = CardData.get_type_name(source.sub_type)
+		source.description = ""
+		p.equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
+		p.hidden_equip_slot = slot
+		p.hidden_equip_card = source
+		return false
+	source.hidden_category = ""
+	source.hidden_original_sub_type = -1
 	if sub != CardData.CardSubType.MOUNT_PLUS and sub != CardData.CardSubType.MOUNT_MINUS \
 			and sub != CardData.CardSubType.MULE_PLUS and sub != CardData.CardSubType.MULE_MINUS:
 		equipment_pool.claim(sub)
 	_update_debug("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 	_sync_all_ui()
 	_refresh_detail_popup()
+	return true
 
 # 【苕】抢先明置：玩家0 有同类型暗置装备时，可明置为该装备阻止对方装备（对方手牌未消耗）
 # 返回 true = 抢先成功（调用方应中止本次装备流程）；type_key = "weapon" / "armor" / "mount"
@@ -4601,7 +4663,8 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 		var yes = await _show_sao_preempt_prompt(equipper, sub, type_name)
 		if not yes:
 			return false
-	_reveal_hidden_as(owner, sub)
+	if not _reveal_hidden_as(owner, sub):
+		return false
 	_update_debug("%s 抢先明置暗置%s为【%s】，%s 无法装备，消耗的手牌已退回！" % [owner.player_name, type_name, CardData.get_type_name(sub), equipper.player_name])
 	_sync_all_ui()
 	return true
