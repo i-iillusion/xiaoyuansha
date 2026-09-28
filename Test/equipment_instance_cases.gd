@@ -339,35 +339,38 @@ func check_equip_pick_ownership():
 		game.deck._discard.clear()
 		var attacker = game.players[0]
 		var target = game.players[1]
+		target.mount_plus = 0
 		var label = "顺手牵羊" if is_snatch else "过河拆桥"
-		var original = CardBase.create(CardData.CardSubType.QIXING_PAO)
+		var original = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
 		original.source_seat = 3
-		var replacement = CardBase.create(CardData.CardSubType.QIXING_PAO)
+		var replacement = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
 		replacement.source_seat = 4
-		target.equip_card_to_slot("armor", original)
+		target.equip_card_to_slot("mount_1", original)
 
 		game._equip_pick_override = func(): return "cancel"
 		await game._steal_equip(attacker, target, is_snatch, label)
 		game._equip_pick_override = Callable()
-		check(target.get_equipment_card("armor") == original and attacker.determined_cards.is_empty()
+		check(target.get_equipment_card("mount_1") == original and attacker.determined_cards.is_empty()
 			and game.deck._discard.is_empty(), label + "取消选装备不移动原对象")
 
 		var replace_during_pick = func():
-			target.determined_cards.append(target.remove_equipment("armor"))
-			target.equip_card_to_slot("armor", replacement)
-			return "armor"
+			target.determined_cards.append(target.remove_equipment("mount_1"))
+			target.equip_card_to_slot("mount_1", replacement)
+			return "mount_1"
 		game._equip_pick_override = replace_during_pick
 		await game._steal_equip(attacker, target, is_snatch, label)
 		game._equip_pick_override = Callable()
-		check(target.get_equipment_card("armor") == replacement and target.determined_cards == [original],
+		check(target.get_equipment_card("mount_1") == replacement and target.determined_cards == [original]
+			and target.mount_plus == 1,
 			label + "旧装备离槽后不处理同名后来者")
 		check(attacker.determined_cards.is_empty() and game.deck._discard.is_empty(),
 			label + "过期槽位答复不错误转移或弃牌")
 
-		game._equip_pick_override = func(): return "armor"
+		game._equip_pick_override = func(): return "mount_1"
 		await game._steal_equip(attacker, target, is_snatch, label)
 		game._equip_pick_override = Callable()
-		check(target.get_equipment_card("armor") == null and target.determined_cards == [original],
+		check(target.get_equipment_card("mount_1") == null and target.determined_cards == [original]
+			and target.mount_plus == 0,
 			label + "下一次合法选择移出当前装备且保留旧原牌")
 		if is_snatch:
 			check(attacker.determined_cards == [replacement] and game.deck._discard.is_empty(),
