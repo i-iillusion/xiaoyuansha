@@ -8,7 +8,7 @@
 
 实现状态：`GameManager._try_calamity_transfer`与`_try_calamity_robe_transfer`在询问前记原装备对象，答复后、触碰目标槽前复查游戏／双方存活及来源同槽仍为该对象。核心CI既有`equipment_instance_cases`加两件装备的取消、原牌离区后来源换装、目标原牌不误弃、随后合法转移及原实例只弃一次回归。劣马等待期与更广的跨区所有权另留DEV-B01c后续子项；不合暗置或同名claim。
 
-验证状态：待本批推送对应七组CI；本地只做静态检查，未手动运行游戏测试。
+验证状态：`c57be04`已推送dev，[对应项目导入与七组规则CI成功](https://github.com/i-iillusion/xiaoyuansha/actions/runs/36412724313)；本地只做静态检查，未手动运行游戏测试。原对象离区由测试选择回调注入状态，验证过期答复的所有权保护，不宣称该触发链已在普通玩家交互中全部接通。
 
 ### QA-T29 / DEV-B01b：实体装备与槽位分类
 
