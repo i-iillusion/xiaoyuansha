@@ -6112,26 +6112,30 @@ func _try_plus_mule_transfer(source: Player):
 
 # 劣马转移核心：持有者可选把一匹劣马移至其他角色的坐骑槽（空槽自动装；满槽顶替第一匹）
 func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: bool):
-	if p == null or not p.is_alive():
+	if _game_over or p == null or not p.is_alive():
 		return
-	var has = p.has_mule_minus() if is_minus else p.has_mule_plus()
-	if not has:
-		return
-	var target = await _ask_mule_target(p, is_minus)
-	if target == null or target == p or not target.is_alive():
-		return
-	# 源移除一匹劣马
-	var mule_card: CardBase = null
 	var source_slot := ""
+	var original_card: CardBase = null
 	for s in Player.MOUNT_SLOTS:
 		if p.equipment.get(s, -1) == mule_sub:
 			source_slot = s
-			mule_card = p.remove_equipment(s)
+			original_card = p.get_equipment_card(s)
 			break
+	if original_card == null:
+		return
+	var target = await _ask_mule_target(p, is_minus)
+	if _game_over or not p.is_alive() or target == null or target == p or not target.is_alive():
+		return
+	# 等待期间同槽即使换上同名劣马，旧目标答复也不能转移后来者。
+	if p.equipment.get(source_slot, -1) != mule_sub \
+			or p.equipment_cards.get(source_slot, null) != original_card:
+		return
+	var mule_card = p.remove_equipment(source_slot)
 	if mule_card == null:
 		return
 	# 目标放入坐骑槽
 	if not _place_mount_for(target, mule_card):
+		# 落位失败时原槽仍为空；恢复同一对象而非另造一匹劣马。
 		p.equip_card_to_slot(source_slot, mule_card)
 		return
 	var mule_name = "-1劣马" if is_minus else "+1劣马"

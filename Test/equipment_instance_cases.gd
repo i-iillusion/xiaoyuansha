@@ -141,6 +141,7 @@ func run(host):
 	game._minus_mule_target_override = Callable()
 	check(target.get_equipment_card("mount_1") == mule and mule.source_seat == 8, "劣马转移与满槽顶替保留原实例")
 	check(game.deck._discard.count(replaced_mount) == 1 and source.get_mount_slots().is_empty(), "满槽目标被顶坐骑原实例弃置一次")
+	await check_mule_transfer_ownership()
 
 	# DEV-B01a：只验证现有暗置占位兼容路径的所有权，不裁定暗置牌离区明置规则。
 	for mule_sub in [CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS]:
@@ -266,3 +267,66 @@ func check_calamity_transfer_ownership():
 		check(target.get_equipment_card(slot) == original and source.get_equipment_card(slot) == null,
 			label + "下一次合法转移保持原对象且来源不再持有")
 		check(game.deck._discard == [target_card], label + "目标旧装备只入弃牌堆一次")
+
+func check_mule_transfer_ownership():
+	# DEV-B01c-2：目标选择期间换上同名劣马，旧答复不能转移后来者。
+	for mule_sub in [CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS]:
+		var label = "-1劣马" if mule_sub == CardData.CardSubType.MULE_MINUS else "+1劣马"
+		var source = game.players[1]
+		var target = game.players[2]
+		suite.reset_players()
+		game.deck._discard.clear()
+		for player in game.players:
+			player.hidden_equip_slot = ""
+			player.mount_plus = 0
+			player.mount_minus = 0
+		var original = CardBase.create(mule_sub)
+		var target_card = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+		source.equip_mount_card(original)
+		target.equip_mount_card(target_card)
+		if mule_sub == CardData.CardSubType.MULE_MINUS:
+			game._minus_mule_target_override = func(): return "cancel"
+		else:
+			game._plus_mule_target_override = func(): return "cancel"
+		await game._try_mule_transfer(source, mule_sub, mule_sub == CardData.CardSubType.MULE_MINUS)
+		game._minus_mule_target_override = Callable()
+		game._plus_mule_target_override = Callable()
+		check(source.get_equipment_card("mount_1") == original and target.get_equipment_card("mount_1") == target_card
+			and game.deck._discard.is_empty(), label + "取消时双方原牌不动")
+
+		var replacement = CardBase.create(mule_sub)
+		var move_source = func():
+			source.determined_cards.append(source.remove_equipment("mount_1"))
+			source.equip_card_to_slot("mount_1", replacement)
+			return target
+		if mule_sub == CardData.CardSubType.MULE_MINUS:
+			game._minus_mule_target_override = move_source
+		else:
+			game._plus_mule_target_override = move_source
+		await game._try_mule_transfer(source, mule_sub, mule_sub == CardData.CardSubType.MULE_MINUS)
+		game._minus_mule_target_override = Callable()
+		game._plus_mule_target_override = Callable()
+		check(source.get_equipment_card("mount_1") == replacement and source.determined_cards == [original],
+			label + "旧原牌离区后不转走同名替换牌")
+		check(target.get_equipment_card("mount_1") == target_card and game.deck._discard.is_empty(),
+			label + "过期答复不动目标坐骑或弃牌")
+
+		# 紧接着合法转移：满四槽已有实体旧牌，转移后恰好一个装备所有者。
+		for i in range(3):
+			target.equip_mount_card(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
+		if mule_sub == CardData.CardSubType.MULE_MINUS:
+			game._minus_mule_target_override = func(): return target
+		else:
+			game._plus_mule_target_override = func(): return target
+		await game._try_mule_transfer(source, mule_sub, mule_sub == CardData.CardSubType.MULE_MINUS)
+		game._minus_mule_target_override = Callable()
+		game._plus_mule_target_override = Callable()
+		var owners := 0
+		for player in game.players:
+			for stored in player.equipment_cards.values():
+				if stored == replacement:
+					owners += 1
+		check(owners == 1 and source.get_mount_slots().is_empty() and target.get_equipment_card("mount_1") == replacement,
+			label + "下一次合法满槽转移只保留一个原牌所有者")
+		check(game.deck._discard == [target_card] and target.mount_count() == 4 and target.mount_plus == 0,
+			label + "满槽转移只弃目标旧牌并同步计数")
