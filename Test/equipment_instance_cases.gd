@@ -197,6 +197,7 @@ func run(host):
 	check(changed.success and changed.replaced_card == incoming, "替掉明置装备返回旧牌原对象")
 	check(target.get_equipment_card("mount_1") == next_mount, "替换后新原对象仅在目标槽")
 	await check_active_mount_replace()
+	await check_active_weapon_armor_replace()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -441,4 +442,71 @@ func check_active_mount_replace():
 			label + "成功只弃所选旧坐骑一次并同步四槽计数")
 		game._mount_replace_override = Callable()
 		game._clear_pending_determined_card()
+	game.turn_manager.current_phase = previous_phase
+
+func check_active_weapon_armor_replace():
+	# DEV-B01c-5：武器/防具确认后的旧答复不能弃掉原槽后来换上的装备。
+	var previous_phase = game.turn_manager.current_phase
+	for slot in ["weapon", "armor"]:
+		var old_sub = CardData.CardSubType.LIANNU if slot == "weapon" else CardData.CardSubType.SILVER_LION
+		var later_sub = CardData.CardSubType.ZHUGE_LIANNU if slot == "weapon" else CardData.CardSubType.QIXING_PAO
+		var incoming_sub = CardData.CardSubType.QINGLONG_BLADE if slot == "weapon" else CardData.CardSubType.RENWANG_DUN
+		for concrete in [false, true]:
+			suite.reset_players()
+			game.deck._discard.clear()
+			game.equipment_pool.clear()
+			game._clear_pending_determined_card()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			var p = game.players[0]
+			var old_card = CardBase.create(old_sub)
+			var later_card = CardBase.create(later_sub)
+			p.equip_card_to_slot(slot, old_card)
+			var incoming: CardBase = null
+			if concrete:
+				incoming = CardBase.create(incoming_sub)
+				incoming.source_seat = 6
+				p.determined_cards.append(incoming)
+				game._pending_determined_card = incoming
+			else:
+				p.hand.append(null)
+			var label = ("武器" if slot == "weapon" else "防具") + ("具体牌" if concrete else "任意牌")
+
+			game._weapon_replace_override = func(): return false
+			await game.play_card(incoming_sub)
+			check(p.get_equipment_card(slot) == old_card and game.deck._discard.is_empty()
+				and (p.determined_cards.has(incoming) if concrete else p.hand == [null]),
+				label + "拒绝替换保留原装备和待出牌")
+
+			var expire_context = func():
+				game.turn_manager.current_phase = TurnManager.Phase.DISCARD
+				game.turn_manager.current_phase = TurnManager.Phase.PLAY
+				return true
+			game._weapon_replace_override = expire_context
+			await game.play_card(incoming_sub)
+			check(p.get_equipment_card(slot) == old_card and game.deck._discard.is_empty()
+				and (p.determined_cards.has(incoming) if concrete else p.hand == [null]),
+				label + "阶段离开再返回不接受旧确认")
+
+			var change_during_confirm = func():
+				p.determined_cards.append(p.remove_equipment(slot))
+				p.equip_card_to_slot(slot, later_card)
+				return true
+			game._weapon_replace_override = change_during_confirm
+			await game.play_card(incoming_sub)
+			check(p.get_equipment_card(slot) == later_card and p.determined_cards.has(old_card)
+				and game.deck._discard.is_empty(), label + "原装备离槽后不弃后来换上的装备")
+			check((p.determined_cards.has(incoming) and game._pending_determined_card == incoming) if concrete else p.hand == [null],
+				label + "原槽过期不消耗任意或具体牌")
+
+			game._weapon_replace_override = func(): return true
+			await game.play_card(incoming_sub)
+			var equipped = p.get_equipment_card(slot)
+			check(equipped != null and equipped.sub_type == incoming_sub
+				and (equipped == incoming if concrete else p.hand.is_empty()),
+				label + "下一次有效确认才装备声明的原对象")
+			check(game.deck._discard == [later_card] and p.determined_cards.has(old_card)
+				and game.equipment_pool.is_claimed(incoming_sub),
+				label + "成功后只弃当前旧装备一次并登记新装备")
+			game._weapon_replace_override = Callable()
+			game._clear_pending_determined_card()
 	game.turn_manager.current_phase = previous_phase

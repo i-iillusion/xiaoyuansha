@@ -1352,6 +1352,53 @@ func _take_play_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	_pending_determined_card = null
 	return selected
 
+# 武器/防具替换的防御性回装凭据；任意牌失败后必须仍是任意牌。
+func _equipment_payment_receipt(p: Player, sub: CardData.CardSubType) -> Dictionary:
+	if _pending_determined_card != null:
+		var index = p.determined_cards.find(_pending_determined_card)
+		if index < 0 or _pending_determined_card.sub_type != sub:
+			return {}
+		return {"zone": p.determined_cards, "index": index, "blank": false, "pending": _pending_determined_card}
+	var selected = HandPayment._find_player_card(p, sub, false)
+	if selected.is_empty():
+		return {}
+	var zone: Array[CardBase] = selected.cards
+	return {"zone": zone, "index": selected.index, "blank": zone[selected.index] == null, "pending": null}
+
+func _restore_equipment_payment(receipt: Dictionary, card: CardBase):
+	var zone: Array[CardBase] = receipt.zone
+	zone.insert(mini(receipt.index, zone.size()), null if receipt.blank else card)
+	if receipt.pending != null:
+		_pending_determined_card = receipt.pending
+
+# 确认窗口返回后才检查原装备与行动，再取手牌；落位成功后才弃旧牌并登记新名。
+func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.CardSubType,
+		old_sub: CardData.CardSubType, old_card: CardBase, context_revision: int) -> bool:
+	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
+			or turn_manager.current_player_idx != p.seat_index \
+			or turn_manager.get_context_revision() != context_revision \
+			or p.equipment.get(slot, -1) != old_sub or p.get_equipment_card(slot) != old_card:
+		return false
+	var receipt = _equipment_payment_receipt(p, sub)
+	if receipt.is_empty():
+		return false
+	var incoming = _take_play_card(p, sub)
+	if incoming == null:
+		return false
+	var removed = p.remove_equipment(slot)
+	if not p.equip_card_to_slot(slot, incoming):
+		if removed != null:
+			p.equip_card_to_slot(slot, removed)
+		elif old_sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
+			p.equipment[slot] = old_sub
+			p.hidden_equip_slot = slot
+		_restore_equipment_payment(receipt, incoming)
+		return false
+	if removed != null:
+		deck.discard(removed)
+	equipment_pool.claim(sub)
+	return true
+
 func _clear_pending_determined_card():
 	_pending_determined_card = null
 
@@ -1803,6 +1850,8 @@ func play_card(sub: CardData.CardSubType):
 				if old_weapon == sub:
 					_update_debug("你已经装备了【%s】" % CardData.get_type_name(sub))
 					return
+				var old_weapon_card = p.get_equipment_card("weapon")
+				var weapon_context = turn_manager.get_context_revision()
 				var old_is_hidden = old_weapon == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有武器：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
 				if p.seat_index == 0 and not old_is_hidden:
@@ -1810,15 +1859,9 @@ func play_card(sub: CardData.CardSubType):
 					if not ok:
 						_update_debug("取消替换武器，手牌未消耗")
 						return
-				var equipped_card = _take_play_card(p, sub)
-				if equipped_card == null:
-					_update_debug("所选装备已不在牌区，取消装备")
+				if not _replace_play_equipment_if_current(p, "weapon", sub, old_weapon, old_weapon_card, weapon_context):
+					_update_debug("武器替换已失效或所选牌不在手中，未替换")
 					return
-				var old_card = p.remove_equipment("weapon")
-				if old_card != null:
-					deck.discard(old_card)
-				equipment_pool.claim(sub)
-				p.equip_card_to_slot("weapon", equipped_card)
 				_update_debug("%s 弃置了原武器【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_weapon), CardData.get_type_name(sub)])
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
@@ -1846,6 +1889,8 @@ func play_card(sub: CardData.CardSubType):
 				if old_armor == sub:
 					_update_debug("你已经装备了【%s】" % CardData.get_type_name(sub))
 					return
+				var old_armor_card = p.get_equipment_card("armor")
+				var armor_context = turn_manager.get_context_revision()
 				var old_is_hidden = old_armor == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有防具：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
 				if p.seat_index == 0 and not old_is_hidden:
@@ -1853,15 +1898,9 @@ func play_card(sub: CardData.CardSubType):
 					if not ok:
 						_update_debug("取消替换防具，手牌未消耗")
 						return
-				var equipped_card = _take_play_card(p, sub)
-				if equipped_card == null:
-					_update_debug("所选装备已不在牌区，取消装备")
+				if not _replace_play_equipment_if_current(p, "armor", sub, old_armor, old_armor_card, armor_context):
+					_update_debug("防具替换已失效或所选牌不在手中，未替换")
 					return
-				var old_card = p.remove_equipment("armor")
-				if old_card != null:
-					deck.discard(old_card)
-				equipment_pool.claim(sub)
-				p.equip_card_to_slot("armor", equipped_card)
 				_update_debug("%s 弃置了原防具【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_armor), CardData.get_type_name(sub)])
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
