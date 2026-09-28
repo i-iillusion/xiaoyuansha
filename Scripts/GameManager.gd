@@ -16,6 +16,16 @@ class RescueAnswer extends RefCounted:
 		settled = true
 		answered.emit(sub)
 
+class RpsAnswer extends RefCounted:
+	signal answered(choice: int)
+	var settled := false
+
+	func submit(choice: int):
+		if settled:
+			return
+		settled = true
+		answered.emit(choice)
+
 signal game_started()
 signal game_over(winner_identity: String)
 
@@ -3507,7 +3517,6 @@ signal _iron_chain_cfm_result(result: bool)
 signal _mount_replace_result(slot: String)
 signal _weapon_replace_result(result: bool)
 signal _zhangba_result(value: int)
-signal _rps_pick_result(choice: int)
 signal _calamity_target_result(target: Player)
 # 灾厄袍转移目标选择结果（独立 signal，避免与灾厄剑并发干扰）
 signal _calamity_robe_target_result(target: Player)
@@ -4190,15 +4199,16 @@ func _rps_result(a: int, b: int) -> int:
 	return RPS_LOSE
 
 # 出拳：玩家0弹窗，AI 随机；测试钩子可指定任意玩家
-func _rps_choice(p: Player, other_name: String) -> int:
+func _rps_choice(p: Player, other_name: String, allowed: Callable = Callable()) -> int:
 	if _rps_override.is_valid():
 		return _rps_override.call(p)
 	if p.seat_index == 0:
-		return await _show_rps_prompt(p, other_name)
+		return await _show_rps_prompt(p, other_name, allowed)
 	return randi() % 3
 
 # 玩家0的猜拳弹窗（石头/剪刀/布，锚点居中）
-func _show_rps_prompt(p: Player, other_name: String) -> int:
+func _show_rps_prompt(p: Player, other_name: String, allowed: Callable = Callable()) -> int:
+	var answer = RpsAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -4235,28 +4245,34 @@ func _show_rps_prompt(p: Player, other_name: String) -> int:
 		var btn = Button.new()
 		btn.text = c[0]
 		btn.custom_minimum_size = Vector2(140, 44)
-		btn.pressed.connect(_emit_rps_pick.bind(overlay, c[1]), CONNECT_ONE_SHOT)
+		btn.pressed.connect(answer.submit.bind(c[1]), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
-	_start_response_countdown(overlay, players[0].player_name, func(): _rps_pick_result.emit(RPS_PAPER))
-	var result = await _rps_pick_result
+	var stop = func(_winner): answer.submit(RPS_INVALID)
+	var watch = func():
+		if allowed.is_valid() and not allowed.call():
+			answer.submit(RPS_INVALID)
+	game_over.connect(stop)
+	get_tree().process_frame.connect(watch)
+	_start_response_countdown(overlay, players[0].player_name, answer.submit.bind(RPS_PAPER))
+	var result = await answer.answered
+	game_over.disconnect(stop)
+	get_tree().process_frame.disconnect(watch)
 	_stop_countdown()
+	if not overlay.is_queued_for_deletion():
+		overlay.queue_free()
 	return result
-
-func _emit_rps_pick(overlay: ColorRect, choice: int):
-	overlay.queue_free()
-	_rps_pick_result.emit(choice)
 
 # 进行一次拼点（猜拳一轮）：返回发起者视角结果（RPS_WIN / RPS_DRAW / RPS_LOSE）
 # 结果只在实时日志显示（上一行），不覆盖中间提示句（当前进行）——所有拼点统一行为
 func _do_ping_dian_once(challenger: Player, opponent: Player, allowed: Callable = Callable()) -> int:
 	if allowed.is_valid() and not allowed.call():
 		return RPS_INVALID
-	var a = await _rps_choice(challenger, opponent.player_name)
-	if allowed.is_valid() and not allowed.call():
+	var a = await _rps_choice(challenger, opponent.player_name, allowed)
+	if a == RPS_INVALID or (allowed.is_valid() and not allowed.call()):
 		return RPS_INVALID
-	var b = await _rps_choice(opponent, challenger.player_name)
-	if allowed.is_valid() and not allowed.call():
+	var b = await _rps_choice(opponent, challenger.player_name, allowed)
+	if b == RPS_INVALID or (allowed.is_valid() and not allowed.call()):
 		return RPS_INVALID
 	var r = _rps_result(a, b)
 	# 猜拳常量：石头=0 / 布=1 / 剪刀=2（与按钮映射一致，勿把 names 写成 剪刀/布 顺序）

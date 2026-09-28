@@ -84,6 +84,7 @@ func run(host):
 
 	await check_selection_recovery(actor, target)
 	await check_context_invalidation(actor, target)
+	await check_rps_prompt_cleanup(actor, target)
 	reset_case()
 	game = null
 	suite = null
@@ -122,6 +123,64 @@ func check_zhuangbi_last_card_awaken(actor: Player, target: Player):
 			"觉醒所摸手牌保留，已付目标费用及拼点伤害继续")
 		check(game.deck._discard == ([card] if use_concrete else []),
 			"具体原牌只弃一次；任意牌支付不虚构实体")
+
+func current_rps_overlay() -> ColorRect:
+	for child in game.get_node("UI").get_children():
+		if child is ColorRect and child.z_index == 100 and not child.is_queued_for_deletion():
+			return child
+	return null
+
+func check_rps_prompt_cleanup(actor: Player, target: Player):
+	# 真实出拳窗口：终局必须解除等待，不把旧出拳计入拼点。
+	reset_case()
+	var end_action = func():
+		check(current_rps_overlay() != null, "终局前真实拼点窗口存在")
+		game._finish_game("平局", "拼点窗口测试")
+	end_action.call_deferred()
+	var outcome = await game._do_ping_dian_once(actor, target)
+	check(outcome == GameManager.RPS_INVALID, "终局出拳返回动作失效而非超时默认手势")
+	check(not game._countdown_active and not game._countdown_on_timeout.is_valid(), "终局关闭拼点响应计时")
+	await game.get_tree().process_frame
+	check(current_rps_overlay() == null, "终局移除旧拼点窗口")
+
+	# 阶段离开后即使恢复同值，旧窗口也不等待倒计时、不询问对手。
+	reset_case()
+	var revision = game.turn_manager.get_context_revision()
+	var expire_action = func():
+		check(current_rps_overlay() != null, "阶段失效前真实拼点窗口存在")
+		game.turn_manager.current_phase = TurnManager.Phase.END
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	expire_action.call_deferred()
+	outcome = await game._do_ping_dian_once(actor, target,
+		func(): return revision == game.turn_manager.get_context_revision())
+	check(outcome == GameManager.RPS_INVALID, "阶段离开再恢复后停止旧拼点")
+	check(game._countdown_active and game._debug_label.text == "%s 出牌阶段" % actor.player_name,
+		"过期窗口停止响应计时并恢复出牌阶段计时")
+	await game.get_tree().process_frame
+	check(current_rps_overlay() == null, "过期拼点窗口已释放")
+
+	# 原有超时仍选布，下一次真实按钮答复不被旧窗口污染。
+	var timeout_action = func():
+		check(current_rps_overlay() != null, "超时前真实拼点窗口存在")
+		game._countdown_on_timeout.call()
+	timeout_action.call_deferred()
+	var choice = await game._show_rps_prompt(actor, target.player_name)
+	check(choice == GameManager.RPS_PAPER, "有效出拳超时仍采用原有默认布")
+	var click_action = func():
+		var overlay = current_rps_overlay()
+		check(overlay != null, "下一次真实拼点窗口可打开")
+		if overlay != null:
+			var buttons = overlay.find_children("*", "Button", true, false)
+			check(buttons.size() == 3, "下一次拼点仍有三种手势")
+			if not buttons.is_empty():
+				buttons[0].pressed.emit()
+	click_action.call_deferred()
+	choice = await game._show_rps_prompt(actor, target.player_name)
+	check(choice == GameManager.RPS_ROCK, "下一次合法按钮出拳不受旧答复污染")
+	check(game._countdown_active and game._debug_label.text == "%s 出牌阶段" % actor.player_name,
+		"合法出拳后恢复阶段计时而非保留响应计时")
+	await game.get_tree().process_frame
+	check(current_rps_overlay() == null, "合法出拳窗口已释放")
 
 func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 非空过期答复重选；具体牌只以原实例入弃牌堆一次。
