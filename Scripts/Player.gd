@@ -263,6 +263,9 @@ func get_equipment_card(slot: String, materialize_legacy: bool = true) -> CardBa
 func equip_card_to_slot(slot: String, card: CardBase) -> bool:
 	if not EQUIP_SLOTS.has(slot) or card == null or equipment.has(slot):
 		return false
+	var slot_type = "mount" if MOUNT_SLOTS.has(slot) else slot
+	if CardData.get_equipment_slot_type(card.sub_type) != slot_type:
+		return false
 	equipment[slot] = card.sub_type
 	equipment_cards[slot] = card
 	_apply_equipment_state(card.sub_type)

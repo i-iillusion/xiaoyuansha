@@ -33,6 +33,28 @@ func run(host):
 	check(p.get_equipment_card("armor") == null, "暗置占位不虚构实体装备牌")
 	check(p.remove_equipment("armor") == null and p.hidden_equip_slot == "", "移除暗置占位只清状态")
 
+	# DEV-B01b：落位入口按实际牌型与槽位分类拒绝错误资源，失败不改状态。
+	suite.reset_players()
+	var peach = CardBase.create(CardData.CardSubType.PEACH)
+	var armor_card = CardBase.create(CardData.CardSubType.RENWANG_DUN)
+	var mount_card = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	check(not p.equip_card_to_slot("weapon", peach), "基本牌不能装入武器槽")
+	check(not p.equip_card_to_slot("weapon", armor_card), "防具不能装入武器槽")
+	check(not p.equip_card_to_slot("mount_1", weapon), "武器不能装入坐骑槽")
+	check(not p.equip_card_to_slot("armor", mount_card), "坐骑不能装入防具槽")
+	check(not p.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)), "暗置占位不能伪装为实体装备牌")
+	check(p.equipment.is_empty() and p.equipment_cards.is_empty() and p.mount_plus == 0,
+		"非法落位不改变类型槽、原实例表或坐骑计数")
+	check(p.equip_card_to_slot("weapon", weapon) and p.get_equipment_card("weapon") == weapon,
+		"合法武器仍保留原实例")
+	check(p.equip_card_to_slot("armor", armor_card) and p.get_equipment_card("armor") == armor_card,
+		"合法防具仍保留原实例")
+	check(p.equip_card_to_slot("mount_1", mount_card) and p.get_equipment_card("mount_1") == mount_card and p.mount_plus == 1,
+		"合法坐骑仍保留原实例并只增加一次计数")
+	check(not p.equip_card_to_slot("mount_1", CardBase.create(CardData.CardSubType.MOUNT_MINUS))
+		and p.get_equipment_card("mount_1") == mount_card and p.mount_plus == 1 and p.mount_minus == 0,
+		"已占槽位拒绝第二张牌且不改变原牌或计数")
+
 	# B2：正式出牌、主动替换和全牌区清理均沿用真实对象。
 	suite.reset_players()
 	game.deck._discard.clear()

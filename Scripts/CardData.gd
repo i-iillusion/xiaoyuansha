@@ -345,6 +345,17 @@ static func get_description(sub: CardSubType) -> String:
 static func get_type_category(sub: CardSubType) -> CardType:
 	return CARD_TYPE_MAP.get(sub, CardType.BASIC)
 
+# 实体装备的槽位类别；暗置占位没有具体实体，不可经普通落位入口装备。
+static func get_equipment_slot_type(sub: CardSubType) -> String:
+	match sub:
+		CardSubType.WEAPON, CardSubType.LIANNU, CardSubType.ZHUGE_LIANNU, CardSubType.QINGLONG_BLADE, CardSubType.ZHANGBA_SPEAR, CardSubType.CHIXIONG_SHUANGGU, CardSubType.ICE_SWORD, CardSubType.QINGGANG_SWORD, CardSubType.GUDING_BLADE, CardSubType.GUANSHI_AXE, CardSubType.QILING_BOW, CardSubType.POFENG_SPEAR, CardSubType.FANGTIAN_HALBERD, CardSubType.FATE_BLADE, CardSubType.GOU_LIAN_CLAW, CardSubType.BLOODTHIRSTY_BLADE, CardSubType.CALAMITY_SWORD, CardSubType.HEAL_STAFF, CardSubType.RAGING_AXE, CardSubType.SOUL_BLADE:
+			return "weapon"
+		CardSubType.ARMOR, CardSubType.RENWANG_DUN, CardSubType.BAIHUA_SKIRT, CardSubType.QIXING_PAO, CardSubType.SILVER_LION, CardSubType.SHENGGUANG_BAIYI, CardSubType.BAGUA_ZHEN, CardSubType.TENGJIA, CardSubType.ZHANQI, CardSubType.LIEHUO_SHIELD, CardSubType.QINGGANG_SHIELD, CardSubType.THORN_ARMOR, CardSubType.CALAMITY_ROBE, CardSubType.SAGE_PROTECTION:
+			return "armor"
+		CardSubType.MOUNT_PLUS, CardSubType.MOUNT_MINUS, CardSubType.MULE_PLUS, CardSubType.MULE_MINUS:
+			return "mount"
+	return ""
+
 static func get_category_name(ct: CardType) -> String:
 	match ct:
 		CardType.BASIC: return "基本牌"
