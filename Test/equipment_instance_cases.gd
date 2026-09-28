@@ -199,6 +199,7 @@ func run(host):
 	await check_active_mount_replace()
 	await check_active_weapon_armor_replace()
 	await check_first_sao_hide_resource()
+	await check_hidden_dismantle_resource()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -570,4 +571,61 @@ func check_first_sao_hide_resource():
 		check(not p.has_hidden_equip() and p.hand_size() == 0, label + "零手牌不能免费再次暗置")
 	game._sao_type_override = Callable()
 	game._sao_reveal_sub_override = Callable()
+	game.turn_manager.current_phase = previous_phase
+
+func check_hidden_dismantle_resource():
+	# DEV-B02b-1：拆暗置仍弃暗置原对象，旧选槽答复不能拆后来换上的同槽资源。
+	var previous_phase = game.turn_manager.current_phase
+	for concrete in [false, true]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		var attacker = game.players[0]
+		var target = game.players[1]
+		target.general_name = "安普提·斯丢皮得"
+		target.hidden_equip_slot = ""
+		target.hidden_equip_card = null
+		var source: CardBase = null
+		if concrete:
+			source = CardBase.create(CardData.CardSubType.QINGLONG_BLADE)
+			source.source_seat = 5
+			target.determined_cards.append(source)
+		else:
+			target.hand.append(null)
+		game.turn_manager.current_player_idx = 1
+		game._sao_type_override = func(): return "weapon"
+		await game._do_sao_hide(target, false)
+		game._sao_type_override = Callable()
+		game.turn_manager.current_player_idx = 0
+		var first = target.hidden_equip_card
+		var label = "具体牌" if concrete else "任意牌"
+		check(first != null and (first == source if concrete else true) and target.hand_size() == 0,
+			label + "暗置来源已支付并保留原对象")
+		game._equip_pick_override = func(): return "cancel"
+		await game._steal_equip(attacker, target, false, "过河拆桥")
+		check(target.hidden_equip_card == first and game.deck._discard.is_empty(), label + "取消拆牌不移动暗置资源")
+		var second = CardBase.create(CardData.CardSubType.QINGLONG_BLADE if concrete else CardData.CardSubType.HIDDEN_EQUIPMENT)
+		if concrete:
+			second.hidden_original_sub_type = second.sub_type
+			second.sub_type = CardData.CardSubType.HIDDEN_EQUIPMENT
+			second.card_name = CardData.get_type_name(second.sub_type)
+			second.source_seat = 6
+		second.hidden_category = "weapon"
+		var change_during_pick = func():
+			target.determined_cards.append(target.remove_equipment("weapon"))
+			target.equipment["weapon"] = CardData.CardSubType.HIDDEN_EQUIPMENT
+			target.hidden_equip_slot = "weapon"
+			target.hidden_equip_card = second
+			return "weapon"
+		game._equip_pick_override = change_during_pick
+		await game._steal_equip(attacker, target, false, "过河拆桥")
+		check(target.hidden_equip_card == second and target.determined_cards == [first]
+			and game.deck._discard.is_empty(), label + "旧选择不弃同槽后来暗置的另一原对象")
+		game._equip_pick_override = func(): return "weapon"
+		await game._steal_equip(attacker, target, false, "过河拆桥")
+		check(not target.has_hidden_equip() and game.deck._discard == [second]
+			and second.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT and second.hidden_category == "weapon"
+			and (second.source_seat == 6 and second.hidden_original_sub_type == CardData.CardSubType.QINGLONG_BLADE if concrete else true),
+			label + "下一次有效拆牌只弃当前暗置原对象一次且仍为暗置")
+		game._equip_pick_override = Callable()
 	game.turn_manager.current_phase = previous_phase
