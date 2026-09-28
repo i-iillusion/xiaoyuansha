@@ -18,7 +18,6 @@ class RescueAnswer extends RefCounted:
 
 signal game_started()
 signal game_over(winner_identity: String)
-signal awakening_finished(p: Player)
 
 @export var player_count: int = 5
 @export var auto_start: bool = true
@@ -3425,8 +3424,7 @@ func _ask_nullification_round(desc: String) -> String:
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
-			if _reveal_ask_pending and not _game_over:
-				await _maybe_ask_reveal()
+			await _maybe_ask_reveal()
 			return p.player_name
 	return ""
 
@@ -4026,9 +4024,7 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 	await _finish_damage_chain(chain)
 	if chain.damage.committed:
 		await _try_calamity_transfer(chain.source_player)
-	if _reveal_ask_pending and not _game_over:
-		await _maybe_ask_reveal()
-	print("A01e trace damage about to return")
+	await _maybe_ask_reveal()
 	return chain.target_player
 
 func _trigger_pofeng(source: Player, amount: int):
@@ -4709,7 +4705,6 @@ func _do_awaken(p: Player):
 	var desc = "1.不能成为【杀】的目标" if choice == 1 else ("2.不能成为【决斗】的目标" if choice == 2 else "3.不能成为【南蛮入侵】和【万箭齐发】的目标")
 	_update_debug("%s 选择觉醒效果：%s" % [p.player_name, desc])
 	_sync_all_ui()
-	awakening_finished.emit(p)
 
 # 觉醒三选一弹窗（玩家0）：返回 1 / 2 / 3
 func _show_awaken_pick() -> int:
@@ -4909,9 +4904,9 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		return
 	# 选牌快照直接移除手牌，不经 hand_updated；本人的最后一张牌一旦支付，
 	# 必须先完成强制觉醒的三选一，再继续其他目标支付或拼点。
-	_check_awaken_trigger()
-	if p.awoken and p.awake_choice == 0:
-		await awakening_finished
+	if p.hand_size() == 0 and not p.awoken:
+		p.awoken = true
+		await _do_awaken(p)
 	if not _paid_skill_rps_valid(p, valid[0], revision):
 		return
 	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
@@ -5081,13 +5076,10 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 	if r == RPS_WIN:
 		_update_debug("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
-		print("A01e trace campus damage returned")
 	else:
 		_update_debug("%s 拼点失败，%s 赢得拼点！对你造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(target, p, 1, EffectChain.DamageType.PHYSICAL)
-	print("A01e trace campus before sync")
 	_sync_all_ui()
-	print("A01e trace campus after sync")
 
 
 
@@ -7130,8 +7122,7 @@ func _on_selector_confirmed(sub: CardData.CardSubType):
 	_reveal_ask_pending = true
 	await play_card(sub)
 	# 【苕】任意玩家行动后询问是否明置
-	if _reveal_ask_pending and not _game_over:
-		await _maybe_ask_reveal()
+	await _maybe_ask_reveal()
 
 func _on_selector_cancelled():
 	_update_debug("取消出牌")
@@ -7149,8 +7140,7 @@ func _on_determined_card_clicked(card: CardBase):
 	# 目标选择期间继续保留原对象；即时牌、非法牌和完成结算均在这里收口残留状态。
 	if not _is_targeting and not _is_multi_targeting and not _is_iron_chain_targeting:
 		_clear_pending_determined_card()
-	if _reveal_ask_pending and not _game_over:
-		await _maybe_ask_reveal()
+	await _maybe_ask_reveal()
 
 # ============================
 #  玩家面板点击 → 目标选择 or 详情
@@ -7289,8 +7279,7 @@ func _on_target_click(target: Player):
 	_clear_pending_determined_card()
 	_targeting_card_sub = -1
 	# 【苕】任意玩家行动后询问是否明置
-	if _reveal_ask_pending and not _game_over:
-		await _maybe_ask_reveal()
+	await _maybe_ask_reveal()
 	# 恢复出牌按钮
 	_play_btn.visible = true
 	_end_play_btn.visible = true
@@ -7462,24 +7451,19 @@ func _show_toast(msg: String):
 
 func _sync_all_ui():
 	# 【觉醒】（史蒂芬·彼特先斯）：手牌为 0 时立即自动觉醒（觉醒技）
-	print("A01e trace sync enter: ", players[0].general_name, " hand=", players[0].hand_size())
 	_check_awaken_trigger()
-	print("A01e trace sync awake check done")
 	_update_player_panel(_self_info_panel, players[0])
-	print("A01e trace sync self panel done")
 
 	for i in range(4):
 		var seat = i + 1
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])
-			print("A01e trace sync other panel done: ", seat)
 
 	var my_turn = (turn_manager.current_player_idx == 0)
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
 		_play_btn.disabled = ((players[0].hand_size() <= 0 and players[0].determined_cards.is_empty()) or _is_kneeling(players[0]))
 	else:
 		_play_btn.disabled = true
-	print("A01e trace sync done")
 
 func _process(delta: float):
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
