@@ -4018,14 +4018,19 @@ func _show_kaiwen_prompt(opponent_name: String, is_receive: bool) -> bool:
 func _deal_damage(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Player:
 	if target == null or target.is_dead() or amount <= 0:
 		return target
+	print("A01e trace damage enter: ", source.general_name if source != null else "none", " -> ", target.general_name)
 	var chain = _new_damage_chain(source, target, null, amount, element)
 	chain.skip_targeting = true
 	chain.skip_response = true
 	await chain.start()
+	print("A01e trace chain done")
 	await _finish_damage_chain(chain)
+	print("A01e trace finish done")
 	if chain.damage.committed:
 		await _try_calamity_transfer(chain.source_player)
+	print("A01e trace calamity done")
 	await _maybe_ask_reveal()
+	print("A01e trace reveal done")
 	return chain.target_player
 
 func _trigger_pofeng(source: Player, amount: int):
