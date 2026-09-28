@@ -14,6 +14,7 @@ func reset_case():
 	game._rps_override = Callable()
 	game._zhuangbi_again_override = Callable()
 	game._paixiong_override = Callable()
+	game._awaken_pick_override = Callable()
 
 func run(host):
 	suite = host
@@ -79,12 +80,48 @@ func run(host):
 
 	await check_paixiong_result_boundaries(actor, target)
 	await check_paid_rps_context(actor, target, second)
+	await check_zhuangbi_last_card_awaken(actor, target)
 
 	await check_selection_recovery(actor, target)
 	await check_context_invalidation(actor, target)
 	reset_case()
 	game = null
 	suite = null
+
+func check_zhuangbi_last_card_awaken(actor: Player, target: Player):
+	for use_concrete in [false, true]:
+		reset_case()
+		actor.general_name = "史蒂芬·彼特先斯"
+		var card: CardBase = null
+		if use_concrete:
+			card = CardBase.create(CardData.CardSubType.PEACH)
+			actor.determined_cards.append(card)
+		else:
+			actor.hand.append(null)
+		target.hand.append(null)
+		var order: Array[String] = []
+		game._awaken_pick_override = func():
+			order.append("awaken")
+			check(target.hand_size() == 1, "支付最后一张后先觉醒，目标尚未弃牌")
+			return 2
+		game._hand_discard_override = func(snapshot, count, mandatory):
+			if snapshot.owner == target:
+				order.append("target_pay")
+				check(actor.awoken and actor.awake_choice == 2 and actor.hand_size() == 2,
+					"目标支付前已完成觉醒并摸两张任意牌")
+			return snapshot.defaults(count)
+		game._rps_override = func(p):
+			order.append("rps")
+			return 0 if p == actor else 2
+		game._zhuangbi_again_override = func(): return false
+		await game._execute_zhuangbi([target])
+		check(order == ["awaken", "target_pay", "rps", "rps"], "最后手牌费用、觉醒、目标费用及拼点按顺序结算")
+		check(actor.max_hp == 9 and actor.hp == 9 and actor.awoken and actor.awake_choice == 2,
+			"觉醒只结算一次，失去一点体力上限并记录选择")
+		check(actor.hand_size() == 2 and target.hand_size() == 0 and target.hp == 9,
+			"觉醒所摸手牌保留，已付目标费用及拼点伤害继续")
+		check(game.deck._discard == ([card] if use_concrete else []),
+			"具体原牌只弃一次；任意牌支付不虚构实体")
 
 func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 非空过期答复重选；具体牌只以原实例入弃牌堆一次。
