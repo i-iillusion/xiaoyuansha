@@ -4515,11 +4515,14 @@ func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）
 func _maybe_ask_reveal() -> void:
+	print("A01e trace reveal entry: pending=", _reveal_ask_pending, " owner=", players[0].general_name)
 	if _game_over or not _reveal_ask_pending:
+		print("A01e trace reveal early no pending")
 		return
 	_reveal_ask_pending = false
 	var owner = players[0]
 	if owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
+		print("A01e trace reveal early other general")
 		return
 	if not owner.has_hidden_equip():
 		return
