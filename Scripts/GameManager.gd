@@ -2459,6 +2459,28 @@ func _hidden_declaration_options(card: CardBase) -> Array[int]:
 				options.remove_at(i)
 	return options
 
+func _default_stolen_hidden_sub(card: CardBase, options: Array[int]) -> int:
+	if options.is_empty():
+		return -1
+	# 已具体化的原牌不能因取消/超时重新命名。
+	if card.hidden_original_sub_type >= 0:
+		return options[0]
+	match card.hidden_category:
+		"weapon":
+			if options.has(CardData.CardSubType.CALAMITY_SWORD):
+				return CardData.CardSubType.CALAMITY_SWORD
+		"armor":
+			if options.has(CardData.CardSubType.CALAMITY_ROBE):
+				return CardData.CardSubType.CALAMITY_ROBE
+		"mount":
+			var mules: Array[int] = []
+			for sub in [CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS]:
+				if options.has(sub):
+					mules.append(sub)
+			if not mules.is_empty():
+				return mules[randi() % mules.size()]
+	return options[randi() % options.size()]
+
 func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player, card: CardBase) -> void:
 	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
 			or not recipient.determined_cards.has(card):
@@ -2480,6 +2502,8 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 	else:
 		# AI 的确定性声明策略；不改变人类玩家的名称选择。
 		chosen = options[0]
+	if chosen < 0:
+		chosen = _default_stolen_hidden_sub(card, options)
 	if _game_over or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
 			or not recipient.determined_cards.has(card) \
 			or not options.has(chosen) or not _hidden_declaration_options(card).has(chosen):

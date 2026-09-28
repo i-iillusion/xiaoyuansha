@@ -201,6 +201,7 @@ func run(host):
 	await check_first_sao_hide_resource()
 	await check_hidden_dismantle_resource()
 	await check_hidden_snatch_declaration()
+	await check_hidden_snatch_default_declaration()
 	await check_hidden_death_and_disarm()
 	suite.reset_players()
 	for player in game.players:
@@ -723,6 +724,107 @@ func check_hidden_snatch_declaration():
 		"声明期间原牌再次转移，过期答复不改牌或占名")
 	game._sao_transfer_declare_override = Callable()
 	game._equip_pick_override = Callable()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_hidden_snatch_default_declaration():
+	# DEV-B02b-2b：只有原持有者取消/超时才使用默认名称，具体原牌仍保原名。
+	var previous_phase = game.turn_manager.current_phase
+	for category in ["weapon", "armor", "mount"]:
+		for concrete in [false, true]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			var attacker = game.players[0]
+			var target = game.players[1]
+			target.general_name = "安普提·斯丢皮得"
+			target.hidden_equip_slot = ""
+			target.hidden_equip_card = null
+			var original_sub = CardData.CardSubType.QINGLONG_BLADE
+			match category:
+				"armor": original_sub = CardData.CardSubType.RENWANG_DUN
+				"mount": original_sub = CardData.CardSubType.MOUNT_PLUS
+			var original: CardBase = null
+			if concrete:
+				original = CardBase.create(original_sub)
+				original.source_seat = 8
+				target.determined_cards.append(original)
+			else:
+				target.hand.append(null)
+			game.turn_manager.current_player_idx = 1
+			game._sao_type_override = func(): return category
+			await game._do_sao_hide(target, false)
+			game._sao_type_override = Callable()
+			var hidden = target.hidden_equip_card
+			var slot = target.hidden_equip_slot
+			game.turn_manager.current_player_idx = 0
+			game._equip_pick_override = func(): return slot
+			game._sao_transfer_declare_override = func(): return -1
+			await game._steal_equip(attacker, target, true, "顺手牵羊")
+			var expected = original_sub if concrete else (CardData.CardSubType.CALAMITY_SWORD if category == "weapon" else CardData.CardSubType.CALAMITY_ROBE)
+			var correct_name = hidden.sub_type == expected if concrete or category != "mount" else \
+				(hidden.sub_type == CardData.CardSubType.MULE_MINUS or hidden.sub_type == CardData.CardSubType.MULE_PLUS)
+			check(not target.has_hidden_equip() and attacker.determined_cards == [hidden]
+				and correct_name and hidden.hidden_category == ""
+				and (hidden == original and hidden.source_seat == 8 if concrete else true),
+				category + ("具体原牌" if concrete else "任意来源") + "取消声明后正确默认且保原对象")
+			game._equip_pick_override = Callable()
+			game._sao_transfer_declare_override = Callable()
+
+	# 默认灾厄剑已占用：只能从尚可声明的其他武器名中选，不重复占名。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	var attacker = game.players[0]
+	var target = game.players[1]
+	target.general_name = "安普提·斯丢皮得"
+	target.hidden_equip_slot = ""
+	target.hidden_equip_card = null
+	target.hand.append(null)
+	game.turn_manager.current_player_idx = 1
+	game._sao_type_override = func(): return "weapon"
+	await game._do_sao_hide(target, false)
+	game._sao_type_override = Callable()
+	var hidden = target.hidden_equip_card
+	game.equipment_pool.claim(CardData.CardSubType.CALAMITY_SWORD)
+	game.turn_manager.current_player_idx = 0
+	game._equip_pick_override = func(): return "weapon"
+	game._sao_transfer_declare_override = func(): return -1
+	await game._steal_equip(attacker, target, true, "顺手牵羊")
+	check(attacker.determined_cards == [hidden] and game.SAO_WEAPON_SUBS.has(hidden.sub_type)
+		and hidden.sub_type != CardData.CardSubType.CALAMITY_SWORD
+		and game.equipment_pool.is_claimed(hidden.sub_type),
+		"灾厄剑已占用时从剩余武器名中默认声明")
+	game._equip_pick_override = Callable()
+	game._sao_transfer_declare_override = Callable()
+
+	# 取消答复到达前原牌又离开取得者，不能用默认名改写失效对象。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	attacker = game.players[0]
+	target = game.players[1]
+	target.general_name = "安普提·斯丢皮得"
+	target.hidden_equip_slot = ""
+	target.hidden_equip_card = null
+	target.hand.append(null)
+	game.turn_manager.current_player_idx = 1
+	game._sao_type_override = func(): return "weapon"
+	await game._do_sao_hide(target, false)
+	game._sao_type_override = Callable()
+	hidden = target.hidden_equip_card
+	game.turn_manager.current_player_idx = 0
+	game._equip_pick_override = func(): return "weapon"
+	game._sao_transfer_declare_override = func():
+		attacker.determined_cards.erase(hidden)
+		target.determined_cards.append(hidden)
+		return -1
+	await game._steal_equip(attacker, target, true, "顺手牵羊")
+	check(attacker.determined_cards.is_empty() and target.determined_cards == [hidden]
+		and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+		and not game.equipment_pool.is_claimed(CardData.CardSubType.CALAMITY_SWORD),
+		"过期取消答复不触发默认声明或占名")
+	game._equip_pick_override = Callable()
+	game._sao_transfer_declare_override = Callable()
 	game.equipment_pool.clear()
 	game.turn_manager.current_phase = previous_phase
 
