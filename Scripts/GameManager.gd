@@ -2516,17 +2516,24 @@ func _discard_exhausted_hidden_category(category: String) -> void:
 		_sync_all_ui()
 		_refresh_detail_popup()
 
+# EQ-04：已占用名称只允许由同一张未弃置的具体原牌再次声明；任意暗置牌不能造第二张。
+func _can_declare_hidden_name(card: CardBase, sub: CardData.CardSubType) -> bool:
+	if not equipment_pool.is_claimed(sub):
+		return true
+	return card.hidden_original_sub_type == sub \
+		and equipment_pool.is_claimed_original(sub, card) and not deck._discard.has(card)
+
 # E-03：暗置装备被顺走后，原持有者声明；同类名称耗尽改按C-S4c立即弃置。
 func _hidden_declaration_options(card: CardBase) -> Array[int]:
 	var options: Array[int] = []
 	match card.hidden_category:
 		"weapon":
 			for sub in SAO_WEAPON_SUBS:
-				if not equipment_pool.is_claimed(sub):
+				if _can_declare_hidden_name(card, sub):
 					options.append(sub)
 		"armor":
 			for sub in SAO_ARMOR_SUBS:
-				if not equipment_pool.is_claimed(sub):
+				if _can_declare_hidden_name(card, sub):
 					options.append(sub)
 		"mount":
 			options.append_array(SAO_MOUNT_SUBS)
@@ -4794,24 +4801,7 @@ func _do_sao_reveal(p: Player) -> void:
 	if _game_over or not p.is_alive() \
 			or turn_manager.get_context_revision() != reveal_context:
 		return
-	var etype = "mount" if Player.MOUNT_SLOTS.has(reveal_slot) else reveal_slot
-	var options: Array[int] = []
-	match etype:
-		"weapon":
-			for sub in SAO_WEAPON_SUBS:
-				if not equipment_pool.is_claimed(sub):
-					options.append(sub)
-		"armor":
-			for sub in SAO_ARMOR_SUBS:
-				if not equipment_pool.is_claimed(sub):
-					options.append(sub)
-		"mount":
-			for sub in SAO_MOUNT_SUBS:
-				options.append(sub)
-	if source.hidden_original_sub_type >= 0:
-		for i in range(options.size() - 1, -1, -1):
-			if options[i] != source.hidden_original_sub_type:
-				options.remove_at(i)
+	var options = _hidden_declaration_options(source)
 	if options.is_empty():
 		_show_toast("该类型的所有装备都已被打出过，无法明置")
 		return
@@ -4856,7 +4846,7 @@ func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
 			or source.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
 			or (source.hidden_original_sub_type >= 0 and source.hidden_original_sub_type != sub):
 		return false
-	if slot_type != "mount" and equipment_pool.is_claimed(sub):
+	if slot_type != "mount" and not _can_declare_hidden_name(source, sub):
 		return false
 	p.remove_equipment(slot)
 	source.sub_type = sub

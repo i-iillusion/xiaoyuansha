@@ -214,6 +214,7 @@ func run(host):
 	await check_meiyong_one_hidden_mount_to_empty()
 	await check_meiyong_hidden_visible_mount_exchange()
 	await _check_claimed_original_requip()
+	await _check_claimed_original_hidden_declaration()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -841,6 +842,92 @@ func _check_claimed_original_requip():
 		check(thief.determined_cards.has(original) and not thief.equipment.has(slot),
 			"弃置后的%s原牌即使误回手也不能再装备" % slot)
 		game._weapon_replace_override = Callable()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = previous_phase
+
+# DEV-B03b-1：已占名的同一原牌被顺走后暗置，仍可主动明置或离区声明原名。
+func _check_claimed_original_hidden_declaration():
+	var previous_phase = game.turn_manager.current_phase
+	for spec in [
+		{"sub": CardData.CardSubType.LIANNU, "slot": "weapon"},
+		{"sub": CardData.CardSubType.RENWANG_DUN, "slot": "armor"},
+	]:
+		for path in ["active", "snatch", "exchange"]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.deck._discard.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			var sub: CardData.CardSubType = spec.sub
+			var slot: String = spec.slot
+			var owner: Player = game.players[1]
+			var sao: Player = game.players[0]
+			var recipient: Player = game.players[2]
+			sao.general_name = "安普提·斯丢皮得"
+			owner.hand.append(null)
+			game.turn_manager.current_player_idx = owner.seat_index
+			await game.play_card(sub)
+			var original: CardBase = owner.get_equipment_card(slot)
+			game._equip_pick_override = func(): return slot
+			await game._steal_equip(sao, owner, true, "顺手牵羊")
+			game._equip_pick_override = Callable()
+			game.turn_manager.current_player_idx = sao.seat_index
+			game._sao_type_override = func(): return slot
+			await game._do_sao_hide(sao, false)
+			game._sao_type_override = Callable()
+			check(original != null and sao.get_hidden_equipment_card(slot) == original
+				and original.hidden_original_sub_type == sub and game.equipment_pool.is_claimed_original(sub, original),
+				"%s%s：被顺走的唯一原牌暗置仍保留原名与对象" % [slot, path])
+			var other_hidden = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+			other_hidden.hidden_category = slot
+			check(game._hidden_declaration_options(original).has(sub)
+				and not game._hidden_declaration_options(other_hidden).has(sub),
+				"%s%s：原牌保留已占名资格，另一任意暗置牌没有" % [slot, path])
+			if path == "active":
+				game._sao_reveal_sub_override = func(): return -1
+				await game._do_sao_reveal(sao)
+				check(sao.get_hidden_equipment_card(slot) == original and game.deck._discard.is_empty(),
+					"%s主动取消不改变原牌" % slot)
+				var later = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+				later.hidden_category = slot
+				game._sao_reveal_sub_override = func():
+					check(sao.remove_equipment(slot) == original
+						and sao.equip_hidden_card_to_slot(slot, later), "%s选名等待中同槽暗置原牌已替换" % slot)
+					sao.determined_cards.append(original)
+					return sub
+				await game._do_sao_reveal(sao)
+				check(sao.get_hidden_equipment_card(slot) == later and sao.determined_cards.has(original)
+					and later.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT,
+					"%s过期答复不能替后来暗置牌声明已占名" % slot)
+				check(sao.remove_equipment(slot) == later and sao.equip_hidden_card_to_slot(slot, original),
+					"%s下一合法明置前同一原牌重新回槽" % slot)
+				sao.determined_cards.erase(original)
+				game._sao_reveal_sub_override = func(): return sub
+				await game._do_sao_reveal(sao)
+				game._sao_reveal_sub_override = Callable()
+				check(sao.get_equipment_card(slot) == original and original.sub_type == sub
+					and game.deck._discard.is_empty(), "%s已占名的原牌可主动明置" % slot)
+			elif path == "snatch":
+				game._sao_transfer_declare_override = func(): return sub
+				await game._steal_equip(recipient, sao, true, "顺手牵羊")
+				game._sao_transfer_declare_override = Callable()
+				check(recipient.determined_cards.has(original) and original.sub_type == sub
+					and game.equipment_pool.is_claimed_original(sub, original),
+					"%s原持有者在再次顺走后仍可声明同一原名" % slot)
+			else:
+				check(game._swap_equip_slot(sao, slot, recipient, slot), "%s暗置原牌先交换到接收者" % slot)
+				game._sao_transfer_declare_override = func(): return sub
+				await game._declare_exchanged_hidden_equipment(sao, recipient, slot, original)
+				game._sao_transfer_declare_override = Callable()
+				check(recipient.get_equipment_card(slot) == original and original.sub_type == sub
+					and game.equipment_pool.is_claimed_original(sub, original),
+					"%s交换后由原持有者声明同一原名" % slot)
+			var other: Player = game.players[3]
+			other.hand.append(null)
+			game.turn_manager.current_player_idx = other.seat_index
+			await game.play_card(sub)
+			check(other.hand_size() == 1 and not other.equipment.has(slot),
+				"%s%s：原牌声明不准另一任意牌造同名" % [slot, path])
 	game.equipment_pool.clear()
 	game.deck._discard.clear()
 	game.turn_manager.current_phase = previous_phase
