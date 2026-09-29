@@ -211,6 +211,7 @@ func run(host):
 	await check_meiyong_hidden_visible_exchange()
 	await check_meiyong_two_hidden_exchange()
 	await check_meiyong_one_hidden_mount_to_empty()
+	await check_meiyong_hidden_visible_mount_exchange()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -1602,6 +1603,129 @@ func check_meiyong_one_hidden_mount_to_empty():
 	check(not a.equipment.has("mount_2") and b.get_equipment_card("mount_4") == next_hidden
 		and actor.hand_size() == 0 and game._lanzhonghou_used,
 		"重新选择当前暗置坐骑后付一张并跨槽转移原牌")
+	game._lanzhonghou_zone_override = Callable()
+	game._lanzhonghou_mount_override = Callable()
+	game._sao_transfer_declare_override = Callable()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_hidden_visible_mount_exchange():
+	# DEV-B02b-4c-2b-ii-c-2：一暗一明坐骑先交换原对象，再由暗置原持有者声明。
+	var previous_phase = game.turn_manager.current_phase
+	for hidden_is_a in [true, false]:
+		for concrete in [false, true]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.deck._discard.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			game._lanzhonghou_used = false
+			var actor = game.players[0]
+			var a = game.players[1]
+			var b = game.players[2]
+			for player in [a, b]:
+				player.hidden_equip_slot = ""
+				player.hidden_equip_card = null
+				player.mount_plus = 0
+				player.mount_minus = 0
+			var hidden_owner = a if hidden_is_a else b
+			var visible_owner = b if hidden_is_a else a
+			actor.general_name = "麦克斯·欧尼斯特"
+			actor.hand.append(null)
+			hidden_owner.general_name = "安普提·斯丢皮得"
+			var original: CardBase = null
+			if concrete:
+				original = CardBase.create(CardData.CardSubType.MOUNT_MINUS)
+				original.source_seat = 8
+				hidden_owner.determined_cards.append(original)
+			else:
+				hidden_owner.hand.append(null)
+			game.turn_manager.current_player_idx = hidden_owner.seat_index
+			game._sao_type_override = func(): return "mount"
+			await game._do_sao_hide(hidden_owner, false)
+			game._sao_type_override = Callable()
+			var hidden_slot = hidden_owner.hidden_equip_slot
+			var hidden = hidden_owner.get_hidden_equipment_card(hidden_slot)
+			var visible_slot = "mount_3"
+			var visible = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+			visible.source_seat = 7
+			var label = ("A暗" if hidden_is_a else "B暗") + ("具体" if concrete else "任意")
+			check(hidden != null and hidden_slot == "mount_1" and visible_owner.equip_card_to_slot(visible_slot, visible),
+				label + "交换前暗置与明置坐骑原牌各自落位")
+			game.turn_manager.current_player_idx = 0
+			var zones: Array = ["cancel"]
+			game._lanzhonghou_zone_override = func(): return zones.pop_front()
+			await game._run_lanzhonghou(a, b)
+			check(hidden_owner.get_hidden_equipment_card(hidden_slot) == hidden
+				and visible_owner.get_equipment_card(visible_slot) == visible
+				and actor.hand_size() == 1 and not game._lanzhonghou_used,
+				label + "取消不交换、不付费")
+			zones.assign(["mount", "done"])
+			game._lanzhonghou_mount_override = func(target, available):
+				var slot = hidden_slot if target == hidden_owner else visible_slot
+				check(available.has(slot), label + "一暗一明坐骑槽均可选择")
+				return slot
+			game._sao_transfer_declare_override = func():
+				check(hidden_owner.get_equipment_card(hidden_slot) == visible
+					and visible_owner.get_hidden_equipment_card(visible_slot) == hidden,
+					label + "声明前两件坐骑原牌已经互换")
+				return -1
+			await game._run_lanzhonghou(a, b)
+			var correct_name = hidden.sub_type == CardData.CardSubType.MOUNT_MINUS if concrete else \
+				(hidden.sub_type == CardData.CardSubType.MULE_MINUS or hidden.sub_type == CardData.CardSubType.MULE_PLUS)
+			check(hidden_owner.get_equipment_card(hidden_slot) == visible
+				and visible_owner.get_equipment_card(visible_slot) == hidden
+				and visible.source_seat == 7 and (hidden == original and hidden.source_seat == 8 if concrete else true)
+				and correct_name,
+				label + "双方保留各自原对象，暗置原持有者按合法名声明")
+			check(hidden_owner.mount_plus == 1 and hidden_owner.mount_minus == 0
+				and visible_owner.mount_plus == 0 and visible_owner.mount_minus == (1 if concrete else 0)
+				and actor.hand_size() == 0 and game._lanzhonghou_used and game.deck._discard.is_empty(),
+				label + "只付一张、双方马计数按最终具体名更新且原牌不入弃")
+			game._lanzhonghou_zone_override = Callable()
+			game._lanzhonghou_mount_override = Callable()
+			game._sao_transfer_declare_override = Callable()
+	# 选区等待中明置坐骑同槽换了原实例，旧选择不付费；重新选当前牌才生效。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game._lanzhonghou_used = false
+	var actor = game.players[0]
+	var a = game.players[1]
+	var b = game.players[2]
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	a.hidden_equip_slot = ""
+	a.hidden_equip_card = null
+	var hidden = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	hidden.hidden_category = "mount"
+	var old_visible = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	var next_visible = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+	check(a.equip_hidden_card_to_slot("mount_2", hidden)
+		and b.equip_card_to_slot("mount_4", old_visible), "过期选择例两侧坐骑原牌已落位")
+	var zones: Array = ["mount", "done"]
+	game._lanzhonghou_zone_override = func():
+		var choice = zones.pop_front()
+		if choice == "done":
+			b.determined_cards.append(b.remove_equipment("mount_4"))
+			check(b.equip_card_to_slot("mount_4", next_visible), "等待中明置坐骑已换成同名另一原牌")
+		return choice
+	game._lanzhonghou_mount_override = func(target, available):
+		var slot = "mount_2" if target == a else "mount_4"
+		check(available.has(slot), "过期选择例暗置和明置马槽均可选")
+		return slot
+	await game._run_lanzhonghou(a, b)
+	check(a.get_hidden_equipment_card("mount_2") == hidden
+		and b.get_equipment_card("mount_4") == next_visible and b.determined_cards.has(old_visible)
+		and actor.hand_size() == 1 and not game._lanzhonghou_used,
+		"旧坐骑原牌选区过期不付费、不移动后来者")
+	zones.assign(["mount", "done"])
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	game._sao_transfer_declare_override = func(): return -1
+	await game._run_lanzhonghou(a, b)
+	check(a.get_equipment_card("mount_2") == next_visible
+		and b.get_equipment_card("mount_4") == hidden
+		and actor.hand_size() == 0 and game._lanzhonghou_used,
+		"下一次选择当前一暗一明坐骑后仅付一张并完成互换")
 	game._lanzhonghou_zone_override = Callable()
 	game._lanzhonghou_mount_override = Callable()
 	game._sao_transfer_declare_override = Callable()

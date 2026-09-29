@@ -5778,7 +5778,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			return
 		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
-		if (hidden_a or hidden_b) and (entry.zone == "mount" and entry.card_a != null and entry.card_b != null \
+		if (hidden_a or hidden_b) and (entry.zone == "mount" and hidden_a and hidden_b \
 				or (hidden_a and entry.card_a == null) \
 				or (hidden_b and entry.card_b == null)):
 			_update_debug("所选暗置交换组合尚未支持，未支付费用")
