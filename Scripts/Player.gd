@@ -273,6 +273,20 @@ func equip_card_to_slot(slot: String, card: CardBase) -> bool:
 	_apply_equipment_state(card.sub_type)
 	return true
 
+# 暗置原牌落入空装备槽；只记录来源和公开类别，不提前具体化。
+# 当前单暗置字段只能承载一张，其他暗置牌同持有者场景另行扩展。
+func equip_hidden_card_to_slot(slot: String, card: CardBase) -> bool:
+	if not EQUIP_SLOTS.has(slot) or equipment.has(slot) or has_hidden_equip() \
+			or card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT:
+		return false
+	var slot_type = "mount" if MOUNT_SLOTS.has(slot) else slot
+	if card.hidden_category != slot_type:
+		return false
+	equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
+	hidden_equip_slot = slot
+	hidden_equip_card = card
+	return true
+
 # 卸下指定槽位装备（同时重置对应属性），返回原始卡牌实例。
 func remove_equipment(slot: String) -> CardBase:
 	var sub = equipment.get(slot, -1)

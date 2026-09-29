@@ -205,6 +205,7 @@ func run(host):
 	await check_hidden_death_and_disarm()
 	await check_meiyong_one_empty_visible_slot()
 	await check_meiyong_empty_mount_slots()
+	await check_meiyong_one_hidden_to_empty()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -1046,4 +1047,174 @@ func check_meiyong_empty_mount_slots():
 			"坐骑" + direction + "单侧空槽只付一张牌")
 		game._lanzhonghou_zone_override = Callable()
 		game._lanzhonghou_mount_override = Callable()
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_one_hidden_to_empty():
+	# DEV-B02b-4c-1：只验一张暗置武器/防具移至对方空槽，离区后原持有者声明。
+	var previous_phase = game.turn_manager.current_phase
+	for zone in ["weapon", "armor"]:
+		for source_is_a in [true, false]:
+			for concrete in [false, true]:
+				suite.reset_players()
+				game.equipment_pool.clear()
+				game.deck._discard.clear()
+				game.turn_manager.current_phase = TurnManager.Phase.PLAY
+				game._lanzhonghou_used = false
+				var actor = game.players[0]
+				var a = game.players[1]
+				var b = game.players[2]
+				for player in [a, b]:
+					player.hidden_equip_slot = ""
+					player.hidden_equip_card = null
+				var source = a if source_is_a else b
+				var dest = b if source_is_a else a
+				actor.general_name = "麦克斯·欧尼斯特"
+				actor.hand.append(null)
+				source.general_name = "安普提·斯丢皮得"
+				var original_sub = CardData.CardSubType.QINGLONG_BLADE if zone == "weapon" else CardData.CardSubType.RENWANG_DUN
+				var original: CardBase = null
+				if concrete:
+					original = CardBase.create(original_sub)
+					original.source_seat = 8
+					source.determined_cards.append(original)
+				else:
+					source.hand.append(null)
+				game.turn_manager.current_player_idx = source.seat_index
+				game._sao_type_override = func(): return zone
+				await game._do_sao_hide(source, false)
+				game._sao_type_override = Callable()
+				var hidden = source.hidden_equip_card
+				var label = zone + ("A到B" if source_is_a else "B到A") + ("具体" if concrete else "任意")
+				check(hidden != null and source.equipment.get(zone) == CardData.CardSubType.HIDDEN_EQUIPMENT
+					and (hidden == original if concrete else true), label + "交换前仅有一份暗置原牌")
+				game.turn_manager.current_player_idx = 0
+				var zones: Array = ["cancel"]
+				game._lanzhonghou_zone_override = func(): return zones.pop_front()
+				await game._run_lanzhonghou(a, b)
+				check(source.hidden_equip_card == hidden and dest.equipment.is_empty()
+					and actor.hand_size() == 1 and not game._lanzhonghou_used,
+					label + "取消不动暗置牌或费用")
+				zones.assign([zone, "done"])
+				game._sao_transfer_declare_override = func(): return -1
+				await game._run_lanzhonghou(a, b)
+				var expected = original_sub if concrete else (CardData.CardSubType.CALAMITY_SWORD if zone == "weapon" else CardData.CardSubType.CALAMITY_ROBE)
+				check(not source.equipment.has(zone) and not source.has_hidden_equip()
+					and dest.get_equipment_card(zone) == hidden and hidden.sub_type == expected
+					and (hidden.source_seat == 8 if concrete else true),
+					label + "原牌移入空槽并按原持有者默认声明")
+				check(actor.hand_size() == 0 and game._lanzhonghou_used and game.deck._discard.is_empty()
+					and game.equipment_pool.is_claimed(expected), label + "只付一张并占用具体名称")
+				game._lanzhonghou_zone_override = Callable()
+				game._sao_transfer_declare_override = Callable()
+
+	# 全部武器名称不可用时，先移动原对象，再保持暗置，不凭空造牌或退费。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game._lanzhonghou_used = false
+	var actor = game.players[0]
+	var a = game.players[1]
+	var b = game.players[2]
+	for player in [a, b]:
+		player.hidden_equip_slot = ""
+		player.hidden_equip_card = null
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	a.general_name = "安普提·斯丢皮得"
+	a.hand.append(null)
+	game.turn_manager.current_player_idx = 1
+	game._sao_type_override = func(): return "weapon"
+	await game._do_sao_hide(a, false)
+	game._sao_type_override = Callable()
+	var hidden = a.hidden_equip_card
+	for sub in game.SAO_WEAPON_SUBS:
+		game.equipment_pool.claim(sub)
+	game.turn_manager.current_player_idx = 0
+	var zones: Array = ["weapon", "done"]
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	await game._run_lanzhonghou(a, b)
+	check(not a.has_hidden_equip() and b.hidden_equip_card == hidden
+		and b.equipment.get("weapon") == CardData.CardSubType.HIDDEN_EQUIPMENT
+		and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+		and actor.hand_size() == 0 and game._lanzhonghou_used,
+		"全名称耗尽仍移动并保留暗置原牌")
+	game._lanzhonghou_zone_override = Callable()
+	game.equipment_pool.clear()
+
+	# 默认灾厄剑已被占用：使用剩余合法武器名，不重复占名。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game._lanzhonghou_used = false
+	actor = game.players[0]
+	a = game.players[1]
+	b = game.players[2]
+	for player in [a, b]:
+		player.hidden_equip_slot = ""
+		player.hidden_equip_card = null
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	a.general_name = "安普提·斯丢皮得"
+	a.hand.append(null)
+	game.turn_manager.current_player_idx = 1
+	game._sao_type_override = func(): return "weapon"
+	await game._do_sao_hide(a, false)
+	game._sao_type_override = Callable()
+	hidden = a.hidden_equip_card
+	game.equipment_pool.claim(CardData.CardSubType.CALAMITY_SWORD)
+	game.turn_manager.current_player_idx = 0
+	zones.assign(["weapon", "done"])
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	game._sao_transfer_declare_override = func(): return -1
+	await game._run_lanzhonghou(a, b)
+	check(b.get_equipment_card("weapon") == hidden and game.SAO_WEAPON_SUBS.has(hidden.sub_type)
+		and hidden.sub_type != CardData.CardSubType.CALAMITY_SWORD
+		and game.equipment_pool.is_claimed(hidden.sub_type),
+		"交换声明取消且默认名已占用时，原对象从剩余武器池具体化")
+	game._lanzhonghou_zone_override = Callable()
+	game._sao_transfer_declare_override = Callable()
+
+	# 等待原持有者声明期间，原牌再次离开接收者：过期答复不得改名或占用名额。
+	for stale in [true, false]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._lanzhonghou_used = false
+		actor = game.players[0]
+		a = game.players[1]
+		b = game.players[2]
+		for player in [a, b]:
+			player.hidden_equip_slot = ""
+			player.hidden_equip_card = null
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		a.general_name = "安普提·斯丢皮得"
+		a.hand.append(null)
+		game.turn_manager.current_player_idx = 1
+		game._sao_type_override = func(): return "weapon"
+		await game._do_sao_hide(a, false)
+		game._sao_type_override = Callable()
+		hidden = a.hidden_equip_card
+		game.turn_manager.current_player_idx = 0
+		zones.assign(["weapon", "done"])
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		game._sao_transfer_declare_override = func():
+			if stale:
+				check(b.remove_equipment("weapon") == hidden, "声明等待期间只能移出接收者的原对象")
+				a.determined_cards.append(hidden)
+			return CardData.CardSubType.QINGLONG_BLADE
+		await game._run_lanzhonghou(a, b)
+		if stale:
+			check(b.equipment.is_empty() and a.determined_cards == [hidden]
+				and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+				and not game.equipment_pool.is_claimed(CardData.CardSubType.QINGLONG_BLADE),
+				"交换声明旧答复不改已再次离区的牌或占名")
+		else:
+			check(b.get_equipment_card("weapon") == hidden
+				and hidden.sub_type == CardData.CardSubType.QINGLONG_BLADE
+				and game.equipment_pool.is_claimed(CardData.CardSubType.QINGLONG_BLADE),
+				"过期答复后的下一局合法交换可正常声明")
+		game._lanzhonghou_zone_override = Callable()
+		game._sao_transfer_declare_override = Callable()
+	game.equipment_pool.clear()
 	game.turn_manager.current_phase = previous_phase

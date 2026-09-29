@@ -2518,6 +2518,36 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 		equipment_pool.claim(chosen)
 	_update_debug("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
+# 【没用】交换时先完成原牌移动，再由原持有者声明；与顺走共用合法名称和取消默认。
+func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Player,
+		slot: String, card: CardBase) -> void:
+	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
+			or recipient.hidden_equip_slot != slot or recipient.hidden_equip_card != card:
+		return
+	var options = _hidden_declaration_options(card)
+	if options.is_empty():
+		_update_debug("交换后的暗置装备无可声明名称，仍保持暗置")
+		return
+	var chosen: int = -1
+	if _sao_transfer_declare_override.is_valid():
+		chosen = _sao_transfer_declare_override.call()
+	elif original_holder.seat_index == 0:
+		var names: Array = []
+		for sub in options:
+			names.append(CardData.get_type_name(sub))
+		var idx = await _show_sao_reveal_picker(names)
+		if idx >= 0 and idx < options.size():
+			chosen = options[idx]
+	else:
+		chosen = options[0]
+	if chosen < 0:
+		chosen = _default_stolen_hidden_sub(card, options)
+	if _game_over or recipient.hidden_equip_slot != slot or recipient.hidden_equip_card != card \
+			or not options.has(chosen) or not _hidden_declaration_options(card).has(chosen):
+		return
+	if _reveal_hidden_as(recipient, chosen):
+		_update_debug("%s 声明交换离区的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
+
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
 func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String):
 	if target.judgment_cards.is_empty():
@@ -5699,6 +5729,14 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 				or _equipment_resource_for_pick(entry.b, entry.slot_b) != entry.card_b):
 			_lanzhonghou_pending.clear()
 			return
+		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
+		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
+		if (hidden_a or hidden_b) and (entry.zone == "mount" or hidden_a == hidden_b \
+				or (hidden_a and (entry.card_a == null or entry.b.equipment.has(entry.slot_b) or entry.b.has_hidden_equip())) \
+				or (hidden_b and (entry.card_b == null or entry.a.equipment.has(entry.slot_a) or entry.a.has_hidden_equip()))):
+			_update_debug("所选暗置交换组合尚未支持，未支付费用")
+			_lanzhonghou_pending.clear()
+			return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
 	var valid = func():
 		return a.is_alive() and b.is_alive() and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
@@ -5717,6 +5755,10 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			continue
 		if _swap_equip_slot(entry.a, entry.slot_a, entry.b, entry.slot_b):
 			swapped += 1
+			if entry.card_a != null and entry.card_a.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+				await _declare_exchanged_hidden_equipment(entry.a, entry.b, entry.slot_b, entry.card_a)
+			if entry.card_b != null and entry.card_b.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+				await _declare_exchanged_hidden_equipment(entry.b, entry.a, entry.slot_a, entry.card_b)
 	_update_debug("%s 发动【烂忠厚】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
 	_lanzhonghou_used = true
 	_lanzhonghou_pending.clear()
@@ -5890,7 +5932,7 @@ func _emit_lanzhonghou_mount(overlay: ColorRect, slot: String):
 	_lanzhonghou_mount_result.emit(slot)
 
 # 交换两名角色指定槽位的装备（武器/防具同槽位；坐骑可跨槽位）
-# 一侧空槽时，将另一侧原牌移入空槽；暗置装备另由后续子项处理。
+# 一侧空槽时，将另一侧原牌移入空槽；本批仅接单张暗置武器/防具至空槽。
 # 双方都有装备时的旧轻量装卸仍待B04核对失去效果；单边空槽按失去装备处理。
 func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) -> bool:
 	var has_a = pA.equipment.has(slot_a)
@@ -5900,7 +5942,21 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 	var subA = pA.equipment.get(slot_a, -1)
 	var subB = pB.equipment.get(slot_b, -1)
 	if subA == CardData.CardSubType.HIDDEN_EQUIPMENT or subB == CardData.CardSubType.HIDDEN_EQUIPMENT:
-		return false  # 暗置交换留后续子项
+		if has_a == has_b:
+			return false
+		var hidden_source = pA if has_a else pB
+		var hidden_slot = slot_a if has_a else slot_b
+		var empty_dest = pB if has_a else pA
+		var empty_slot = slot_b if has_a else slot_a
+		if hidden_source.hidden_equip_slot != hidden_slot or hidden_source.hidden_equip_card == null \
+				or empty_dest.has_hidden_equip():
+			return false
+		var hidden_card = hidden_source.remove_equipment(hidden_slot)
+		if not empty_dest.equip_hidden_card_to_slot(empty_slot, hidden_card):
+			hidden_source.equip_hidden_card_to_slot(hidden_slot, hidden_card)
+			return false
+		_update_debug("%s 的暗置装备交换至 %s 的空装备槽" % [hidden_source.player_name, empty_dest.player_name])
+		return true
 	if not has_a or not has_b:
 		var source = pA if has_a else pB
 		var source_slot = slot_a if has_a else slot_b
