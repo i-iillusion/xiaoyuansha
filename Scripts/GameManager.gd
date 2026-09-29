@@ -1399,7 +1399,7 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	if removed != null:
 		deck.discard(removed)
-	equipment_pool.claim(sub)
+	_claim_equipment_name(sub)
 	return true
 
 func _clear_pending_determined_card():
@@ -1873,7 +1873,7 @@ func play_card(sub: CardData.CardSubType):
 			if equipped_card == null:
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
-			equipment_pool.claim(sub)
+			_claim_equipment_name(sub)
 			p.equip_card_to_slot("weapon", equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -1912,7 +1912,7 @@ func play_card(sub: CardData.CardSubType):
 			if equipped_card == null:
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
-			equipment_pool.claim(sub)
+			_claim_equipment_name(sub)
 			p.equip_card_to_slot("armor", equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -2440,7 +2440,45 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		deck.discard(equipment_card)
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 
-# E-03：暗置装备被顺走后，原持有者声明；无可用名称仍以原对象暗置在新持有者手中。
+# C-S4c：同类最后一个武器／防具名称被声明后，任何牌区该类暗置牌立即暗置入弃牌堆。
+func _claim_equipment_name(sub: CardData.CardSubType) -> void:
+	if not equipment_pool.claim(sub):
+		return
+	var category = CardData.get_equipment_slot_type(sub)
+	if category == "weapon" or category == "armor":
+		_discard_exhausted_hidden_category(category)
+
+func _discard_exhausted_hidden_category(category: String) -> void:
+	if category != "weapon" and category != "armor":
+		return
+	var names = SAO_WEAPON_SUBS if category == "weapon" else SAO_ARMOR_SUBS
+	for sub in names:
+		if not equipment_pool.is_claimed(sub):
+			return
+	var removed := 0
+	for p in players:
+		for slot in p.get_equip_slots():
+			var equipped_hidden = p.get_hidden_equipment_card(slot)
+			if equipped_hidden != null and equipped_hidden.hidden_category == category:
+				p.remove_equipment(slot)
+				deck.discard(equipped_hidden)
+				removed += 1
+		for cards in [p.hand, p.determined_cards, p.judgment_cards]:
+			for i in range(cards.size() - 1, -1, -1):
+				var zone_card: CardBase = cards[i]
+				if zone_card != null and zone_card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT \
+						and zone_card.hidden_category == category:
+					cards.remove_at(i)
+					if _pending_determined_card == zone_card:
+						_pending_determined_card = null
+					deck.discard(zone_card)
+					removed += 1
+	if removed > 0:
+		_update_debug("同类装备名称已全部声明，%d 张暗置%s进入弃牌堆" % [removed, "武器" if category == "weapon" else "防具"])
+		_sync_all_ui()
+		_refresh_detail_popup()
+
+# E-03：暗置装备被顺走后，原持有者声明；同类名称耗尽改按C-S4c立即弃置。
 func _hidden_declaration_options(card: CardBase) -> Array[int]:
 	var options: Array[int] = []
 	match card.hidden_category:
@@ -2516,7 +2554,7 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 	card.hidden_original_sub_type = -1
 	if chosen != CardData.CardSubType.MOUNT_PLUS and chosen != CardData.CardSubType.MOUNT_MINUS \
 			and chosen != CardData.CardSubType.MULE_PLUS and chosen != CardData.CardSubType.MULE_MINUS:
-		equipment_pool.claim(chosen)
+		_claim_equipment_name(chosen)
 	_update_debug("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 【没用】交换时先完成原牌移动，再由原持有者声明；与顺走共用合法名称和取消默认。
@@ -4677,7 +4715,9 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	p.equipment_cards[slot] = source
 	p.hidden_equip_slot = slot
 	p.hidden_equip_card = source
-	_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
+	_discard_exhausted_hidden_category(etype)
+	if p.get_hidden_equipment_card(slot) == source:
+		_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
 	_sync_all_ui()
 	_refresh_detail_popup()
 
@@ -4765,7 +4805,7 @@ func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
 	source.hidden_original_sub_type = -1
 	if sub != CardData.CardSubType.MOUNT_PLUS and sub != CardData.CardSubType.MOUNT_MINUS \
 			and sub != CardData.CardSubType.MULE_PLUS and sub != CardData.CardSubType.MULE_MINUS:
-		equipment_pool.claim(sub)
+		_claim_equipment_name(sub)
 	_update_debug("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 	_sync_all_ui()
 	_refresh_detail_popup()

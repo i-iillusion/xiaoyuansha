@@ -207,6 +207,7 @@ func run(host):
 	await check_meiyong_empty_mount_slots()
 	await check_meiyong_one_hidden_to_empty()
 	await check_meiyong_multiple_hidden_receiver()
+	await check_hidden_name_exhaustion()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -677,9 +678,10 @@ func check_hidden_snatch_declaration():
 		game._sao_transfer_declare_override = Callable()
 		game._equip_pick_override = Callable()
 
-	# 全部武器已出场：顺走成功，但不能重命名，也不能吞掉这张暗置牌。
+	# C-S4c：最后一个武器名被声明时，暗置牌先于后续顺走立刻入弃。
 	suite.reset_players()
 	game.equipment_pool.clear()
+	game.deck._discard.clear()
 	var attacker = game.players[0]
 	var target = game.players[1]
 	target.general_name = "安普提·斯丢皮得"
@@ -692,13 +694,18 @@ func check_hidden_snatch_declaration():
 	game._sao_type_override = Callable()
 	game.turn_manager.current_player_idx = 0
 	var hidden = target.hidden_equip_card
-	for sub in game.SAO_WEAPON_SUBS:
-		game.equipment_pool.claim(sub)
+	for i in range(game.SAO_WEAPON_SUBS.size() - 1):
+		game.equipment_pool.claim(game.SAO_WEAPON_SUBS[i])
+	check(target.get_hidden_equipment_card("weapon") == hidden,
+		"仍有一个武器名称时暗置原牌留在装备区")
+	game._claim_equipment_name(game.SAO_WEAPON_SUBS[-1])
+	check(not target.has_hidden_equip() and game.deck._discard.count(hidden) == 1
+		and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT,
+		"最后一个武器名称声明后原牌立即暗置入弃")
 	game._equip_pick_override = func(): return "weapon"
 	await game._steal_equip(attacker, target, true, "顺手牵羊")
-	check(not target.has_hidden_equip() and attacker.determined_cards == [hidden]
-		and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT and hidden.hidden_category == "weapon",
-		"武器名称耗尽仍转移原牌且继续暗置")
+	check(attacker.determined_cards.is_empty() and game.deck._discard.count(hidden) == 1,
+		"名称耗尽后顺走不能取回已经消失的暗置原牌")
 	game._equip_pick_override = Callable()
 
 	# 声明窗口中原牌离开接收者；旧答复不得明置它或占用唯一名称。
@@ -1108,9 +1115,10 @@ func check_meiyong_one_hidden_to_empty():
 				game._lanzhonghou_zone_override = Callable()
 				game._sao_transfer_declare_override = Callable()
 
-	# 全部武器名称不可用时，先移动原对象，再保持暗置，不凭空造牌或退费。
+	# C-S4c：最后一个武器名声明后原牌立即消失，【没用】不再可选这对空槽。
 	suite.reset_players()
 	game.equipment_pool.clear()
+	game.deck._discard.clear()
 	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	game._lanzhonghou_used = false
 	var actor = game.players[0]
@@ -1128,17 +1136,18 @@ func check_meiyong_one_hidden_to_empty():
 	await game._do_sao_hide(a, false)
 	game._sao_type_override = Callable()
 	var hidden = a.hidden_equip_card
-	for sub in game.SAO_WEAPON_SUBS:
-		game.equipment_pool.claim(sub)
+	for i in range(game.SAO_WEAPON_SUBS.size() - 1):
+		game.equipment_pool.claim(game.SAO_WEAPON_SUBS[i])
+	game._claim_equipment_name(game.SAO_WEAPON_SUBS[-1])
 	game.turn_manager.current_player_idx = 0
 	var zones: Array = ["weapon", "done"]
 	game._lanzhonghou_zone_override = func(): return zones.pop_front()
 	await game._run_lanzhonghou(a, b)
-	check(not a.has_hidden_equip() and b.hidden_equip_card == hidden
-		and b.equipment.get("weapon") == CardData.CardSubType.HIDDEN_EQUIPMENT
+	check(not a.has_hidden_equip() and b.equipment.is_empty()
+		and game.deck._discard.count(hidden) == 1
 		and hidden.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
-		and actor.hand_size() == 0 and game._lanzhonghou_used,
-		"全名称耗尽仍移动并保留暗置原牌")
+		and actor.hand_size() == 1 and not game._lanzhonghou_used,
+		"全名称耗尽立即弃暗置原牌，空对空不支付、不交换")
 	game._lanzhonghou_zone_override = Callable()
 	game.equipment_pool.clear()
 
@@ -1252,43 +1261,39 @@ func check_meiyong_multiple_hidden_receiver():
 		game._sao_type_override = Callable()
 		var incoming = a.hidden_equip_card
 		if no_weapon_name:
-			for sub in game.SAO_WEAPON_SUBS:
-				game.equipment_pool.claim(sub)
+			for i in range(game.SAO_WEAPON_SUBS.size() - 1):
+				game.equipment_pool.claim(game.SAO_WEAPON_SUBS[i])
+			game._claim_equipment_name(game.SAO_WEAPON_SUBS[-1])
+			check(not a.has_hidden_equip() and game.deck._discard.count(incoming) == 1
+				and b.get_hidden_equipment_card("armor") == original_armor,
+				"武器名耗尽立即弃暗置武器，不波及另一槽暗置防具")
 		game.turn_manager.current_player_idx = 0
 		var zones: Array = ["weapon", "done"]
 		game._lanzhonghou_zone_override = func(): return zones.pop_front()
-		game._sao_transfer_declare_override = func():
-			check(b.get_hidden_equipment_card("armor") == original_armor
-				and b.get_hidden_equipment_card("weapon") == incoming
-				and a.hidden_equip_card == null,
-				"原持有者声明前，接收者同时拥有两槽不同暗置原牌")
-			return -1
+		if not no_weapon_name:
+			game._sao_transfer_declare_override = func():
+				check(b.get_hidden_equipment_card("armor") == original_armor
+					and b.get_hidden_equipment_card("weapon") == incoming
+					and a.hidden_equip_card == null,
+					"原持有者声明前，接收者同时拥有两槽不同暗置原牌")
+				return -1
 		await game._run_lanzhonghou(a, b)
-		check(actor.hand_size() == 0 and game._lanzhonghou_used and not a.has_hidden_equip()
+		check(actor.hand_size() == (1 if no_weapon_name else 0)
+			and game._lanzhonghou_used == not no_weapon_name and not a.has_hidden_equip()
 			and b.get_hidden_equipment_card("armor") == original_armor
 			and b.equipment.get("armor") == CardData.CardSubType.HIDDEN_EQUIPMENT,
-			"已有暗置防具不阻止支付和交换暗置武器")
+			"暗置武器尚在时可交换，耗尽消失后不支付；暗置防具不受影响")
 		await game._on_sao_skill_clicked(b)
 		check(b.get_hidden_equipment_card("armor") == original_armor,
 			"没有苕的接收者不能主动明置原有暗置防具")
 		if no_weapon_name:
-			check(b.get_hidden_equipment_card("weapon") == incoming
-				and incoming.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT,
-				"武器名耗尽时接收者保留两张暗置原牌")
-			check(b.remove_equipment("armor") == original_armor
-				and b.hidden_equip_slot == "weapon" and b.hidden_equip_card == incoming,
-				"先移出首张暗置牌后，另一张仍能按槽找到")
-			check(b.remove_equipment("weapon") == incoming and not b.has_hidden_equip(),
-				"再移出第二张暗置牌只返回其自身原对象")
-			# 同一两张原牌重新落位，仅用于覆盖全区清理入口。
-			check(b.equip_hidden_card_to_slot("weapon", incoming)
-				and b.equip_hidden_card_to_slot("armor", original_armor),
-				"两张暗置原牌可按各自类别重新落位")
+			check(not b.equipment.has("weapon") and game.deck._discard.count(incoming) == 1,
+				"已暗置入弃的武器不会通过交换重新出现在接收者牌区")
 			game._discard_all_cards(b, true)
 			check(b.equipment.is_empty() and not b.has_hidden_equip()
 				and game.deck._discard.count(incoming) == 1
 				and game.deck._discard.count(original_armor) == 1,
-				"全区清理两张暗置原牌各弃置一次")
+				"全区清理仅弃剩余防具，武器不重复弃置")
 		else:
 			check(b.get_equipment_card("weapon") == incoming
 				and incoming.sub_type == CardData.CardSubType.CALAMITY_SWORD
@@ -1296,5 +1301,61 @@ func check_meiyong_multiple_hidden_receiver():
 				"交换暗置武器完成声明不改另一槽的暗置防具")
 		game._lanzhonghou_zone_override = Callable()
 		game._sao_transfer_declare_override = Callable()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_hidden_name_exhaustion():
+	# C-S4c：最后名称的声明是全场即时事件，装备区与手牌区都保留原牌暗置入弃。
+	var previous_phase = game.turn_manager.current_phase
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	var owner = game.players[0]
+	var receiver = game.players[1]
+	var other = game.players[2]
+	var weapon_equip = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	weapon_equip.hidden_category = "weapon"
+	var weapon_hand = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	weapon_hand.hidden_category = "weapon"
+	var armor_equip = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	armor_equip.hidden_category = "armor"
+	var mount_hand = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	mount_hand.hidden_category = "mount"
+	check(owner.equip_hidden_card_to_slot("weapon", weapon_equip)
+		and receiver.equip_hidden_card_to_slot("armor", armor_equip),
+		"名称耗尽前不同类型暗置原牌分别在装备区")
+	receiver.determined_cards.append(weapon_hand)
+	other.hand.append(mount_hand)
+	for i in range(game.SAO_WEAPON_SUBS.size() - 1):
+		game._claim_equipment_name(game.SAO_WEAPON_SUBS[i])
+	check(owner.get_hidden_equipment_card("weapon") == weapon_equip
+		and receiver.determined_cards.has(weapon_hand),
+		"尚有一个武器名称时跨牌区暗置武器都保留")
+	game._claim_equipment_name(game.SAO_WEAPON_SUBS[-1])
+	check(not owner.has_hidden_equip() and not receiver.determined_cards.has(weapon_hand)
+		and game.deck._discard.count(weapon_equip) == 1
+		and game.deck._discard.count(weapon_hand) == 1
+		and weapon_equip.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+		and weapon_hand.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT,
+		"武器名耗尽立即将装备区与手牌区暗置原牌各弃一次")
+	check(receiver.get_hidden_equipment_card("armor") == armor_equip
+		and other.hand.has(mount_hand), "武器耗尽不波及暗置防具和坐骑")
+	game._claim_equipment_name(game.SAO_WEAPON_SUBS[-1])
+	check(game.deck._discard.count(weapon_equip) == 1 and game.deck._discard.count(weapon_hand) == 1,
+		"重复声明已占用名称不重复弃牌")
+	for sub in game.SAO_ARMOR_SUBS:
+		game._claim_equipment_name(sub)
+	check(not receiver.has_hidden_equip() and game.deck._discard.count(armor_equip) == 1
+		and other.hand.has(mount_hand), "防具名耗尽独立弃防具，坐骑仍保留")
+	other.general_name = "安普提·斯丢皮得"
+	other.hand.append(null)
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game.turn_manager.current_player_idx = other.seat_index
+	game._sao_type_override = func(): return "weapon"
+	await game._do_sao_hide(other, false)
+	game._sao_type_override = Callable()
+	check(not other.has_hidden_equip() and other.hand.has(mount_hand)
+		and other.hand_size() == 1 and game.deck._discard.size() == 4,
+		"类别已耗尽时新暗置武器也立刻暗置入弃")
 	game.equipment_pool.clear()
 	game.turn_manager.current_phase = previous_phase
