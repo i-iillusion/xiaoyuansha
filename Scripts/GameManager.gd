@@ -5778,8 +5778,8 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		if (hidden_a or hidden_b) and (entry.zone == "mount" or hidden_a == hidden_b \
-				or (hidden_a and (entry.card_a == null or entry.b.equipment.has(entry.slot_b))) \
-				or (hidden_b and (entry.card_b == null or entry.a.equipment.has(entry.slot_a)))):
+				or (hidden_a and entry.card_a == null) \
+				or (hidden_b and entry.card_b == null)):
 			_update_debug("所选暗置交换组合尚未支持，未支付费用")
 			_lanzhonghou_pending.clear()
 			return
@@ -5978,8 +5978,8 @@ func _emit_lanzhonghou_mount(overlay: ColorRect, slot: String):
 	_lanzhonghou_mount_result.emit(slot)
 
 # 交换两名角色指定槽位的装备（武器/防具同槽位；坐骑可跨槽位）
-# 一侧空槽时，将另一侧原牌移入空槽；本批仅接单张暗置武器/防具至空槽。
-# 双方都有装备时的旧轻量装卸仍待B04核对失去效果；单边空槽按失去装备处理。
+# 一侧空槽时移动原牌；暗置与明置武器／防具可先互换原牌，再由原持有者声明暗置牌。
+# 双方明置时的旧轻量装卸仍待B04核对失去效果；暗置/明置和单边空槽按失去装备处理。
 func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) -> bool:
 	var has_a = pA.equipment.has(slot_a)
 	var has_b = pB.equipment.has(slot_b)
@@ -5988,6 +5988,39 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 	var subA = pA.equipment.get(slot_a, -1)
 	var subB = pB.equipment.get(slot_b, -1)
 	if subA == CardData.CardSubType.HIDDEN_EQUIPMENT or subB == CardData.CardSubType.HIDDEN_EQUIPMENT:
+		if has_a and has_b and subA != subB:
+			var exchange_hidden_owner = pA if subA == CardData.CardSubType.HIDDEN_EQUIPMENT else pB
+			var exchange_hidden_slot = slot_a if subA == CardData.CardSubType.HIDDEN_EQUIPMENT else slot_b
+			var exchange_visible_owner = pB if exchange_hidden_owner == pA else pA
+			var exchange_visible_slot = slot_b if exchange_hidden_owner == pA else slot_a
+			var exchange_hidden_card = exchange_hidden_owner.get_hidden_equipment_card(exchange_hidden_slot)
+			var exchange_visible_card = exchange_visible_owner.get_equipment_card(exchange_visible_slot)
+			if exchange_hidden_card == null or exchange_visible_card == null:
+				return false
+			var sage_tokens_before = exchange_visible_owner.sage_tokens if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION else 0
+			var sage_active_before = exchange_visible_owner.sage_activated if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION else false
+			exchange_hidden_owner.remove_equipment(exchange_hidden_slot)
+			exchange_visible_owner.remove_equipment(exchange_visible_slot)
+			if not exchange_hidden_owner.equip_card_to_slot(exchange_hidden_slot, exchange_visible_card):
+				exchange_hidden_owner.equip_hidden_card_to_slot(exchange_hidden_slot, exchange_hidden_card)
+				exchange_visible_owner.equip_card_to_slot(exchange_visible_slot, exchange_visible_card)
+				if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
+					exchange_visible_owner.sage_tokens = sage_tokens_before
+					exchange_visible_owner.sage_activated = sage_active_before
+				return false
+			if not exchange_visible_owner.equip_hidden_card_to_slot(exchange_visible_slot, exchange_hidden_card):
+				exchange_hidden_owner.remove_equipment(exchange_hidden_slot)
+				exchange_hidden_owner.equip_hidden_card_to_slot(exchange_hidden_slot, exchange_hidden_card)
+				exchange_visible_owner.equip_card_to_slot(exchange_visible_slot, exchange_visible_card)
+				if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
+					exchange_visible_owner.sage_tokens = sage_tokens_before
+					exchange_visible_owner.sage_activated = sage_active_before
+				return false
+			if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
+				exchange_hidden_owner.sage_tokens = sage_tokens_before
+				exchange_hidden_owner.sage_activated = sage_active_before
+			_update_debug("交换了 %s 的暗置装备与 %s 的【%s】" % [exchange_hidden_owner.player_name, exchange_visible_owner.player_name, exchange_visible_card.card_name])
+			return true
 		if has_a == has_b:
 			return false
 		var hidden_source = pA if has_a else pB
