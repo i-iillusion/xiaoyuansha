@@ -213,6 +213,7 @@ func run(host):
 	await check_meiyong_two_hidden_exchange()
 	await check_meiyong_one_hidden_mount_to_empty()
 	await check_meiyong_hidden_visible_mount_exchange()
+	await _check_claimed_original_requip()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -785,6 +786,63 @@ func check_hidden_snatch_declaration():
 	game._sao_transfer_declare_override = Callable()
 	game._equip_pick_override = Callable()
 	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+# DEV-B03a：占名后仅未弃置的同一原牌能再次装备，不能让任意牌再造同名。
+func _check_claimed_original_requip():
+	var previous_phase = game.turn_manager.current_phase
+	for spec in [
+		{"sub": CardData.CardSubType.LIANNU, "old": CardData.CardSubType.QINGLONG_BLADE, "slot": "weapon"},
+		{"sub": CardData.CardSubType.RENWANG_DUN, "old": CardData.CardSubType.BAGUA_ZHEN, "slot": "armor"},
+	]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._pending_determined_card = null
+		var sub: CardData.CardSubType = spec.sub
+		var slot: String = spec.slot
+		var thief: Player = game.players[0]
+		var first_owner: Player = game.players[1]
+		var other: Player = game.players[2]
+		first_owner.hand.append(null)
+		game.turn_manager.current_player_idx = first_owner.seat_index
+		await game.play_card(sub)
+		var original: CardBase = first_owner.get_equipment_card(slot)
+		check(original != null and game.equipment_pool.is_claimed_original(sub, original),
+			"首次装备记录%s原牌" % slot)
+		game._equip_pick_override = func(): return slot
+		await game._steal_equip(thief, first_owner, true, "顺手牵羊")
+		game._equip_pick_override = Callable()
+		check(thief.determined_cards.has(original) and game.deck._discard.is_empty(),
+			"顺走%s只转移原牌，不弃置" % slot)
+		var old_card = CardBase.create(spec.old)
+		check(thief.equip_card_to_slot(slot, old_card), "替换确认前已有另一%s" % slot)
+		game.turn_manager.current_player_idx = thief.seat_index
+		game._weapon_replace_override = func(): return false
+		await game.play_card(sub)
+		check(thief.get_equipment_card(slot) == old_card and thief.determined_cards.has(original),
+			"取消替换%s不消耗被顺走的原牌" % slot)
+		game._weapon_replace_override = func(): return true
+		await game.play_card(sub)
+		check(thief.get_equipment_card(slot) == original and not thief.determined_cards.has(original)
+			and game.deck._discard.count(old_card) == 1,
+			"被顺走的同一%s原牌可替换再装备" % slot)
+		other.hand.append(null)
+		game.turn_manager.current_player_idx = other.seat_index
+		await game.play_card(sub)
+		check(other.hand_size() == 1 and not other.equipment.has(slot),
+			"另一玩家任意牌不能新造同名%s" % slot)
+		var removed = thief.remove_equipment(slot)
+		game.deck.discard(removed)
+		thief.determined_cards.append(original)
+		game.turn_manager.current_player_idx = thief.seat_index
+		await game.play_card(sub)
+		check(thief.determined_cards.has(original) and not thief.equipment.has(slot),
+			"弃置后的%s原牌即使误回手也不能再装备" % slot)
+		game._weapon_replace_override = Callable()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
 	game.turn_manager.current_phase = previous_phase
 
 func check_meiyong_two_hidden_exchange():

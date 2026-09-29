@@ -1376,6 +1376,17 @@ func _equipment_payment_receipt(p: Player, sub: CardData.CardSubType) -> Diction
 	var zone: Array[CardBase] = selected.cards
 	return {"zone": zone, "index": selected.index, "blank": zone[selected.index] == null, "pending": null}
 
+# EQ-04：名称占用不妨碍未弃置的同一原牌再装备；任意牌或另一具体牌不能新造同名。
+func _can_play_equipment_instance(p: Player, sub: CardData.CardSubType) -> bool:
+	if not equipment_pool.is_claimed(sub):
+		return true
+	var receipt = _equipment_payment_receipt(p, sub)
+	if receipt.is_empty() or receipt.blank:
+		return false
+	var zone: Array[CardBase] = receipt.zone
+	var card: CardBase = zone[receipt.index]
+	return equipment_pool.is_claimed_original(sub, card) and not deck._discard.has(card)
+
 func _restore_equipment_payment(receipt: Dictionary, card: CardBase):
 	var zone: Array[CardBase] = receipt.zone
 	zone.insert(mini(receipt.index, zone.size()), null if receipt.blank else card)
@@ -1388,7 +1399,8 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
 			or turn_manager.current_player_idx != p.seat_index \
 			or turn_manager.get_context_revision() != context_revision \
-			or p.equipment.get(slot, -1) != old_sub or p.get_equipment_card(slot) != old_card:
+			or p.equipment.get(slot, -1) != old_sub or p.get_equipment_card(slot) != old_card \
+			or not _can_play_equipment_instance(p, sub):
 		return false
 	var receipt = _equipment_payment_receipt(p, sub)
 	if receipt.is_empty():
@@ -1409,7 +1421,7 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	if removed != null:
 		deck.discard(removed)
-	_claim_equipment_name(sub)
+	_claim_equipment_name(sub, incoming)
 	return true
 
 func _clear_pending_determined_card():
@@ -1852,11 +1864,14 @@ func play_card(sub: CardData.CardSubType):
 
 		CardData.CardSubType.LIANNU, CardData.CardSubType.ZHUGE_LIANNU, CardData.CardSubType.QINGLONG_BLADE, CardData.CardSubType.ZHANGBA_SPEAR, CardData.CardSubType.CHIXIONG_SHUANGGU, CardData.CardSubType.ICE_SWORD, CardData.CardSubType.QINGGANG_SWORD, CardData.CardSubType.GUDING_BLADE, CardData.CardSubType.GUANSHI_AXE, CardData.CardSubType.QILING_BOW, CardData.CardSubType.POFENG_SPEAR, CardData.CardSubType.FANGTIAN_HALBERD, CardData.CardSubType.FATE_BLADE, CardData.CardSubType.GOU_LIAN_CLAW, CardData.CardSubType.BLOODTHIRSTY_BLADE, CardData.CardSubType.CALAMITY_SWORD, CardData.CardSubType.HEAL_STAFF, CardData.CardSubType.RAGING_AXE, CardData.CardSubType.SOUL_BLADE:
 			# 装备武器（全场唯一：每种武器只有一张，装备过即永久占用）
-			if equipment_pool.is_claimed(sub):
-				_update_debug("【%s】全场仅此一张，已被其他角色装备过，无法再装备" % CardData.get_type_name(sub))
+			if not _can_play_equipment_instance(p, sub):
+				_update_debug("【%s】名称已占用；只能再装备未弃置的同一原牌" % CardData.get_type_name(sub))
 				return
 			# 【苕】抢先明置（安普提·斯丢皮得）：暗置同类型装备时，可明置为该装备阻止本次装备
-			if await _try_sao_preempt(p, sub, "weapon"):
+			if not equipment_pool.is_claimed(sub):
+				if await _try_sao_preempt(p, sub, "weapon"):
+					return
+			if not _can_play_equipment_instance(p, sub):
 				return
 			if p.equipment.has("weapon"):
 				var old_weapon = p.equipment["weapon"]
@@ -1879,23 +1894,31 @@ func play_card(sub: CardData.CardSubType):
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
 				return
+			var receipt = _equipment_payment_receipt(p, sub)
+			if receipt.is_empty():
+				return
 			var equipped_card = _take_play_card(p, sub)
 			if equipped_card == null:
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
-			_claim_equipment_name(sub)
-			p.equip_card_to_slot("weapon", equipped_card)
+			if not p.equip_card_to_slot("weapon", equipped_card):
+				_restore_equipment_payment(receipt, equipped_card)
+				return
+			_claim_equipment_name(sub, equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
 		CardData.CardSubType.RENWANG_DUN, CardData.CardSubType.BAIHUA_SKIRT, CardData.CardSubType.QIXING_PAO, CardData.CardSubType.SILVER_LION, CardData.CardSubType.SHENGGUANG_BAIYI, CardData.CardSubType.BAGUA_ZHEN, CardData.CardSubType.TENGJIA, CardData.CardSubType.ZHANQI, CardData.CardSubType.LIEHUO_SHIELD, CardData.CardSubType.QINGGANG_SHIELD, CardData.CardSubType.THORN_ARMOR, CardData.CardSubType.CALAMITY_ROBE, CardData.CardSubType.SAGE_PROTECTION:
 			# 装备防具（全场唯一：每种防具一局只有一张，装备过即永久占用）
-			if equipment_pool.is_claimed(sub):
-				_update_debug("【%s】全场仅此一张，已被其他角色装备过，无法再装备" % CardData.get_type_name(sub))
+			if not _can_play_equipment_instance(p, sub):
+				_update_debug("【%s】名称已占用；只能再装备未弃置的同一原牌" % CardData.get_type_name(sub))
 				return
 			# 【苕】抢先明置（安普提·斯丢皮得）：暗置同类型装备时，可明置为该装备阻止本次装备
-			if await _try_sao_preempt(p, sub, "armor"):
+			if not equipment_pool.is_claimed(sub):
+				if await _try_sao_preempt(p, sub, "armor"):
+					return
+			if not _can_play_equipment_instance(p, sub):
 				return
 			if p.equipment.has("armor"):
 				var old_armor = p.equipment["armor"]
@@ -1918,12 +1941,17 @@ func play_card(sub: CardData.CardSubType):
 				_sync_all_ui()
 				_reset_play_countdown_if_p0()
 				return
+			var receipt = _equipment_payment_receipt(p, sub)
+			if receipt.is_empty():
+				return
 			var equipped_card = _take_play_card(p, sub)
 			if equipped_card == null:
 				_update_debug("所选装备已不在牌区，取消装备")
 				return
-			_claim_equipment_name(sub)
-			p.equip_card_to_slot("armor", equipped_card)
+			if not p.equip_card_to_slot("armor", equipped_card):
+				_restore_equipment_payment(receipt, equipped_card)
+				return
+			_claim_equipment_name(sub, equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -2451,8 +2479,8 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 
 # C-S4c：同类最后一个武器／防具名称被声明后，任何牌区该类暗置牌立即暗置入弃牌堆。
-func _claim_equipment_name(sub: CardData.CardSubType) -> void:
-	if not equipment_pool.claim(sub):
+func _claim_equipment_name(sub: CardData.CardSubType, card: CardBase = null) -> void:
+	if not equipment_pool.claim(sub, card):
 		return
 	var category = CardData.get_equipment_slot_type(sub)
 	if category == "weapon" or category == "armor":
@@ -2564,7 +2592,7 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 	card.hidden_original_sub_type = -1
 	if chosen != CardData.CardSubType.MOUNT_PLUS and chosen != CardData.CardSubType.MOUNT_MINUS \
 			and chosen != CardData.CardSubType.MULE_PLUS and chosen != CardData.CardSubType.MULE_MINUS:
-		_claim_equipment_name(chosen)
+		_claim_equipment_name(chosen, card)
 	_update_debug("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 【没用】交换时先完成原牌移动，再由原持有者声明；与顺走共用合法名称和取消默认。
@@ -4844,7 +4872,7 @@ func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
 	source.hidden_original_sub_type = -1
 	if sub != CardData.CardSubType.MOUNT_PLUS and sub != CardData.CardSubType.MOUNT_MINUS \
 			and sub != CardData.CardSubType.MULE_PLUS and sub != CardData.CardSubType.MULE_MINUS:
-		_claim_equipment_name(sub)
+		_claim_equipment_name(sub, source)
 	_update_debug("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 	_sync_all_ui()
 	_refresh_detail_popup()
