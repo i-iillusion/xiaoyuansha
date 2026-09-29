@@ -647,6 +647,12 @@ func _update_player_panel(panel: Control, player: Player):
 # ============================
 
 func start_game():
+	var assigned_generals: Array[String] = []
+	if random_general:
+		assigned_generals = GeneralData.draw_unique_random_generals(player_count)
+		if assigned_generals.size() != player_count:
+			_update_debug("可用武将不足，无法在不重复武将的条件下开始 %d 人局" % player_count)
+			return
 	_clear_pending_determined_card()
 	# 身份分配：当前经典身份入口为五人标准；乱斗 2～10 人始终无身份。
 	# random_identity = true 时身份牌洗牌随机分配（主公仍开局公开）
@@ -670,7 +676,7 @@ func start_game():
 		p.identity_revealed = (p.identity == "主公")
 		# 武将分配：random_general = true 时所有玩家（含玩家0）随机；否则玩家0用主菜单选择、其余稻草人
 		if random_general:
-			p.general_name = GeneralData.get_random_general()
+			p.general_name = assigned_generals[i]
 		else:
 			p.general_name = GameManager.selected_general if i == 0 else "稻草人"
 		p.max_hp = GeneralData.get_max_hp(p.general_name)

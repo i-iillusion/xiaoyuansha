@@ -96,8 +96,20 @@ static func is_valid(general_name: String) -> bool:
 
 # 从已实现的武将里随机选一个（排除稻草人占位）
 static func get_random_general() -> String:
+	var pool = get_available_random_generals()
+	return pool[randi() % pool.size()] if not pool.is_empty() else ""
+
+static func get_available_random_generals() -> Array[String]:
 	var pool: Array[String] = []
 	for key in GENERALS:
 		if key != "稻草人":
 			pool.append(key)
-	return pool[randi() % pool.size()]
+	return pool
+
+# 同局随机武将无放回抽取。池不足时返回空数组，由开局入口拒绝不完整分配。
+static func draw_unique_random_generals(count: int) -> Array[String]:
+	var pool = get_available_random_generals()
+	if count < 0 or count > pool.size():
+		return []
+	pool.shuffle()
+	return pool.slice(0, count)

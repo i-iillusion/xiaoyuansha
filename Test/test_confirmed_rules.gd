@@ -103,5 +103,37 @@ func _run():
 	check(center.judgment_cards.is_empty(), "判定完成移除当前火烧连营")
 	check(game.deck._discard.count(burning_card) == 1, "原火烧连营结算后只入弃牌堆一次")
 	check(owner.judgment_cards.size() == 1 and game.players[2].judgment_cards.size() == 1, "判定生效后才向相邻判定区蔓延")
+	# GEN-01：抽将池只含可用武将；随机分配无放回，不拿稻草人补足。
+	var pool = GeneralData.get_available_random_generals()
+	check(pool.size() == 7 and not pool.has("稻草人"), "随机池仅含当前七名非占位武将")
+	for count in [2, 3, 5, 7]:
+		var draw = GeneralData.draw_unique_random_generals(count)
+		var unique = {}
+		for name in draw:
+			unique[name] = true
+		check(draw.size() == count and unique.size() == count, "%d人随机选将无重复" % count)
+	check(GeneralData.draw_unique_random_generals(8).is_empty(), "人数超过当前武将池时不返回部分或重复分配")
+	var previous_count = GameManager.selected_players
+	var previous_mode = GameManager.selected_mode
+	GameManager.selected_players = 5
+	GameManager.selected_mode = GameManager.MODE_CLASSIC_IDENTITY
+	GameManager.random_general = true
+	var random_game: GameManager = load("res://Scenes/Game.tscn").instantiate()
+	random_game.auto_start = false
+	root.add_child(random_game)
+	await process_frame
+	random_game._shensu_override = func(): return false
+	random_game._meiyong_override = func(): return false
+	random_game.start_game()
+	random_game._stop_countdown()
+	var actual_names = {}
+	for player in random_game.players:
+		actual_names[player.general_name] = true
+	check(random_game.players.size() == 5 and actual_names.size() == 5
+		and not actual_names.has("稻草人"), "真实五人开局每名玩家获得不同的非占位武将")
+	random_game.queue_free()
+	GameManager.selected_players = previous_count
+	GameManager.selected_mode = previous_mode
+	GameManager.random_general = false
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
