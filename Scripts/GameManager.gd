@@ -5744,11 +5744,11 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 						used_b[entry.slot_b] = true
 				var slots_a: Array[String] = []
 				for s in Player.MOUNT_SLOTS:
-					if not used_a.has(s) and a.equipment.get(s, -1) != CardData.CardSubType.HIDDEN_EQUIPMENT:
+					if not used_a.has(s):
 						slots_a.append(s)
 				var slots_b: Array[String] = []
 				for s in Player.MOUNT_SLOTS:
-					if not used_b.has(s) and b.equipment.get(s, -1) != CardData.CardSubType.HIDDEN_EQUIPMENT:
+					if not used_b.has(s):
 						slots_b.append(s)
 				if slots_a.is_empty() or slots_b.is_empty() or not _lanzhonghou_has_swappable_mount(a, _lanzhonghou_pending, true) and not _lanzhonghou_has_swappable_mount(b, _lanzhonghou_pending, false):
 					continue
@@ -5778,7 +5778,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			return
 		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
-		if (hidden_a or hidden_b) and (entry.zone == "mount" \
+		if (hidden_a or hidden_b) and (entry.zone == "mount" and entry.card_a != null and entry.card_b != null \
 				or (hidden_a and entry.card_a == null) \
 				or (hidden_b and entry.card_b == null)):
 			_update_debug("所选暗置交换组合尚未支持，未支付费用")
@@ -5830,14 +5830,14 @@ func _lanzhonghou_count(picked: Array, zone: String) -> int:
 func _lanzhonghou_zone_picked(picked: Array, zone: String) -> bool:
 	return _lanzhonghou_count(picked, zone) > 0
 
-# 该角色是否还有未使用的明置坐骑；另一侧可选择空槽接牌。
+# 该角色是否还有未使用的坐骑（含暗置）；另一侧可选择空槽接牌。
 func _lanzhonghou_has_swappable_mount(p: Player, picked: Array = [], is_a: bool = true) -> bool:
 	var used := {}
 	for entry in picked:
 		if entry.zone == "mount":
 			used[entry.slot_a if is_a else entry.slot_b] = true
 	for s in p.get_mount_slots():
-		if p.equipment[s] != CardData.CardSubType.HIDDEN_EQUIPMENT and not used.has(s):
+		if not used.has(s):
 			return true
 	return false
 
