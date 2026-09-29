@@ -1021,6 +1021,9 @@ func check_meiyong_empty_mount_slots():
 		actor.hand.append(null)
 		var source = a if source_is_a else b
 		var dest = b if source_is_a else a
+		# 共享测试夹具仅清装备表，不重置坐骑计数；本例显式隔离前例状态。
+		a.mount_plus = 0
+		b.mount_plus = 0
 		var source_slot = "mount_2" if source_is_a else "mount_3"
 		var dest_slot = "mount_4" if source_is_a else "mount_1"
 		var card = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
