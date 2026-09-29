@@ -112,7 +112,45 @@ func _run():
 		for name in draw:
 			unique[name] = true
 		check(draw.size() == count and unique.size() == count, "%d人随机选将无重复" % count)
-	check(GeneralData.draw_unique_random_generals(8).is_empty(), "人数超过当前武将池时不返回部分或重复分配")
+	check(GeneralData.METADATA_ONLY_GENERALS.size() == 24
+		and GeneralData.get_implementation_status("安迪·沃费尔") == "deferred",
+		"手册其余24将均有资料状态，安迪仍暂缓")
+	for count in [8, 10]:
+		var draw = GeneralData.draw_unique_random_generals(count)
+		var unique = {}
+		var metadata_count = 0
+		for name in draw:
+			unique[name] = true
+			if GeneralData.get_implementation_status(name) == "metadata_only":
+				metadata_count += 1
+		check(draw.size() == count and unique.size() == count
+			and metadata_count == count - pool.size() and not unique.has("安迪·沃费尔")
+			and not unique.has("稻草人"),
+			"%d人名单只以手册未实装将补足，仍无重复和暂缓将" % count)
+	check(GeneralData.draw_unique_random_generals(31).is_empty(), "超过非暂缓武将总数不返回部分名单")
+	check(GeneralData.get_max_hp("里奥·普利威尔", 5) == 5
+		and GeneralData.get_max_hp("吉姆·芒顿", 10) == 6
+		and GeneralData.get_max_hp("泰瑞·谢尔", 5) == 4
+		and GeneralData.get_max_hp("泰瑞·谢尔", 10) == 9,
+		"手册固定体力与泰瑞按开局其他玩家人数计算")
+	check(GeneralData.get_gender("克莉丝汀·艾") == "female"
+		and GeneralData.get_gender("萨利·赛克斯") == "female"
+		and GeneralData.get_gender("里奥·普利威尔") == "male",
+		"手册女性武将资料不再沿用全员男性默认")
+	var metadata_player = Player.new()
+	metadata_player.general_name = "里奥·普利威尔"
+	metadata_player.max_hp = GeneralData.get_max_hp(metadata_player.general_name, 5)
+	root.add_child(metadata_player)
+	var metadata_popup = PlayerDetailPopup.create(root, metadata_player)
+	await process_frame
+	var skill_rows = metadata_popup.get_node("Panel/Content/SkillsSection/SkillsList").get_children()
+	var warning_found = false
+	for row in skill_rows:
+		if row is Label and row.text.contains("技能尚未实装") and row.text.contains("6.7"):
+			warning_found = true
+	check(warning_found, "资料武将详情明确显示技能未实装及手册章节，而非没有技能")
+	metadata_popup.queue_free()
+	metadata_player.queue_free()
 	var previous_count = GameManager.selected_players
 	var previous_mode = GameManager.selected_mode
 	GameManager.selected_players = 5

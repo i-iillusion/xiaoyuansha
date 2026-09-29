@@ -73,11 +73,59 @@ const GENERALS = {
 	},
 }
 
-static func get_max_hp(general_name: String) -> int:
+# 手册第6章资料索引；以下武将的技能尚未完整接入，不进入自选菜单。
+# 安迪整组暂缓；泰瑞的体力上限 X = 开局其他玩家数，需在开局时给出人数。
+const METADATA_ONLY_GENERALS = {
+	"里奥·普利威尔": {"max_hp": 5, "section": "6.7"},
+	"彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹": {"max_hp": 3, "section": "6.8"},
+	"大卫·法米尔": {"max_hp": 4, "section": "6.9"},
+	"卢卡斯·托克": {"max_hp": 5, "section": "6.11"},
+	"桑尼·斯派": {"max_hp": 4, "section": "6.12"},
+	"辛巴·古德曼": {"max_hp": 5, "section": "6.13"},
+	"克莉丝汀·艾": {"max_hp": 3, "gender": "female", "section": "6.14"},
+	"史蒂夫·UB": {"max_hp": 4, "section": "6.15"},
+	"克里斯·西弗": {"max_hp": 3, "section": "6.16"},
+	"本尼·康绸尔": {"max_hp": 3, "section": "6.17"},
+	"泰瑞·谢尔": {"max_hp": -1, "section": "6.18"},
+	"萨利·赛克斯": {"max_hp": 3, "gender": "female", "section": "6.19"},
+	"杰克·伯德": {"max_hp": 4, "section": "6.20"},
+	"海因里希·迷因": {"max_hp": 4, "section": "6.21"},
+	"汤姆·伊茨弥": {"max_hp": 4, "section": "6.22"},
+	"菲利普·霓虹": {"max_hp": 4, "section": "6.23"},
+	"托尼·巴斯基得博": {"max_hp": 4, "section": "6.24"},
+	"杰克·安格": {"max_hp": 4, "section": "6.25"},
+	"桑尼·泰姆": {"max_hp": 3, "section": "6.26"},
+	"亨利·瑟提": {"max_hp": 4, "section": "6.27"},
+	"纳撒尼尔·艾尔可霍": {"max_hp": 8, "section": "6.28"},
+	"蒂姆·斯哈": {"max_hp": 4, "section": "6.29"},
+	"吉姆·芒顿": {"max_hp": 6, "section": "6.30"},
+	"安迪·沃费尔": {"max_hp": 4, "section": "6.31", "deferred": true},
+}
+
+static func get_max_hp(general_name: String, player_count: int = 0) -> int:
 	var data = GENERALS.get(general_name)
+	if data == null:
+		data = METADATA_ONLY_GENERALS.get(general_name)
+	if general_name == "泰瑞·谢尔":
+		return maxi(player_count - 1, 0)
 	if data == null:
 		return 4
 	return data.get("max_hp", 4)
+
+static func get_gender(general_name: String) -> String:
+	return METADATA_ONLY_GENERALS.get(general_name, {}).get("gender", "male")
+
+static func get_implementation_status(general_name: String) -> String:
+	if general_name == "稻草人":
+		return "placeholder"
+	if GENERALS.has(general_name):
+		return "prototype"
+	if METADATA_ONLY_GENERALS.has(general_name):
+		return "deferred" if METADATA_ONLY_GENERALS[general_name].get("deferred", false) else "metadata_only"
+	return "unknown"
+
+static func get_handbook_section(general_name: String) -> String:
+	return METADATA_ONLY_GENERALS.get(general_name, {}).get("section", "")
 
 static func get_avatar(general_name: String) -> String:
 	var data = GENERALS.get(general_name)
@@ -92,7 +140,7 @@ static func get_skills(general_name: String) -> Array:
 	return data.get("skills", [])
 
 static func is_valid(general_name: String) -> bool:
-	return GENERALS.has(general_name)
+	return GENERALS.has(general_name) or METADATA_ONLY_GENERALS.has(general_name)
 
 # 从已实现的武将里随机选一个（排除稻草人占位）
 static func get_random_general() -> String:
@@ -109,7 +157,17 @@ static func get_available_random_generals() -> Array[String]:
 # 同局随机武将无放回抽取。池不足时返回空数组，由开局入口拒绝不完整分配。
 static func draw_unique_random_generals(count: int) -> Array[String]:
 	var pool = get_available_random_generals()
-	if count < 0 or count > pool.size():
+	if count < 0:
 		return []
 	pool.shuffle()
-	return pool.slice(0, count)
+	if count <= pool.size():
+		return pool.slice(0, count)
+	var supplements: Array[String] = []
+	for key in METADATA_ONLY_GENERALS:
+		if not METADATA_ONLY_GENERALS[key].get("deferred", false):
+			supplements.append(key)
+	if count > pool.size() + supplements.size():
+		return []
+	supplements.shuffle()
+	pool.append_array(supplements.slice(0, count - pool.size()))
+	return pool

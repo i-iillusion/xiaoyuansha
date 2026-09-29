@@ -75,7 +75,11 @@ func _populate():
 	var skills = GeneralData.get_skills(_player.general_name)
 	if skills.is_empty():
 		var skill_label = Label.new()
-		skill_label.text = "%s 没有技能" % _player.general_name
+		var status = GeneralData.get_implementation_status(_player.general_name)
+		if status == "metadata_only" or status == "deferred":
+			skill_label.text = "技能尚未实装；规则见知识手册第%s节" % GeneralData.get_handbook_section(_player.general_name)
+		else:
+			skill_label.text = "%s 没有技能" % _player.general_name
 		skill_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
 		_skills_container.add_child(skill_label)
 	else:

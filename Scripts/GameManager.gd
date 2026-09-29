@@ -679,9 +679,8 @@ func start_game():
 			p.general_name = assigned_generals[i]
 		else:
 			p.general_name = GameManager.selected_general if i == 0 else "稻草人"
-		p.max_hp = GeneralData.get_max_hp(p.general_name)
-		# 性别：稻草人与凯文·罗本均为男性
-		p.gender = "male"
+		p.max_hp = GeneralData.get_max_hp(p.general_name, player_count)
+		p.gender = GeneralData.get_gender(p.general_name)
 		add_child(p)
 		players.append(p)
 		# 【觉醒】监听手牌变化（史蒂芬·彼特先斯：手牌为 0 时立即觉醒）
@@ -703,6 +702,9 @@ func start_game():
 
 	_sync_all_ui()
 	_update_debug("—— 校园杀 %d 人局开始 ——" % player_count)
+	for p in players:
+		if GeneralData.get_implementation_status(p.general_name) == "metadata_only":
+			_update_debug("%s 的武将【%s】技能尚未实装，仅按当前已实现的通用规则行动" % [p.player_name, p.general_name])
 	if game_mode == MODE_CLASSIC_IDENTITY:
 		var seat_desc = "座位："
 		for i in player_count:
