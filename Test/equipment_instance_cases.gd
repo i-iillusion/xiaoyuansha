@@ -204,6 +204,7 @@ func run(host):
 	await check_hidden_snatch_default_declaration()
 	await check_hidden_death_and_disarm()
 	await check_meiyong_one_empty_visible_slot()
+	await check_meiyong_empty_mount_slots()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -987,4 +988,56 @@ func check_meiyong_one_empty_visible_slot():
 		and actor.hand_size() == 0 and game._lanzhonghou_used,
 		"过期选择后下一次有效空槽交换可正常执行")
 	game._lanzhonghou_zone_override = Callable()
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_empty_mount_slots():
+	# DEV-B02b-4b：空对空不得计为交换；明置坐骑可移入对方空槽。
+	var previous_phase = game.turn_manager.current_phase
+	for zone in ["weapon", "armor", "mount"]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._lanzhonghou_used = false
+		var actor = game.players[0]
+		var a = game.players[1]
+		var b = game.players[2]
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		var zones: Array = [zone, "done"]
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		await game._run_lanzhonghou(a, b)
+		check(actor.hand_size() == 1 and not game._lanzhonghou_used and game.deck._discard.is_empty()
+			and game._lanzhonghou_pending.is_empty(), zone + "双方空槽不可选择且不支付")
+		game._lanzhonghou_zone_override = Callable()
+	for source_is_a in [true, false]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._lanzhonghou_used = false
+		var actor = game.players[0]
+		var a = game.players[1]
+		var b = game.players[2]
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		var source = a if source_is_a else b
+		var dest = b if source_is_a else a
+		var source_slot = "mount_2" if source_is_a else "mount_3"
+		var dest_slot = "mount_4" if source_is_a else "mount_1"
+		var card = CardBase.create(CardData.CardSubType.MOUNT_PLUS)
+		card.source_seat = 8
+		check(source.equip_card_to_slot(source_slot, card), "坐骑交换前保留指定原对象")
+		var zones: Array = ["mount", "done"]
+		var slots: Array = [source_slot if source_is_a else dest_slot, dest_slot if source_is_a else source_slot]
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		game._lanzhonghou_mount_override = func(_target, available):
+			var choice = slots.pop_front()
+			check(available.has(choice), "坐骑选槽包含有牌与空槽")
+			return choice
+		await game._run_lanzhonghou(a, b)
+		check(not source.equipment.has(source_slot) and dest.get_equipment_card(dest_slot) == card
+			and source.mount_plus == 0 and dest.mount_plus == 1 and card.source_seat == 8
+			and actor.hand_size() == 0 and game._lanzhonghou_used,
+			"坐骑" + ("A到B" if source_is_a else "B到A") + "单侧空槽交换保原对象、计数和费用")
+		game._lanzhonghou_zone_override = Callable()
+		game._lanzhonghou_mount_override = Callable()
 	game.turn_manager.current_phase = previous_phase

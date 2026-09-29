@@ -5649,6 +5649,8 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			break
 		match zone:
 			"weapon", "armor":
+				if _lanzhonghou_zone_picked(_lanzhonghou_pending, zone) or (not a.equipment.has(zone) and not b.equipment.has(zone)):
+					continue
 				_lanzhonghou_pending.append({"zone": zone, "a": a, "slot_a": zone, "b": b, "slot_b": zone,
 					"card_a": _equipment_resource_for_pick(a, zone), "card_b": _equipment_resource_for_pick(b, zone), "ok": true})
 			"mount":
@@ -5656,7 +5658,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 				if _lanzhonghou_count(_lanzhonghou_pending, "mount") >= 4:
 					_update_debug("坐骑区域最多选择 4 对")
 					continue
-				# 双方各自未使用的坐骑槽（排除暗置）
+				# 坐骑可移入空槽；双方选中的槽位不能同时为空。
 				var used_a := {}
 				var used_b := {}
 				for entry in _lanzhonghou_pending:
@@ -5664,25 +5666,30 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 						used_a[entry.slot_a] = true
 						used_b[entry.slot_b] = true
 				var slots_a: Array[String] = []
-				for s in a.get_mount_slots():
-					if a.equipment[s] != CardData.CardSubType.HIDDEN_EQUIPMENT and not used_a.has(s):
+				for s in Player.MOUNT_SLOTS:
+					if not used_a.has(s) and a.equipment.get(s, -1) != CardData.CardSubType.HIDDEN_EQUIPMENT:
 						slots_a.append(s)
 				var slots_b: Array[String] = []
-				for s in b.get_mount_slots():
-					if b.equipment[s] != CardData.CardSubType.HIDDEN_EQUIPMENT and not used_b.has(s):
+				for s in Player.MOUNT_SLOTS:
+					if not used_b.has(s) and b.equipment.get(s, -1) != CardData.CardSubType.HIDDEN_EQUIPMENT:
 						slots_b.append(s)
-				if slots_a.is_empty() or slots_b.is_empty():
-					_update_debug("坐骑区域：一方没有可交换的坐骑，装备直接归还，不交换")
-					_lanzhonghou_pending.append({"zone": "mount", "a": a, "slot_a": "", "b": b, "slot_b": "", "ok": false})
+				if slots_a.is_empty() or slots_b.is_empty() or not _lanzhonghou_has_swappable_mount(a, _lanzhonghou_pending, true) and not _lanzhonghou_has_swappable_mount(b, _lanzhonghou_pending, false):
 					continue
 				var pair_no = _lanzhonghou_count(_lanzhonghou_pending, "mount") + 1
 				var slot_a = await _ask_lanzhonghou_mount_slot(a, slots_a, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [a.player_name, pair_no])
-				if slot_a == "cancel":
+				if slot_a == "cancel" or not slots_a.has(slot_a):
+					continue
+				if not a.equipment.has(slot_a):
+					for s in slots_b.duplicate():
+						if not b.equipment.has(s):
+							slots_b.erase(s)
+				if slots_b.is_empty():
 					continue
 				var slot_b = await _ask_lanzhonghou_mount_slot(b, slots_b, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [b.player_name, pair_no])
-				if slot_b == "cancel":
+				if slot_b == "cancel" or not slots_b.has(slot_b):
 					continue
-				_lanzhonghou_pending.append({"zone": "mount", "a": a, "slot_a": slot_a, "b": b, "slot_b": slot_b, "ok": true})
+				_lanzhonghou_pending.append({"zone": "mount", "a": a, "slot_a": slot_a, "b": b, "slot_b": slot_b,
+					"card_a": _equipment_resource_for_pick(a, slot_a), "card_b": _equipment_resource_for_pick(b, slot_b), "ok": true})
 	var x = _lanzhonghou_pending.size()
 	if x <= 0:
 		_update_debug("没有选择任何区域，取消【烂忠厚】")
@@ -5727,7 +5734,7 @@ func _lanzhonghou_count(picked: Array, zone: String) -> int:
 func _lanzhonghou_zone_picked(picked: Array, zone: String) -> bool:
 	return _lanzhonghou_count(picked, zone) > 0
 
-# 该角色是否还有未使用（未被选入交换）的可交换坐骑槽（排除暗置）
+# 该角色是否还有未使用的明置坐骑；另一侧可选择空槽接牌。
 func _lanzhonghou_has_swappable_mount(p: Player, picked: Array = [], is_a: bool = true) -> bool:
 	var used := {}
 	for entry in picked:
@@ -5773,7 +5780,8 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	var weapon_btn = Button.new()
 	weapon_btn.text = "武器"
 	weapon_btn.custom_minimum_size = Vector2(120, 44)
-	weapon_btn.disabled = _lanzhonghou_zone_picked(picked, "weapon") or picked.size() >= max_pick
+	weapon_btn.disabled = _lanzhonghou_zone_picked(picked, "weapon") or picked.size() >= max_pick \
+			or (not a.equipment.has("weapon") and not b.equipment.has("weapon"))
 	weapon_btn.pressed.connect(func():
 		overlay.queue_free()
 		_lanzhonghou_zone_result.emit("weapon")
@@ -5783,7 +5791,8 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	var armor_btn = Button.new()
 	armor_btn.text = "防具"
 	armor_btn.custom_minimum_size = Vector2(120, 44)
-	armor_btn.disabled = _lanzhonghou_zone_picked(picked, "armor") or picked.size() >= max_pick
+	armor_btn.disabled = _lanzhonghou_zone_picked(picked, "armor") or picked.size() >= max_pick \
+			or (not a.equipment.has("armor") and not b.equipment.has("armor"))
 	armor_btn.pressed.connect(func():
 		overlay.queue_free()
 		_lanzhonghou_zone_result.emit("armor")
@@ -5794,7 +5803,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	mount_btn.text = "坐骑"
 	mount_btn.custom_minimum_size = Vector2(120, 44)
 	mount_btn.disabled = _lanzhonghou_count(picked, "mount") >= 4 or picked.size() >= max_pick \
-			or not _lanzhonghou_has_swappable_mount(a, picked, true) or not _lanzhonghou_has_swappable_mount(b, picked, false)
+			or (not _lanzhonghou_has_swappable_mount(a, picked, true) and not _lanzhonghou_has_swappable_mount(b, picked, false))
 	mount_btn.pressed.connect(func():
 		overlay.queue_free()
 		_lanzhonghou_zone_result.emit("mount")
@@ -5824,7 +5833,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	var r = await _lanzhonghou_zone_result
 	return r
 
-# 坐骑槽选择弹窗：返回槽位或 "cancel"（锚点居中；只列有装备的槽位）
+# 坐骑槽选择弹窗：返回槽位或 "cancel"（锚点居中；可选空槽）
 func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: String) -> String:
 	if _lanzhonghou_mount_override.is_valid():
 		return _lanzhonghou_mount_override.call(target, slots)
@@ -5858,7 +5867,7 @@ func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: St
 
 	for slot in slots:
 		var btn = Button.new()
-		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(target.equipment[slot])]
+		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(target.equipment[slot]) if target.equipment.has(slot) else "空槽"]
 		btn.custom_minimum_size = Vector2(140, 44)
 		btn.pressed.connect(_emit_lanzhonghou_mount.bind(overlay, slot), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
