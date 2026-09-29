@@ -209,6 +209,7 @@ func run(host):
 	await check_meiyong_multiple_hidden_receiver()
 	await check_hidden_name_exhaustion()
 	await check_meiyong_hidden_visible_exchange()
+	await check_meiyong_two_hidden_exchange()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -736,6 +737,139 @@ func check_hidden_snatch_declaration():
 		"声明期间原牌再次转移，过期答复不改牌或占名")
 	game._sao_transfer_declare_override = Callable()
 	game._equip_pick_override = Callable()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_two_hidden_exchange():
+	# DEV-B02b-4c-2b-ii-b：原牌先互换，随机选原持有者先声明；对方只能选剩余名称。
+	var previous_phase = game.turn_manager.current_phase
+	for zone in ["weapon", "armor"]:
+		for a_first in [true, false]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.deck._discard.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			game._lanzhonghou_used = false
+			var actor = game.players[0]
+			var a = game.players[1]
+			var b = game.players[2]
+			actor.general_name = "麦克斯·欧尼斯特"
+			actor.hand.append(null)
+			var hidden_a = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+			var hidden_b = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+			hidden_a.hidden_category = zone
+			hidden_b.hidden_category = zone
+			hidden_a.source_seat = 6
+			hidden_b.source_seat = 7
+			check(a.equip_hidden_card_to_slot(zone, hidden_a) and b.equip_hidden_card_to_slot(zone, hidden_b),
+				zone + "双暗置原牌分别在两名角色装备槽")
+			var zones: Array = ["cancel"]
+			game._lanzhonghou_zone_override = func(): return zones.pop_front()
+			await game._run_lanzhonghou(a, b)
+			check(a.get_hidden_equipment_card(zone) == hidden_a and b.get_hidden_equipment_card(zone) == hidden_b
+				and actor.hand_size() == 1 and not game._lanzhonghou_used,
+				zone + "双暗置取消不移动或付费")
+			zones.assign([zone, "done"])
+			game._lanzhonghou_hidden_first_override = func(): return a_first
+			var declaration_count = 0
+			game._sao_transfer_declare_override = func():
+				declaration_count += 1
+				if declaration_count == 1:
+					check(a.get_hidden_equipment_card(zone) == hidden_b and b.get_hidden_equipment_card(zone) == hidden_a,
+						zone + "声明前双方暗置原牌已完成物理交换")
+				return -1
+			await game._run_lanzhonghou(a, b)
+			var first = hidden_a if a_first else hidden_b
+			var second = hidden_b if a_first else hidden_a
+			var default_sub = CardData.CardSubType.CALAMITY_SWORD if zone == "weapon" else CardData.CardSubType.CALAMITY_ROBE
+			check(declaration_count == 2 and first.sub_type == default_sub
+				and second.sub_type != default_sub and second.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT
+				and game.equipment_pool.is_claimed(first.sub_type) and game.equipment_pool.is_claimed(second.sub_type),
+				zone + ("A" if a_first else "B") + "先声明占用默认名，后者仅在剩余名称中随机")
+			check(a.get_equipment_card(zone) == hidden_b and b.get_equipment_card(zone) == hidden_a
+				and hidden_a.source_seat == 6 and hidden_b.source_seat == 7
+				and actor.hand_size() == 0 and game._lanzhonghou_used and game.deck._discard.is_empty(),
+				zone + "双暗置仅付一张手牌，两张具体化原牌均不入弃")
+			game._lanzhonghou_zone_override = Callable()
+			game._lanzhonghou_hidden_first_override = Callable()
+			game._sao_transfer_declare_override = Callable()
+	# 首位声明唯一剩余名称后，C-S4c应在第二位声明前立即弃掉另一张暗置原牌。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	game._lanzhonghou_used = false
+	var actor = game.players[0]
+	var a = game.players[1]
+	var b = game.players[2]
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	var hidden_a = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	var hidden_b = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	hidden_a.hidden_category = "weapon"
+	hidden_b.hidden_category = "weapon"
+	check(a.equip_hidden_card_to_slot("weapon", hidden_a) and b.equip_hidden_card_to_slot("weapon", hidden_b),
+		"唯一剩余武器名前双暗置原牌已落位")
+	for sub in game.SAO_WEAPON_SUBS:
+		if sub != CardData.CardSubType.CALAMITY_SWORD:
+			game.equipment_pool.claim(sub)
+	var zones: Array = ["weapon", "done"]
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	game._lanzhonghou_hidden_first_override = func(): return true
+	var declaration_count = 0
+	game._sao_transfer_declare_override = func():
+		declaration_count += 1
+		return -1
+	await game._run_lanzhonghou(a, b)
+	check(declaration_count == 1 and hidden_a.sub_type == CardData.CardSubType.CALAMITY_SWORD
+		and b.get_equipment_card("weapon") == hidden_a and not a.equipment.has("weapon")
+		and hidden_b.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT and game.deck._discard.count(hidden_b) == 1
+		and actor.hand_size() == 0 and game._lanzhonghou_used,
+		"首位声明最后武器名后，第二张暗置原牌立即暗置入弃且不再询问")
+	game._lanzhonghou_zone_override = Callable()
+	game._lanzhonghou_hidden_first_override = Callable()
+	game._sao_transfer_declare_override = Callable()
+	# 选区期间其中一张暗置原牌被同槽替换：旧选区不扣费，新选择可正常交换。
+	suite.reset_players()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game._lanzhonghou_used = false
+	actor = game.players[0]
+	a = game.players[1]
+	b = game.players[2]
+	actor.general_name = "麦克斯·欧尼斯特"
+	actor.hand.append(null)
+	hidden_a = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	hidden_b = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	var next_hidden_b = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+	for card in [hidden_a, hidden_b, next_hidden_b]:
+		card.hidden_category = "weapon"
+	check(a.equip_hidden_card_to_slot("weapon", hidden_a) and b.equip_hidden_card_to_slot("weapon", hidden_b),
+		"过期选区例两张暗置原牌已落位")
+	zones.assign(["weapon", "done"])
+	game._lanzhonghou_zone_override = func():
+		var result = zones.pop_front()
+		if result == "done":
+			check(b.remove_equipment("weapon") == hidden_b
+				and b.equip_hidden_card_to_slot("weapon", next_hidden_b), "等待中同槽暗置原牌已替换")
+		return result
+	await game._run_lanzhonghou(a, b)
+	check(a.get_hidden_equipment_card("weapon") == hidden_a
+		and b.get_hidden_equipment_card("weapon") == next_hidden_b
+		and actor.hand_size() == 1 and not game._lanzhonghou_used,
+		"旧双暗置选区过期不付费、不移动后来者")
+	zones.assign(["weapon", "done"])
+	game._lanzhonghou_zone_override = func(): return zones.pop_front()
+	game._lanzhonghou_hidden_first_override = func(): return false
+	game._sao_transfer_declare_override = func(): return -1
+	await game._run_lanzhonghou(a, b)
+	check(a.get_equipment_card("weapon") == next_hidden_b
+		and b.get_equipment_card("weapon") == hidden_a
+		and actor.hand_size() == 0 and game._lanzhonghou_used,
+		"重新选择当前双暗置原牌后仅付一次费用并完成交换")
+	game._lanzhonghou_zone_override = Callable()
+	game._lanzhonghou_hidden_first_override = Callable()
+	game._sao_transfer_declare_override = Callable()
 	game.equipment_pool.clear()
 	game.turn_manager.current_phase = previous_phase
 
