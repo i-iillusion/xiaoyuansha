@@ -95,7 +95,8 @@ var shensu_penalty: int = 0
 var shensu_used_this_turn: bool = false
 
 # 【苕】安普提·斯丢皮得：暗置装备
-# 暗置后装备区对应槽位 = HIDDEN_EQUIPMENT 占位；hidden_equip_slot 记录暗置所在槽位（"" = 无暗置）
+# 暗置后装备区对应槽位 = HIDDEN_EQUIPMENT；各槽原牌保存在equipment_cards。
+# 以下两个字段兼容旧单暗置入口，指向当前第一张暗置牌；不是持有上限。
 var hidden_equip_slot: String = ""
 # 暗置牌的原资源；任意牌在明置前保持未定名，不公开具体装备名。
 var hidden_equip_card: CardBase = null
@@ -248,7 +249,6 @@ func get_equipment_card(slot: String, materialize_legacy: bool = true) -> CardBa
 		return null
 	var sub = equipment.get(slot, -1)
 	if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
-		equipment_cards.erase(slot)
 		return null
 	var stored = equipment_cards.get(slot, null)
 	if stored is CardBase and stored.sub_type == sub:
@@ -260,6 +260,16 @@ func get_equipment_card(slot: String, materialize_legacy: bool = true) -> CardBa
 	var card = CardBase.create(sub)
 	equipment_cards[slot] = card
 	return card
+
+# 暗置只公开类别；此方法供内部牌流转按槽定位原对象，不用于对手UI展示。
+func get_hidden_equipment_card(slot: String) -> CardBase:
+	if equipment.get(slot, -1) != CardData.CardSubType.HIDDEN_EQUIPMENT:
+		return null
+	var stored = equipment_cards.get(slot, null)
+	if stored is CardBase and stored.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+		return stored
+	# 兼容旧测试及旧入口直接设置的单暗置字段。
+	return hidden_equip_card if hidden_equip_slot == slot else null
 
 # 将一张真实装备牌装入空槽；属性变化集中在这里，避免转移时丢失对象。
 func equip_card_to_slot(slot: String, card: CardBase) -> bool:
@@ -273,24 +283,28 @@ func equip_card_to_slot(slot: String, card: CardBase) -> bool:
 	_apply_equipment_state(card.sub_type)
 	return true
 
-# 暗置原牌落入空装备槽；只记录来源和公开类别，不提前具体化。
-# 当前单暗置字段只能承载一张，其他暗置牌同持有者场景另行扩展。
+# 暗置原牌落入空装备槽；允许同一角色在不同槽保留多张原牌。
 func equip_hidden_card_to_slot(slot: String, card: CardBase) -> bool:
-	if not EQUIP_SLOTS.has(slot) or equipment.has(slot) or has_hidden_equip() \
+	if not EQUIP_SLOTS.has(slot) or equipment.has(slot) \
 			or card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT:
 		return false
 	var slot_type = "mount" if MOUNT_SLOTS.has(slot) else slot
 	if card.hidden_category != slot_type:
 		return false
+	for occupied_slot in EQUIP_SLOTS:
+		if get_hidden_equipment_card(occupied_slot) == card:
+			return false
 	equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
-	hidden_equip_slot = slot
-	hidden_equip_card = card
+	equipment_cards[slot] = card
+	if not has_hidden_equip():
+		hidden_equip_slot = slot
+		hidden_equip_card = card
 	return true
 
 # 卸下指定槽位装备（同时重置对应属性），返回原始卡牌实例。
 func remove_equipment(slot: String) -> CardBase:
 	var sub = equipment.get(slot, -1)
-	var card = hidden_equip_card if sub == CardData.CardSubType.HIDDEN_EQUIPMENT else get_equipment_card(slot)
+	var card = get_hidden_equipment_card(slot) if sub == CardData.CardSubType.HIDDEN_EQUIPMENT else get_equipment_card(slot)
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
@@ -314,9 +328,16 @@ func remove_equipment(slot: String) -> CardBase:
 			sage_tokens = 0
 			sage_activated = false
 		CardData.CardSubType.HIDDEN_EQUIPMENT:
-			# 【苕】暗置装备被卸下：清空暗置状态
-			hidden_equip_slot = ""
-			hidden_equip_card = null
+			if hidden_equip_slot == slot:
+				hidden_equip_slot = ""
+				hidden_equip_card = null
+				for remaining_slot in EQUIP_SLOTS:
+					if equipment.get(remaining_slot, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT:
+						var remaining_card = get_hidden_equipment_card(remaining_slot)
+						if remaining_card != null:
+							hidden_equip_slot = remaining_slot
+							hidden_equip_card = remaining_card
+							break
 	return card
 
 # 交换装备时使用：空间上确实卸下，但规则上“不算失去”，所以不触发白银狮子。
@@ -457,7 +478,7 @@ func replace_mount_card(slot: String, card: CardBase) -> CardBase:
 	# 兼容只需要旧牌的调用者；旧牌为 null 不能用来判断替换是否成功。
 	return replace_mount_card_result(slot, card).replaced_card
 
-# 成功替换暗置占位时没有具体旧牌，但替换本身已经成功。
+# 旧测试的无来源暗置占位可能没有旧牌；正式流转应返回原对象。
 # success 与 replaced_card 分开，避免转移方把同一张坐骑错误恢复到来源。
 func replace_mount_card_result(slot: String, card: CardBase) -> Dictionary:
 	var failed = {"success": false, "replaced_card": null}
@@ -473,9 +494,11 @@ func replace_mount_card_result(slot: String, card: CardBase) -> Dictionary:
 	if not equip_card_to_slot(slot, card):
 		# 理论上槽位刚被清空；若异常失败，恢复旧装备，避免吞牌。
 		if old_was_hidden:
-			equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
-			hidden_equip_slot = old_hidden_slot
-			hidden_equip_card = old_card
+			if old_card != null:
+				equip_hidden_card_to_slot(slot, old_card)
+			else:
+				equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
+				hidden_equip_slot = old_hidden_slot
 		elif old_card != null:
 			equip_card_to_slot(slot, old_card)
 		return failed

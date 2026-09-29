@@ -206,6 +206,7 @@ func run(host):
 	await check_meiyong_one_empty_visible_slot()
 	await check_meiyong_empty_mount_slots()
 	await check_meiyong_one_hidden_to_empty()
+	await check_meiyong_multiple_hidden_receiver()
 	suite.reset_players()
 	for player in game.players:
 		player.hidden_equip_slot = ""
@@ -1214,6 +1215,85 @@ func check_meiyong_one_hidden_to_empty():
 				and hidden.sub_type == CardData.CardSubType.QINGLONG_BLADE
 				and game.equipment_pool.is_claimed(CardData.CardSubType.QINGLONG_BLADE),
 				"过期答复后的下一局合法交换可正常声明")
+		game._lanzhonghou_zone_override = Callable()
+		game._sao_transfer_declare_override = Callable()
+	game.equipment_pool.clear()
+	game.turn_manager.current_phase = previous_phase
+
+func check_meiyong_multiple_hidden_receiver():
+	# DEV-B02b-4c-2a：接收者原有另一槽暗置，交换仍须接同一原牌；无【苕】不可主动明置。
+	var previous_phase = game.turn_manager.current_phase
+	for no_weapon_name in [false, true]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._lanzhonghou_used = false
+		var actor = game.players[0]
+		var a = game.players[1]
+		var b = game.players[2]
+		for player in [a, b]:
+			player.hidden_equip_slot = ""
+			player.hidden_equip_card = null
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		a.general_name = "安普提·斯丢皮得"
+		a.hand.append(null)
+		var original_armor = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+		original_armor.hidden_category = "armor"
+		original_armor.source_seat = 8
+		check(b.equip_hidden_card_to_slot("armor", original_armor), "接收者先持有暗置防具原对象")
+		check(not b.equip_hidden_card_to_slot("weapon", original_armor)
+			and b.get_hidden_equipment_card("armor") == original_armor,
+			"暗置防具不能复制到武器槽或改类别")
+		game.turn_manager.current_player_idx = 1
+		game._sao_type_override = func(): return "weapon"
+		await game._do_sao_hide(a, false)
+		game._sao_type_override = Callable()
+		var incoming = a.hidden_equip_card
+		if no_weapon_name:
+			for sub in game.SAO_WEAPON_SUBS:
+				game.equipment_pool.claim(sub)
+		game.turn_manager.current_player_idx = 0
+		var zones: Array = ["weapon", "done"]
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		game._sao_transfer_declare_override = func():
+			check(b.get_hidden_equipment_card("armor") == original_armor
+				and b.get_hidden_equipment_card("weapon") == incoming
+				and a.hidden_equip_card == null,
+				"原持有者声明前，接收者同时拥有两槽不同暗置原牌")
+			return -1
+		await game._run_lanzhonghou(a, b)
+		check(actor.hand_size() == 0 and game._lanzhonghou_used and not a.has_hidden_equip()
+			and b.get_hidden_equipment_card("armor") == original_armor
+			and b.equipment.get("armor") == CardData.CardSubType.HIDDEN_EQUIPMENT,
+			"已有暗置防具不阻止支付和交换暗置武器")
+		await game._on_sao_skill_clicked(b)
+		check(b.get_hidden_equipment_card("armor") == original_armor,
+			"没有苕的接收者不能主动明置原有暗置防具")
+		if no_weapon_name:
+			check(b.get_hidden_equipment_card("weapon") == incoming
+				and incoming.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT,
+				"武器名耗尽时接收者保留两张暗置原牌")
+			check(b.remove_equipment("armor") == original_armor
+				and b.hidden_equip_slot == "weapon" and b.hidden_equip_card == incoming,
+				"先移出首张暗置牌后，另一张仍能按槽找到")
+			check(b.remove_equipment("weapon") == incoming and not b.has_hidden_equip(),
+				"再移出第二张暗置牌只返回其自身原对象")
+			# 同一两张原牌重新落位，仅用于覆盖全区清理入口。
+			check(b.equip_hidden_card_to_slot("weapon", incoming)
+				and b.equip_hidden_card_to_slot("armor", original_armor),
+				"两张暗置原牌可按各自类别重新落位")
+			game._discard_all_cards(b, true)
+			check(b.equipment.is_empty() and not b.has_hidden_equip()
+				and game.deck._discard.count(incoming) == 1
+				and game.deck._discard.count(original_armor) == 1,
+				"全区清理两张暗置原牌各弃置一次")
+		else:
+			check(b.get_equipment_card("weapon") == incoming
+				and incoming.sub_type == CardData.CardSubType.CALAMITY_SWORD
+				and b.get_hidden_equipment_card("armor") == original_armor,
+				"交换暗置武器完成声明不改另一槽的暗置防具")
 		game._lanzhonghou_zone_override = Callable()
 		game._sao_transfer_declare_override = Callable()
 	game.equipment_pool.clear()

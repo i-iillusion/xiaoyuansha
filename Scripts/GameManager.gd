@@ -1389,9 +1389,10 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 	var removed = p.remove_equipment(slot)
 	if not p.equip_card_to_slot(slot, incoming):
 		if old_sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
-			p.equipment[slot] = old_sub
-			p.hidden_equip_slot = slot
-			p.hidden_equip_card = removed
+			if removed != null:
+				p.equip_hidden_card_to_slot(slot, removed)
+			else:
+				p.equipment[slot] = old_sub
 		elif removed != null:
 			p.equip_card_to_slot(slot, removed)
 		_restore_equipment_payment(receipt, incoming)
@@ -2379,7 +2380,7 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 # 装备：目标失去该装备；顺手牵羊时放入自己「已确定的牌」
 func _equipment_resource_for_pick(p: Player, slot: String) -> CardBase:
 	if p.equipment.get(slot, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT:
-		return p.hidden_equip_card if p.hidden_equip_slot == slot else null
+		return p.get_hidden_equipment_card(slot)
 	return p.get_equipment_card(slot)
 
 func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: String):
@@ -2522,7 +2523,7 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Player,
 		slot: String, card: CardBase) -> void:
 	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
-			or recipient.hidden_equip_slot != slot or recipient.hidden_equip_card != card:
+			or recipient.get_hidden_equipment_card(slot) != card:
 		return
 	var options = _hidden_declaration_options(card)
 	if options.is_empty():
@@ -2542,10 +2543,10 @@ func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Pla
 		chosen = options[0]
 	if chosen < 0:
 		chosen = _default_stolen_hidden_sub(card, options)
-	if _game_over or recipient.hidden_equip_slot != slot or recipient.hidden_equip_card != card \
+	if _game_over or recipient.get_hidden_equipment_card(slot) != card \
 			or not options.has(chosen) or not _hidden_declaration_options(card).has(chosen):
 		return
-	if _reveal_hidden_as(recipient, chosen):
+	if _reveal_hidden_slot_as(recipient, slot, card, chosen):
 		_update_debug("%s 声明交换离区的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
@@ -4673,6 +4674,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 			slot = p.get_free_mount_slot()
 			type_name = "坐骑"
 	p.equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
+	p.equipment_cards[slot] = source
 	p.hidden_equip_slot = slot
 	p.hidden_equip_card = source
 	_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
@@ -4733,7 +4735,13 @@ func _do_sao_reveal(p: Player) -> void:
 func _reveal_hidden_as(p: Player, sub: CardData.CardSubType) -> bool:
 	var slot = p.hidden_equip_slot
 	var source = p.hidden_equip_card
+	return _reveal_hidden_slot_as(p, slot, source, sub)
+
+func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
+		sub: CardData.CardSubType) -> bool:
 	if slot == "" or source == null:
+		return false
+	if p.get_hidden_equipment_card(slot) != source:
 		return false
 	var slot_type = "mount" if Player.MOUNT_SLOTS.has(slot) else slot
 	if CardData.get_equipment_slot_type(sub) != slot_type \
@@ -4751,9 +4759,7 @@ func _reveal_hidden_as(p: Player, sub: CardData.CardSubType) -> bool:
 		source.sub_type = CardData.CardSubType.HIDDEN_EQUIPMENT
 		source.card_name = CardData.get_type_name(source.sub_type)
 		source.description = ""
-		p.equipment[slot] = CardData.CardSubType.HIDDEN_EQUIPMENT
-		p.hidden_equip_slot = slot
-		p.hidden_equip_card = source
+		p.equip_hidden_card_to_slot(slot, source)
 		return false
 	source.hidden_category = ""
 	source.hidden_original_sub_type = -1
@@ -5732,8 +5738,8 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		if (hidden_a or hidden_b) and (entry.zone == "mount" or hidden_a == hidden_b \
-				or (hidden_a and (entry.card_a == null or entry.b.equipment.has(entry.slot_b) or entry.b.has_hidden_equip())) \
-				or (hidden_b and (entry.card_b == null or entry.a.equipment.has(entry.slot_a) or entry.a.has_hidden_equip()))):
+				or (hidden_a and (entry.card_a == null or entry.b.equipment.has(entry.slot_b))) \
+				or (hidden_b and (entry.card_b == null or entry.a.equipment.has(entry.slot_a)))):
 			_update_debug("所选暗置交换组合尚未支持，未支付费用")
 			_lanzhonghou_pending.clear()
 			return
@@ -5948,8 +5954,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		var hidden_slot = slot_a if has_a else slot_b
 		var empty_dest = pB if has_a else pA
 		var empty_slot = slot_b if has_a else slot_a
-		if hidden_source.hidden_equip_slot != hidden_slot or hidden_source.hidden_equip_card == null \
-				or empty_dest.has_hidden_equip():
+		if hidden_source.get_hidden_equipment_card(hidden_slot) == null:
 			return false
 		var hidden_card = hidden_source.remove_equipment(hidden_slot)
 		if not empty_dest.equip_hidden_card_to_slot(empty_slot, hidden_card):
