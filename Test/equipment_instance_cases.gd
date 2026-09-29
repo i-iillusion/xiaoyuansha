@@ -1034,10 +1034,13 @@ func check_meiyong_empty_mount_slots():
 			check(available.has(choice), "坐骑选槽包含有牌与空槽")
 			return choice
 		await game._run_lanzhonghou(a, b)
+		var direction = "A到B" if source_is_a else "B到A"
 		check(not source.equipment.has(source_slot) and dest.get_equipment_card(dest_slot) == card
-			and source.mount_plus == 0 and dest.mount_plus == 1 and card.source_seat == 8
-			and actor.hand_size() == 0 and game._lanzhonghou_used,
-			"坐骑" + ("A到B" if source_is_a else "B到A") + "单侧空槽交换保原对象、计数和费用")
+			and card.source_seat == 8, "坐骑" + direction + "单侧空槽保原对象")
+		check(source.mount_plus == 0 and dest.mount_plus == 1,
+			"坐骑" + direction + "单侧空槽更新双方坐骑计数")
+		check(actor.hand_size() == 0 and game._lanzhonghou_used,
+			"坐骑" + direction + "单侧空槽只付一张牌")
 		game._lanzhonghou_zone_override = Callable()
 		game._lanzhonghou_mount_override = Callable()
 	game.turn_manager.current_phase = previous_phase
