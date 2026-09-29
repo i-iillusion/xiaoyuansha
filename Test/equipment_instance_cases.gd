@@ -199,6 +199,7 @@ func run(host):
 	await check_active_mount_replace()
 	await check_active_weapon_armor_replace()
 	await check_first_sao_hide_resource()
+	await check_sao_active_hidden_slot_choice()
 	await check_hidden_dismantle_resource()
 	await check_hidden_snatch_declaration()
 	await check_hidden_snatch_default_declaration()
@@ -525,6 +526,50 @@ func check_active_weapon_armor_replace():
 			game._weapon_replace_override = Callable()
 			game._clear_pending_determined_card()
 	game.turn_manager.current_phase = previous_phase
+
+func check_sao_active_hidden_slot_choice():
+	# DEV-B02b-4d：有【苕】者自主指定暗置槽位；旧单张兼容指针不得代替选择。
+	for scenario in ["cancel", "select_armor", "stale_slot", "stale_name"]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.deck._discard.clear()
+		var owner = game.players[0]
+		owner.hidden_equip_slot = ""
+		owner.hidden_equip_card = null
+		owner.general_name = "安普提·斯丢皮得"
+		var weapon = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+		weapon.hidden_category = "weapon"
+		var armor = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+		armor.hidden_category = "armor"
+		check(owner.equip_hidden_card_to_slot("weapon", weapon)
+			and owner.equip_hidden_card_to_slot("armor", armor), scenario + "：两槽各保存一张暗置原牌")
+		game._sao_reveal_slot_override = func(slots):
+			if scenario == "stale_slot":
+				owner.remove_equipment("armor")
+				var replacement = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+				replacement.hidden_category = "armor"
+				owner.equip_hidden_card_to_slot("armor", replacement)
+			return -1 if scenario == "cancel" else slots.find("armor")
+		game._sao_reveal_sub_override = func():
+			if scenario == "stale_name":
+				owner.remove_equipment("armor")
+				var replacement = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+				replacement.hidden_category = "armor"
+				owner.equip_hidden_card_to_slot("armor", replacement)
+			return CardData.CardSubType.RENWANG_DUN
+		await game._do_sao_reveal(owner)
+		if scenario == "select_armor":
+			check(owner.get_equipment_card("armor") == armor
+				and owner.get_hidden_equipment_card("weapon") == weapon
+				and owner.hidden_equip_card == weapon,
+				"主动指定防具只明置该原牌，武器仍暗置")
+		else:
+			check(owner.get_hidden_equipment_card("weapon") == weapon
+				and owner.equipment.get("armor") == CardData.CardSubType.HIDDEN_EQUIPMENT
+				and not game.equipment_pool.is_claimed(CardData.CardSubType.RENWANG_DUN),
+				scenario + "：取消或过期答复不明置、不占名")
+		game._sao_reveal_slot_override = Callable()
+		game._sao_reveal_sub_override = Callable()
 
 func check_first_sao_hide_resource():
 	# DEV-B02a：首次暗置从真实手牌支付；明置沿用同一资源，不多造装备。

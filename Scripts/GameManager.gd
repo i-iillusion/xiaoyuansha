@@ -224,6 +224,7 @@ var _yes_ah_override: Callable = Callable()
 var _sao_type_override: Callable = Callable()
 var _sao_reveal_override: Callable = Callable()
 var _sao_reveal_sub_override: Callable = Callable()
+var _sao_reveal_slot_override: Callable = Callable()  # 测试：多张暗置时选择具体槽位
 var _sao_transfer_declare_override: Callable = Callable()  # 测试钩子：暗置装备离区后由原持有者声明
 var _sao_menu_override: Callable = Callable()
 
@@ -4726,11 +4727,38 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 func _do_sao_reveal(p: Player) -> void:
 	if not p.has_hidden_equip():
 		return
-	var etype = p.get_hidden_equip_type()
-	var source = p.hidden_equip_card
-	if source == null:
+	var reveal_context = turn_manager.get_context_revision()
+	var hidden_slots: Array[String] = []
+	for slot in Player.EQUIP_SLOTS:
+		if p.get_hidden_equipment_card(slot) != null:
+			hidden_slots.append(slot)
+	if hidden_slots.is_empty():
 		return
-	var reveal_slot = p.hidden_equip_slot
+	var hidden_sources: Array[CardBase] = []
+	for slot in hidden_slots:
+		hidden_sources.append(p.get_hidden_equipment_card(slot))
+	var reveal_slot = hidden_slots[0]
+	var selected_index: int = 0
+	if hidden_slots.size() > 1:
+		var selected: int = -1
+		if _sao_reveal_slot_override.is_valid():
+			selected = _sao_reveal_slot_override.call(hidden_slots.duplicate())
+		elif p.seat_index == 0:
+			var labels: Array = []
+			for slot in hidden_slots:
+				labels.append("武器位" if slot == "weapon" else ("防具位" if slot == "armor" else "坐骑位%s" % slot.trim_prefix("mount_")))
+			selected = await _show_choice_popup("选择要明置的暗置装备槽位：", labels)
+		if selected < 0 or selected >= hidden_slots.size():
+			return
+		selected_index = selected
+		reveal_slot = hidden_slots[selected]
+	var source = p.get_hidden_equipment_card(reveal_slot)
+	if source == null or source != hidden_sources[selected_index]:
+		return
+	if _game_over or not p.is_alive() \
+			or turn_manager.get_context_revision() != reveal_context:
+		return
+	var etype = "mount" if Player.MOUNT_SLOTS.has(reveal_slot) else reveal_slot
 	var options: Array[int] = []
 	match etype:
 		"weapon":
@@ -4768,9 +4796,11 @@ func _do_sao_reveal(p: Player) -> void:
 		if idx < 0:
 			return
 		chosen = options[idx]
-	if _game_over or p.hidden_equip_slot != reveal_slot or p.hidden_equip_card != source:
+	if _game_over or not p.is_alive() \
+			or turn_manager.get_context_revision() != reveal_context \
+			or p.get_hidden_equipment_card(reveal_slot) != source:
 		return
-	_reveal_hidden_as(p, chosen)
+	_reveal_hidden_slot_as(p, reveal_slot, source, chosen)
 
 # 执行明置：占位变为具体装备（武器/防具进唯一性占用；坐骑按类型计数）
 func _reveal_hidden_as(p: Player, sub: CardData.CardSubType) -> bool:
