@@ -771,10 +771,10 @@ func check_meiyong_two_hidden_exchange():
 				zone + "双暗置取消不移动或付费")
 			zones.assign([zone, "done"])
 			game._lanzhonghou_hidden_first_override = func(): return a_first
-			var declaration_count = 0
+			var declaration_count = {"value": 0}
 			game._sao_transfer_declare_override = func():
-				declaration_count += 1
-				if declaration_count == 1:
+				declaration_count["value"] += 1
+				if declaration_count["value"] == 1:
 					check(a.get_hidden_equipment_card(zone) == hidden_b and b.get_hidden_equipment_card(zone) == hidden_a,
 						zone + "声明前双方暗置原牌已完成物理交换")
 				return -1
@@ -782,7 +782,7 @@ func check_meiyong_two_hidden_exchange():
 			var first = hidden_a if a_first else hidden_b
 			var second = hidden_b if a_first else hidden_a
 			var default_sub = CardData.CardSubType.CALAMITY_SWORD if zone == "weapon" else CardData.CardSubType.CALAMITY_ROBE
-			check(declaration_count == 2 and first.sub_type == default_sub
+			check(declaration_count["value"] == 2 and first.sub_type == default_sub
 				and second.sub_type != default_sub and second.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT
 				and game.equipment_pool.is_claimed(first.sub_type) and game.equipment_pool.is_claimed(second.sub_type),
 				zone + ("A" if a_first else "B") + "先声明占用默认名，后者仅在剩余名称中随机")
@@ -816,12 +816,12 @@ func check_meiyong_two_hidden_exchange():
 	var zones: Array = ["weapon", "done"]
 	game._lanzhonghou_zone_override = func(): return zones.pop_front()
 	game._lanzhonghou_hidden_first_override = func(): return true
-	var declaration_count = 0
+	var declaration_count = {"value": 0}
 	game._sao_transfer_declare_override = func():
-		declaration_count += 1
+		declaration_count["value"] += 1
 		return -1
 	await game._run_lanzhonghou(a, b)
-	check(declaration_count == 1 and hidden_a.sub_type == CardData.CardSubType.CALAMITY_SWORD
+	check(declaration_count["value"] == 1 and hidden_a.sub_type == CardData.CardSubType.CALAMITY_SWORD
 		and b.get_equipment_card("weapon") == hidden_a and not a.equipment.has("weapon")
 		and hidden_b.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT and game.deck._discard.count(hidden_b) == 1
 		and actor.hand_size() == 0 and game._lanzhonghou_used,
