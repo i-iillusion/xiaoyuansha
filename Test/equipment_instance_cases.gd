@@ -215,6 +215,7 @@ func run(host):
 	await check_meiyong_hidden_visible_mount_exchange()
 	await _check_claimed_original_requip()
 	await _check_claimed_original_final_death()
+	await _check_claimed_original_active_replace()
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
@@ -894,6 +895,67 @@ func _check_claimed_original_final_death():
 	game.equipment_pool.clear()
 	game.deck._discard.clear()
 	game.game_mode = previous_mode
+	game.turn_manager.current_phase = previous_phase
+
+# DEV-B03c-3：主动换下已声明原牌使旧牌弃置，不释放旧名或复制新牌。
+func _check_claimed_original_active_replace():
+	var previous_phase = game.turn_manager.current_phase
+	for spec in [
+		{"old": CardData.CardSubType.LIANNU, "new": CardData.CardSubType.QINGLONG_BLADE, "slot": "weapon"},
+		{"old": CardData.CardSubType.RENWANG_DUN, "new": CardData.CardSubType.BAGUA_ZHEN, "slot": "armor"},
+	]:
+		for concrete in [false, true]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.deck._discard.clear()
+			game._clear_pending_determined_card()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			var owner: Player = game.players[0]
+			var other: Player = game.players[1]
+			var old_sub: CardData.CardSubType = spec.old
+			var new_sub: CardData.CardSubType = spec.new
+			var slot: String = spec.slot
+			var label = "%s%s" % [slot, "具体牌" if concrete else "任意牌"]
+			owner.hand.append(null)
+			game.turn_manager.current_player_idx = owner.seat_index
+			await game.play_card(old_sub)
+			var old_card: CardBase = owner.get_equipment_card(slot)
+			check(old_card != null and game.equipment_pool.is_claimed_original(old_sub, old_card),
+				label + "旧装备已登记原对象")
+			var incoming: CardBase = null
+			if concrete:
+				incoming = CardBase.create(new_sub)
+				owner.determined_cards.append(incoming)
+				game._pending_determined_card = incoming
+			else:
+				owner.hand.append(null)
+			game._weapon_replace_override = func(): return false
+			await game.play_card(new_sub)
+			check(owner.get_equipment_card(slot) == old_card and game.deck._discard.is_empty()
+				and (owner.determined_cards.has(incoming) if concrete else owner.hand == [null]),
+				label + "取消替换不弃旧牌或支付新牌")
+			game._weapon_replace_override = func(): return true
+			await game.play_card(new_sub)
+			var equipped: CardBase = owner.get_equipment_card(slot)
+			check(equipped != null and equipped.sub_type == new_sub
+				and (equipped == incoming if concrete else owner.hand.is_empty())
+				and game.deck._discard.count(old_card) == 1
+				and not game.deck._discard.has(equipped)
+				and not owner.determined_cards.has(equipped),
+				label + "成功后旧原牌只弃一次、新原牌只在装备槽")
+			check(game.equipment_pool.is_claimed_original(old_sub, old_card)
+				and game.equipment_pool.is_claimed_original(new_sub, equipped),
+				label + "两个名称分别登记各自原对象")
+			other.hand.append(null)
+			game.turn_manager.current_player_idx = other.seat_index
+			await game.play_card(old_sub)
+			check(other.hand == [null] and not other.equipment.has(slot)
+				and game.deck._discard.count(old_card) == 1,
+				label + "弃置旧原牌后他人不能用任意牌重造同名")
+			game._weapon_replace_override = Callable()
+			game._clear_pending_determined_card()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
 	game.turn_manager.current_phase = previous_phase
 
 # DEV-B03b-1：已占名的同一原牌被顺走后暗置，仍可主动明置或离区声明原名。
