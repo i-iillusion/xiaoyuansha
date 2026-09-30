@@ -835,8 +835,13 @@ func _check_claimed_original_requip():
 		await game.play_card(sub)
 		check(other.hand_size() == 1 and not other.equipment.has(slot),
 			"另一玩家任意牌不能新造同名%s" % slot)
-		var removed = thief.remove_equipment(slot)
-		game.deck.discard(removed)
+		game._equip_pick_override = func(): return slot
+		await game._steal_equip(other, thief, false, "过河拆桥")
+		game._equip_pick_override = Callable()
+		check(not thief.equipment.has(slot) and game.deck._discard.count(original) == 1
+			and not other.determined_cards.has(original),
+			"过河拆桥拆掉重装的%s原牌，离槽且恰好弃置一次" % slot)
+		# 防御性检查：正式流程不会从弃牌堆取回同一对象；模拟误回手后也不能再次使用。
 		thief.determined_cards.append(original)
 		game.turn_manager.current_player_idx = thief.seat_index
 		await game.play_card(sub)
