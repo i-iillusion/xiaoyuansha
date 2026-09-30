@@ -214,6 +214,7 @@ func run(host):
 	await check_meiyong_one_hidden_mount_to_empty()
 	await check_meiyong_hidden_visible_mount_exchange()
 	await _check_claimed_original_requip()
+	await _check_claimed_original_final_death()
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
@@ -850,6 +851,49 @@ func _check_claimed_original_requip():
 		game._weapon_replace_override = Callable()
 	game.equipment_pool.clear()
 	game.deck._discard.clear()
+	game.turn_manager.current_phase = previous_phase
+
+# DEV-B03c-2：已声明的原装备只在最终死亡清牌时弃置；名称不因死亡重新开放。
+func _check_claimed_original_final_death():
+	var previous_phase = game.turn_manager.current_phase
+	var previous_mode = game.game_mode
+	game.game_mode = GameManager.MODE_FREE_FOR_ALL
+	for spec in [
+		{"sub": CardData.CardSubType.LIANNU, "slot": "weapon"},
+		{"sub": CardData.CardSubType.RENWANG_DUN, "slot": "armor"},
+	]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		var owner: Player = game.players[1]
+		var other: Player = game.players[2]
+		var sub: CardData.CardSubType = spec.sub
+		var slot: String = spec.slot
+		owner.hand.append(null)
+		game.turn_manager.current_player_idx = owner.seat_index
+		await game.play_card(sub)
+		var original: CardBase = owner.get_equipment_card(slot)
+		check(original != null and game.equipment_pool.is_claimed_original(sub, original)
+			and game.deck._discard.is_empty(), "%s首次声明保留原装备实例" % slot)
+		game._handle_death(owner, null)
+		check(owner.get_equipment_card(slot) == original and game.deck._discard.is_empty(),
+			"%s未达最终死亡条件不提前清原装备" % slot)
+		owner.hp = 0
+		game._handle_death(owner, null)
+		game._handle_death(owner, null)
+		check(owner.is_dead() and not owner.equipment.has(slot)
+			and game.deck._discard.count(original) == 1,
+			"%s最终死亡清理原牌一次，重复死亡入口不再弃牌" % slot)
+		other.hand.append(null)
+		game.turn_manager.current_player_idx = other.seat_index
+		await game.play_card(sub)
+		check(other.hand == [null] and not other.equipment.has(slot)
+			and game.equipment_pool.is_claimed_original(sub, original),
+			"%s原牌弃后其他任意牌不能重新造同名装备" % slot)
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game.game_mode = previous_mode
 	game.turn_manager.current_phase = previous_phase
 
 # DEV-B03b-1：已占名的同一原牌被顺走后暗置，仍可主动明置或离区声明原名。
