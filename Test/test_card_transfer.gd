@@ -17,6 +17,7 @@ func check(ok: bool, message: String):
 func reset_case():
 	for p in game.players:
 		p.hp = p.max_hp
+		p.reset_death_state()
 		p.hand.clear()
 		p.judgment_cards.clear()
 		p.determined_cards.clear()
@@ -99,11 +100,13 @@ func _run():
 	target.equipment["armor"] = CardData.CardSubType.LIEHUO_SHIELD
 	game._liehuo_override = func(): return true
 	var previous_hp := target.hp
-	await game._steal_hand(attacker, target, true, "顺手牵羊")
-	check(target.hp == previous_hp - 1 and target.hand == [concrete], "烈火盾代替效果失牌时保留原牌")
-	check(attacker.hand.is_empty() and game.deck.discard_count() == 0, "替代成功不转移也不弃牌")
+	attacker.hand.append(null)
+	await game._play_steal_card(attacker, target, true)
+	check(target.hp == previous_hp - 1 and target.hand == [concrete], "成为顺手目标时烈火盾令整牌无效并保留原牌")
+	check(attacker.hand.is_empty() and not game.deck._discard.has(concrete), "顺手已支付，目标原牌不移动")
 	target.hp = 1
-	await game._steal_hand(attacker, target, true, "顺手牵羊")
+	attacker.hand.append(null)
+	await game._play_steal_card(attacker, target, true)
 	check(target.is_dead() and attacker.hand.is_empty(), "烈火盾失血致死后不从空牌区偷出假牌")
 	check(game.deck._discard.count(concrete) == 1, "死亡弃牌与原拆偷效果不重复记账")
 

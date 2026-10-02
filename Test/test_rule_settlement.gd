@@ -453,7 +453,7 @@ func check_dying_windows():
 				game._liehuo_override = func():
 					game.rule_scheduler.enqueue("死亡前入口回归", rule)
 					return true
-				check(await game._maybe_liehuo_save(actor), label + "完成原有体力支付")
+				check(await game._try_liehuo_nullify(actor, CardData.CardSubType.DISMANTLE), label + "完成原有体力支付")
 			else:
 				game.rule_scheduler.enqueue("死亡前入口回归", rule)
 				check(await game._pay_yes_ah_cost(actor) == save, label + "费用入口按最终是否救回返回，死亡则中止后续锦囊")

@@ -122,7 +122,7 @@ var _sacrifice_override: Callable = Callable()
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
 
-# 烈火盾测试钩子（正常游戏不设置）：返回 true = 玩家0流失 1 点体力代替失去牌
+# 烈火盾测试钩子（正常游戏不设置）：返回 true = 拆/顺目标失去1体力使该牌对自己无效
 var _liehuo_override: Callable = Callable()
 
 # 灾厄袍转移目标测试钩子（正常游戏不设置）：返回目标 Player 或 "cancel"
@@ -964,9 +964,6 @@ func _do_discard(pid: int):
 		else:
 			_update_debug("%s 弃牌阶段 — 手牌 %d > 体力 %d，弃 %d 张" % [p.player_name, p.hand_size(), limit, excess])
 		for i in excess:
-			# 【烈火盾】：可流失 1 点体力代替弃置这张手牌（弃牌阶段）
-			if await _maybe_liehuo_save(p):
-				continue
 			# 牌区在等待中变化则重新选，不擅自改扣另一张，也不能跳过强制弃牌。
 			while not _game_over and p.is_alive() and p.hand_size() > 0:
 				if await _select_hand_discard(p, 1, true):
@@ -2334,9 +2331,6 @@ func _play_disarm():
 			var offered_card = _equipment_resource_for_pick(target, slot)
 			if offered_card == null:
 				continue
-			# 【烈火盾】：可流失 1 点体力代替失去这件装备
-			if await _maybe_liehuo_save(target):
-				continue
 			if _game_over or target.is_dead() or _equipment_resource_for_pick(target, slot) != offered_card:
 				continue
 			var removed_card = target.remove_equipment(slot)
@@ -2357,6 +2351,12 @@ func _play_disarm():
 func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
 	var action = "获取" if is_snatch else "弃置"
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and target.is_alive() and not _is_kneeling(target)
+	if not valid.call():
+		return
 
 	# 目标任何区域都没有牌 → 不能使用
 	if not target.has_any_card():
@@ -2374,6 +2374,9 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 		_update_debug("取消使用【%s】" % card_name)
 		return
 
+	if not valid.call():
+		return
+
 	# 确认后消耗手牌
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
 	if not await _consume_trick(attacker, sub):
@@ -2382,12 +2385,20 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	_reset_play_countdown_if_p0()
 	_update_debug("%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name])
 
+	# 成为目标时先处理烈火盾；无效后不选装备、不移动任何目标牌。
+	if await _try_liehuo_nullify(target, sub, valid):
+		return
+	if not valid.call():
+		return
+
 	# 无懈可击：效果即将对目标生效前
 	var nullified = await _ask_nullification_chain("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name])
 	if nullified:
 		_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 		return
 
+	if not valid.call():
+		return
 	match zone:
 		"hand":
 			await _steal_hand(attacker, target, is_snatch, card_name)
@@ -2403,11 +2414,7 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 	if target.hand_size() <= 0:
 		_update_debug("目标没有手牌")
 		return
-	# 【烈火盾】：可流失 1 点体力代替失去这张手牌
-	if await _maybe_liehuo_save(target):
-		_update_debug("%s 的【烈火盾】保住了这张手牌！" % target.player_name)
-		return
-	# 等待失牌替代期间牌区可能改变，不能从已清空的牌区生成一张假牌。
+	# 不从空牌区生成任意牌；盾仅在拆/顺成为目标的公共入口询问。
 	if target.is_dead() or target.hand_size() == 0:
 		return
 	var taken: CardBase = target.take_hand_cards(1)[0]
@@ -2451,10 +2458,6 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card:
 		return
 	var sub = target.equipment[slot]
-	# 【烈火盾】：可流失 1 点体力代替失去这件装备
-	if await _maybe_liehuo_save(target):
-		_update_debug("%s 的【烈火盾】保住了【%s】！" % [target.player_name, CardData.get_type_name(sub)])
-		return
 	if _game_over or target.is_dead() or target.equipment.get(slot, -1) != sub \
 			or (selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card):
 		return
@@ -2629,10 +2632,6 @@ func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Pla
 func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String):
 	if target.judgment_cards.is_empty():
 		_update_debug("目标没有判定牌")
-		return
-	# 【烈火盾】：可流失 1 点体力代替失去这张判定牌
-	if await _maybe_liehuo_save(target):
-		_update_debug("%s 的【烈火盾】保住了判定牌！" % target.player_name)
 		return
 	if target.is_dead() or target.judgment_cards.is_empty():
 		return
@@ -3048,15 +3047,11 @@ func _resolve_chixiong(p: Player, target: Player):
 	if not valid.call():
 		return
 	if discard:
-		# 【烈火盾】：可流失 1 点体力代替弃置这张手牌
-		if await _maybe_liehuo_save(target):
-			_update_debug("%s 的【烈火盾】保住了手牌！" % target.player_name)
-		else:
-			# 已选择弃牌分支；选牌窗口无取消选项，快照失效则重新选择。
-			while valid.call() and target.hand_size() > 0:
-				if await _select_hand_discard(target, 1, true, valid):
-					_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
-					break
+		# 已选择弃牌分支；烈火盾不替代雌雄失牌，快照失效重新选择。
+		while valid.call() and target.hand_size() > 0:
+			if await _select_hand_discard(target, 1, true, valid):
+				_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
+				break
 	else:
 		_draw_blank_cards(p, 1)
 		_update_debug("%s 选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
@@ -3829,28 +3824,32 @@ func _try_bagua_draw(p: Player):
 	_update_debug("%s 发动【八卦阵】：使用【闪】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	_sync_all_ui()
 
-# 【烈火盾】：当你要失去一张牌时，可流失 1 点体力代替（牌保留不失去）
-# 返回 true = 已支付体力，牌不失去；false = 正常失去
-func _maybe_liehuo_save(p: Player) -> bool:
-	if p == null or not p.is_alive():
+# C-L1：只在成为拆/顺目标时失去1体力，令该次牌对自己无效。
+# 返回true即本次牌已被防止；求救结果不恢复已被防止的牌效果。
+func _try_liehuo_nullify(p: Player, sub: CardData.CardSubType, allowed: Callable = Callable()) -> bool:
+	if sub not in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] \
+			or p == null or not p.is_alive() or p.get_armor() != CardData.CardSubType.LIEHUO_SHIELD:
 		return false
-	if p.get_armor() != CardData.CardSubType.LIEHUO_SHIELD:
+	var shield = p.get_equipment_card("armor")
+	var revision = turn_manager.get_context_revision()
+	if allowed.is_valid() and not allowed.call():
 		return false
 	var use = await _ask_liehuo(p)
-	if not use:
+	if not use or _game_over or not p.is_alive() or revision != turn_manager.get_context_revision() \
+			or p.get_equipment_card("armor") != shield \
+			or (allowed.is_valid() and not allowed.call()):
 		return false
-	p.hp -= 1  # 流失体力（不算受到伤害，不触发防具/舍己为人等）
-	_update_debug("%s 发动【烈火盾】：流失 1 点体力，代替失去一张牌（%d/%d）" % [p.player_name, p.hp, p.max_hp])
+	p.hp -= 1
+	_update_debug("%s 发动【烈火盾】：失去1点体力，【%s】对其无效（%d/%d）" % [p.player_name, CardData.get_type_name(sub), p.hp, p.max_hp])
 	_sync_all_ui()
-	# 流失导致濒死 → 先处理（与丈八蛇矛一致）
 	if p.is_dying():
-		await _resolve_dying(p, null, "liehuo") # 流失致死无击杀者
+		await _resolve_dying(p, null, "liehuo")
 	return true
 
 # 询问是否发动烈火盾：玩家0弹窗，AI 默认不发动
 func _ask_liehuo(p: Player) -> bool:
 	if _liehuo_override.is_valid():
-		return _liehuo_override.call()
+		return await _liehuo_override.call()
 	if p.seat_index == 0:
 		return await _show_liehuo_prompt()
 	return false  # AI 暂不主动发动
@@ -3859,7 +3858,7 @@ func _ask_liehuo(p: Player) -> bool:
 func _show_liehuo_prompt() -> bool:
 	# 测试钩子：跳过 UI 直接返回
 	if _liehuo_override.is_valid():
-		return _liehuo_override.call()
+		return await _liehuo_override.call()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3875,7 +3874,7 @@ func _show_liehuo_prompt() -> bool:
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "【烈火盾】！你将失去一张牌\n是否流失 1 点体力代替？"
+	label.text = "【烈火盾】！你成为拆/顺的目标\n是否失去1点体力，使此牌对你无效？"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -3889,12 +3888,12 @@ func _show_liehuo_prompt() -> bool:
 	vbox.add_child(hbox)
 
 	var pay_btn = Button.new()
-	pay_btn.text = "流失 1 点体力代替"
+	pay_btn.text = "失去1点体力，令此牌无效"
 	pay_btn.custom_minimum_size = Vector2(180, 44)
 	hbox.add_child(pay_btn)
 
 	var lose_btn = Button.new()
-	lose_btn.text = "失去这张牌"
+	lose_btn.text = "不发动，继续结算"
 	lose_btn.custom_minimum_size = Vector2(180, 44)
 	lose_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(lose_btn)
@@ -7218,7 +7217,7 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 		p.judgment_cards.clear()
 		p.hidden_equip_slot = ""
 
-# 弃牌/技能费用的公共记账，不调用烈火盾替代。替代只在允许的调用处询问。
+# 弃牌/技能费用的公共记账，不调用烈火盾；盾只在拆/顺成为目标时询问。
 # 不把任意牌占位制造为某种具体牌；具体牌则以原实例入弃牌堆一次。
 func _discard_hand_cards(p: Player, count: int) -> bool:
 	if p == null or count < 0 or p.hand_size() < count:

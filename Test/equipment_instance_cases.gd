@@ -222,6 +222,8 @@ func run(host):
 	await persistent_state_cases.run(suite)
 	var preempt_cases = load("res://Test/equipment_preempt_cases.gd").new()
 	await preempt_cases.run(suite)
+	var liehuo_cases = load("res://Test/liehuo_target_cases.gd").new()
+	await liehuo_cases.run(suite)
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()

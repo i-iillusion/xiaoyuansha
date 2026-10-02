@@ -42,12 +42,13 @@ func run(host):
 	reset_case()
 	target.determined_cards.append(second)
 	target.equipment["armor"] = CardData.CardSubType.LIEHUO_SHIELD
-	game._liehuo_override = func(): return true
-	game._hand_discard_override = func(_snapshot, _count, _mandatory):
-		check(false, "烈火盾替代成功不应再询问弃牌")
-		return []
+	game._liehuo_override = func():
+		check(false, "雌雄不是拆/顺目标，不应询问烈火盾")
+		return true
+	game._hand_discard_override = func(snapshot, count, _mandatory):
+		return snapshot.defaults(count)
 	await game._resolve_chixiong(source, target)
-	check(target.hp == 9 and target.determined_cards == [second] and game.deck._discard.is_empty(), "保留原有烈火盾替代顺序")
+	check(target.hp == 10 and target.determined_cards.is_empty() and game.deck._discard == [second], "新烈火盾不替代雌雄弃牌")
 
 	reset_case()
 	target.hand.append(first)
