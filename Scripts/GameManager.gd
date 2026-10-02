@@ -1325,12 +1325,19 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	if target == wearer or not target.is_alive():
 		return false
+	var original = wearer.get_equipment_card("armor")
+	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return target != wearer and target.is_alive() and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and wearer.is_alive() and target != wearer and target.is_alive() \
+			and wearer.get_equipment_card("armor") == original \
+			and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
 	if not await _select_hand_discard(wearer, 1, false, valid):
 		return false
 	_update_debug("%s 弃置一张手牌，与 %s 进行拼点（【贤者的加护】）" % [wearer.player_name, target.player_name])
-	var r = await _do_ping_dian(wearer, target)
+	var r = await _do_ping_dian(wearer, target, valid)
+	if r == RPS_INVALID or not valid.call():
+		return false
 	if r == RPS_WIN:
 		wearer.sage_tokens += 1
 		_update_debug("%s 赢得拼点，获得 1 个贤者标记（%d/3）" % [wearer.player_name, wearer.sage_tokens])
@@ -6738,6 +6745,14 @@ func _try_soul_blade(source: Player, victim: Player):
 		return
 	if not source.soul_blade_activated:
 		return
+	var original = source.get_equipment_card("weapon")
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and source.is_alive() and victim.is_alive() \
+			and source.get_equipment_card("weapon") == original \
+			and source.get_weapon() == CardData.CardSubType.SOUL_BLADE \
+			and source.soul_blade_activated and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 
 	# 是否发动拼点（玩家0弹窗 / AI 默认发动）
 	if source.seat_index == 0:
@@ -6745,8 +6760,12 @@ func _try_soul_blade(source: Player, victim: Player):
 			return
 
 	# 进行两次拼点（每次平局继续直到分出胜负）
-	var r1 = await _do_ping_dian(source, victim)
-	var r2 = await _do_ping_dian(source, victim)
+	var r1 = await _do_ping_dian(source, victim, valid)
+	if r1 == RPS_INVALID or not valid.call():
+		return
+	var r2 = await _do_ping_dian(source, victim, valid)
+	if r2 == RPS_INVALID or not valid.call():
+		return
 	var wins = 0
 	if r1 == RPS_WIN:
 		wins += 1
@@ -6766,8 +6785,6 @@ func _try_soul_blade(source: Player, victim: Player):
 	if source.seat_index == 0:
 		if not await _ask_soul_blade_discard(victim.player_name, need):
 			return
-	var valid = func():
-		return victim.is_alive() and source.get_weapon() == CardData.CardSubType.SOUL_BLADE and source.soul_blade_activated and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 	if not await _select_hand_discard(source, need, false, valid):
 		return
 	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
