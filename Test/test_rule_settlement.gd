@@ -773,6 +773,8 @@ func _run():
 	await trick_event_cases.run(self)
 	var equipment_event_cases = load("res://Test/equipment_event_cases.gd").new()
 	await equipment_event_cases.run(self)
+	var play_skill_actor_cases = load("res://Test/play_skill_actor_cases.gd").new()
+	await play_skill_actor_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])

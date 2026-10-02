@@ -193,6 +193,7 @@ func _run() -> void:
 
 	# ---- 用例8：【Gay】执行：弃 X 张，双方各回复 X ----
 	_env()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	p0.hp = 1
 	p1.hp = 1
 	p1.hand.clear()
@@ -211,6 +212,7 @@ func _run() -> void:
 	_check(p1.hp == hp_before, "限一次：二次发动被拒")
 	# 取消（X=0）
 	_env()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	p0.hp = 1
 	p1.hp = 1
 	p0.hand.clear()
@@ -224,9 +226,10 @@ func _run() -> void:
 
 	# ---- 用例9：【Gay】目标校验 ----
 	_env()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	p0.hp = 1
 	p2.hp = p2.max_hp  # 满血目标
-	game._is_gay_targeting = true
+	await game._on_gay_skill_clicked(p0)
 	game._on_gay_target_click(p2)
 	_check(game._is_gay_targeting, "满血目标被拒，仍在选择")
 	_check(p2.hp == p2.max_hp, "满血目标未回复")
@@ -252,6 +255,7 @@ func _run() -> void:
 
 	# ---- 用例10：【Gay】正常目标全流程（点击 → X → 回复）----
 	_env()
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	p0.hp = 1
 	p1.hp = 1
 	p0.hand.clear()
@@ -259,7 +263,7 @@ func _run() -> void:
 		p0.hand.append(CardBase.create(CardData.CardSubType.STRIKE))
 	p1.hand.clear()
 	game._gay_x_override = func(): return 1
-	game._is_gay_targeting = true
+	await game._on_gay_skill_clicked(p0)
 	await game._on_gay_target_click(p1)
 	_check(not game._is_gay_targeting, "执行后退出目标选择")
 	_check(p0.hp == 2, "全流程：自己回 1: %d" % p0.hp)

@@ -4943,6 +4943,8 @@ func _on_sao_skill_clicked(p: Player) -> void:
 
 # 暗置：选类型 → 检查槽位与手牌来源 → 支付一张 → 放置暗置资源。
 func _do_sao_hide(p: Player, replace: bool) -> void:
+	if not _can_use_play_skill(p):
+		return
 	# 已裁定放入哪类装备位便不能改为另一类；兼容旧调用参数但不允许替换。
 	if replace or p.has_hidden_equip():
 		_update_debug("已暗置的装备不能更换类别")
@@ -5485,7 +5487,36 @@ func _show_paixiong_prompt(source_name: String) -> bool:
 # ============================
 
 # 详情弹窗技能点击：进入目标选择模式（与【下跪】/【苕】一致的发动方式）
+# 出牌阶段技能归实际操作者，获赠阶段不要求其同时是回合主人。
+var _play_skill_target_revision: int = -1
+
+func _can_use_play_skill(p: Player) -> bool:
+	return not _game_over and is_instance_valid(p) and players.has(p) and p.is_alive() \
+		and turn_manager.can_play_card() and turn_manager.get_play_actor_idx() == p.seat_index \
+		and not _is_kneeling(p)
+
+func _play_skill_target_is_current() -> bool:
+	if _can_use_play_skill(players[0]) and _play_skill_target_revision == turn_manager.get_context_revision():
+		return true
+	_is_zhuangbi_targeting = false
+	_zhuangbi_targets.clear()
+	_is_campus_targeting = false
+	_is_gay_targeting = false
+	_is_lanzhonghou_targeting = false
+	_lanzhonghou_selected.clear()
+	_cancel_target_btn.visible = false
+	_confirm_target_btn.visible = false
+	_restore_play_skill_buttons()
+	return false
+
+func _restore_play_skill_buttons():
+	var allowed = _can_use_play_skill(players[0])
+	_play_btn.visible = allowed
+	_end_play_btn.visible = allowed
+
 func _on_zhuangbi_skill_clicked(p: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if _zhuangbi_blocked_this_phase:
 		_show_toast("【装逼】胜负各半，本出牌阶段不能再次发动")
 		return
@@ -5512,6 +5543,9 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 	_start_zhuangbi_mode()
 
 func _start_zhuangbi_mode():
+	if not _can_use_play_skill(players[0]):
+		return
+	_play_skill_target_revision = turn_manager.get_context_revision()
 	_is_zhuangbi_targeting = true
 	_zhuangbi_targets.clear()
 	_play_btn.visible = false
@@ -5531,11 +5565,12 @@ func _exit_zhuangbi_mode():
 	_zhuangbi_targets.clear()
 	_cancel_target_btn.visible = false
 	_confirm_target_btn.visible = false
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	_restore_play_skill_buttons()
 
 # 装逼目标点击：toggle 加入/移除（不能选自己；目标须存活且有手牌）
 func _on_zhuangbi_target_click(target: Player):
+	if not _is_zhuangbi_targeting or not _play_skill_target_is_current():
+		return
 	var p = players[0]
 	if target == p:
 		_update_debug("不能选择自己作为目标")
@@ -5561,6 +5596,8 @@ func _on_zhuangbi_target_click(target: Player):
 
 # 确认装逼：执行
 func _on_confirm_zhuangbi():
+	if not _is_zhuangbi_targeting or not _play_skill_target_is_current():
+		return
 	if _zhuangbi_targets.is_empty():
 		return
 	var targets = _zhuangbi_targets.duplicate()
@@ -5569,6 +5606,8 @@ func _on_confirm_zhuangbi():
 
 # 执行装逼：双方各弃一张手牌 → 依次拼点 → 判定结果
 func _execute_zhuangbi(targets: Array[Player]) -> void:
+	if not _can_use_play_skill(players[0]):
+		return
 	if _zhuangbi_blocked_this_phase:
 		_update_debug("【装逼】本出牌阶段不能再次发动")
 		return
@@ -5686,6 +5725,8 @@ func _show_zhuangbi_again_prompt() -> bool:
 
 # 详情弹窗技能点击：进入目标选择模式（与【装逼】等主动技能一致）
 func _on_campus_skill_clicked(p: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if p != players[0] or p.seat_index != 0:
 		_update_debug("只能对自己使用【校园霸主】")
 		return
@@ -5709,6 +5750,9 @@ func _on_campus_skill_clicked(p: Player) -> void:
 	_start_campus_mode()
 
 func _start_campus_mode():
+	if not _can_use_play_skill(players[0]):
+		return
+	_play_skill_target_revision = turn_manager.get_context_revision()
 	_is_campus_targeting = true
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -5721,6 +5765,8 @@ func _start_campus_mode():
 
 # 校园霸主目标点击：单选，点击即执行（不能选自己；目标须存活且有手牌）
 func _on_campus_target_click(target: Player):
+	if not _is_campus_targeting or not _play_skill_target_is_current():
+		return
 	var p = players[0]
 	if target == p:
 		_update_debug("不能选择自己作为目标")
@@ -5738,12 +5784,13 @@ func _on_campus_target_click(target: Player):
 	_is_campus_targeting = false
 	_cancel_target_btn.visible = false
 	await _execute_campus_dominator(p, target)
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	_restore_play_skill_buttons()
 	_sync_all_ui()
 
 # 执行校园霸主：双方各弃一张手牌 → 进行拼点（平局继续直到分出胜负）→ 赢者对输者造成 1 点伤害
 func _execute_campus_dominator(p: Player, target: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if p.general_name != "杰基·斯特朗" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
@@ -5897,6 +5944,8 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 
 # 详情弹窗技能按钮 → 【Gay】发动入口
 func _on_gay_skill_clicked(p: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if p != players[0] or p.seat_index != 0:
 		_update_debug("只能对自己使用【Gay】")
 		return
@@ -5923,6 +5972,7 @@ func _on_gay_skill_clicked(p: Player) -> void:
 	for child in _detail_popup_root.get_children():
 		child.queue_free()
 	_detail_popup_root.visible = false
+	_play_skill_target_revision = turn_manager.get_context_revision()
 	_is_gay_targeting = true
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -5931,6 +5981,8 @@ func _on_gay_skill_clicked(p: Player) -> void:
 
 # Gay 目标点击（分发器在 _on_player_panel_click）：校验后弹 X 选择
 func _on_gay_target_click(target: Player):
+	if not _is_gay_targeting or not _play_skill_target_is_current():
+		return
 	var p = players[0]
 	if target == p:
 		_update_debug("不能选择自己作为目标")
@@ -5950,12 +6002,13 @@ func _on_gay_target_click(target: Player):
 	_is_gay_targeting = false
 	_cancel_target_btn.visible = false
 	await _execute_gay(p, target)
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	_restore_play_skill_buttons()
 	_sync_all_ui()
 
 # 执行【Gay】：弃 X 张手牌，双方各回复 X 点体力（X ≤ 双方体力上限最小值，且 ≤ 手牌数）
 func _execute_gay(p: Player, target: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
 	if _gay_used:
@@ -6008,6 +6061,8 @@ func _show_gay_x_picker(max_x: int) -> int:
 
 # 详情弹窗技能点击：进入两名角色选择模式（与【装逼】等主动技能一致）
 func _on_lanzhonghou_skill_clicked(p: Player) -> void:
+	if not _can_use_play_skill(p):
+		return
 	if p != players[0] or p.seat_index != 0:
 		_update_debug("只能对自己使用【没用】")
 		return
@@ -6025,6 +6080,9 @@ func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 	_start_lanzhonghou_mode()
 
 func _start_lanzhonghou_mode():
+	if not _can_use_play_skill(players[0]):
+		return
+	_play_skill_target_revision = turn_manager.get_context_revision()
 	_is_lanzhonghou_targeting = true
 	_lanzhonghou_selected.clear()
 	_lanzhonghou_pending.clear()
@@ -6039,6 +6097,8 @@ func _start_lanzhonghou_mode():
 
 # 没用角色选择：点击头像 toggle（选满 2 名进入区域选择）
 func _on_lanzhonghou_target_click(target: Player):
+	if not _is_lanzhonghou_targeting or not _play_skill_target_is_current():
+		return
 	if not target.is_alive():
 		_update_debug("目标已阵亡")
 		return
@@ -6061,12 +6121,13 @@ func _on_lanzhonghou_target_click(target: Player):
 		_is_lanzhonghou_targeting = false
 		_cancel_target_btn.visible = false
 		await _run_lanzhonghou(a, b)
-		_play_btn.visible = true
-		_end_play_btn.visible = true
+		_restore_play_skill_buttons()
 		_sync_all_ui()
 
 # 区域选择循环：武器/防具/坐骑 各最多一次；「完成交换」后弃 X 张牌并统一执行交换
 func _run_lanzhonghou(a: Player, b: Player) -> void:
+	if not _can_use_play_skill(players[0]):
+		return
 	var p = players[0]
 	if p.general_name != "麦克斯·欧尼斯特" or not p.is_alive():
 		return
