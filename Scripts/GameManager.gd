@@ -26,6 +26,11 @@ class RpsAnswer extends RefCounted:
 		settled = true
 		answered.emit(choice)
 
+# 通用选择窗口的答复仅属于该窗口；失效不能冒充主动取消。
+const CHOICE_INVALID: int = -2
+var _choice_prompt_stack: Array[Dictionary] = []
+var _countdown_generation: int = 0
+
 signal game_started()
 signal game_over(winner_identity: String)
 signal card_action_committed(event: CardActionEvent)
@@ -305,8 +310,6 @@ var _meiyong_override: Callable = Callable()             # 返回 true = 发动�
 var _meiyong_option_override: Callable = Callable()      # 返回 0/1/2（三选一）
 var _meiyong_target_override: Callable = Callable()      # 返回 Player（目标角色）
 
-# 通用按钮选择弹窗结果（返回选中索引，-1 = 取消）
-signal _choice_pick_result(idx: int)
 # 【烂忠厚】目标选择结果（返回 Player，null = 取消）
 signal _meiyong_pick_result(target: Player)                       
 signal _shensu_pick_result(target: Player)                       
@@ -5203,10 +5206,67 @@ func _show_reveal_opportunity_prompt(owner: Player) -> bool:
 #  通用弹窗（按钮选择）
 # ============================
 
+# 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
+func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer) -> int:
+	var actor: Player = players[0]
+	var revision = turn_manager.get_context_revision()
+	answer.allowed = func():
+		return not _game_over and is_instance_valid(actor) and players.has(actor) \
+			and players[0] == actor and not actor.is_dead() \
+			and revision == turn_manager.get_context_revision() \
+			and is_instance_valid(overlay) and not overlay.is_queued_for_deletion()
+	var stop = func(_winner): answer.submit(CHOICE_INVALID)
+	var close = answer.submit.bind(CHOICE_INVALID)
+	var watch = func():
+		if answer.allowed.is_valid() and not answer.allowed.call():
+			answer.submit(CHOICE_INVALID)
+	var tree = get_tree()
+	game_over.connect(stop)
+	tree.process_frame.connect(watch)
+	overlay.tree_exiting.connect(close)
+	if not _choice_prompt_stack.is_empty():
+		var previous = _choice_prompt_stack.back()
+		if previous.generation == _countdown_generation:
+			previous.step = _step_remaining
+	var pending = {"overlay": overlay, "answer": answer, "who": actor.player_name,
+		"step": STEP_SECONDS, "generation": -1}
+	_choice_prompt_stack.append(pending)
+	_start_choice_countdown(pending)
+	var result: int = await answer.answered
+	game_over.disconnect(stop)
+	tree.process_frame.disconnect(watch)
+	if is_instance_valid(overlay):
+		overlay.tree_exiting.disconnect(close)
+		if not overlay.is_queued_for_deletion():
+			overlay.queue_free()
+	_choice_prompt_stack.erase(pending)
+	if pending.generation == _countdown_generation:
+		if not _game_over and not _choice_prompt_stack.is_empty():
+			_start_choice_countdown(_choice_prompt_stack.back())
+		else:
+			_stop_countdown()
+	return result
+
+func _start_choice_countdown(pending: Dictionary):
+	# 超时是有效取消；先答复后由等待者销毁窗口，避免误判为外部关闭。
+	_halt_countdown()
+	_set_status_line("等待 %s 响应" % pending.who)
+	_step_remaining = pending.step
+	_countdown_active = true
+	var generation = _countdown_generation
+	pending.generation = generation
+	_countdown_on_timeout = func():
+		if generation == _countdown_generation:
+			pending.answer.submit(-1)
+	_update_countdown_label()
+
 # 通用按钮选择弹窗（锚点居中）：返回选中索引，取消返回 -1
 func _show_choice_popup(title: String, buttons: Array) -> int:
+	if _game_over:
+		return CHOICE_INVALID
 	if buttons.is_empty():
 		return -1
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -5238,29 +5298,25 @@ func _show_choice_popup(title: String, buttons: Array) -> int:
 		var btn = Button.new()
 		btn.text = buttons[i]
 		btn.custom_minimum_size = Vector2(190, 44)
-		btn.pressed.connect(_emit_choice_pick.bind(overlay, i), CONNECT_ONE_SHOT)
+		btn.pressed.connect(answer.submit.bind(i), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(190, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(_emit_choice_pick.bind(overlay, -1), CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	_start_response_countdown(overlay, players[0].player_name, func(): _choice_pick_result.emit(-1))
-	var r = await _choice_pick_result
-	_stop_countdown()
-	return r
-
-func _emit_choice_pick(overlay: ColorRect, idx: int):
-	overlay.queue_free()
-	_choice_pick_result.emit(idx)
+	return await _wait_choice_prompt(overlay, answer)
 
 # 明置具体装备选择弹窗（网格布局，装备多）：返回选中索引，取消返回 -1
 func _show_sao_reveal_picker(texts: Array) -> int:
+	if _game_over:
+		return CHOICE_INVALID
 	if texts.is_empty():
 		return -1
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -5293,20 +5349,17 @@ func _show_sao_reveal_picker(texts: Array) -> int:
 		var btn = Button.new()
 		btn.text = texts[i]
 		btn.custom_minimum_size = Vector2(150, 40)
-		btn.pressed.connect(_emit_choice_pick.bind(overlay, i), CONNECT_ONE_SHOT)
+		btn.pressed.connect(answer.submit.bind(i), CONNECT_ONE_SHOT)
 		grid.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(190, 40)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(_emit_choice_pick.bind(overlay, -1), CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	_start_response_countdown(overlay, players[0].player_name, func(): _choice_pick_result.emit(-1))
-	var r = await _choice_pick_result
-	_stop_countdown()
-	return r
+	return await _wait_choice_prompt(overlay, answer)
 
 # ============================
 #  【装傻】濒死拼点（安普提·斯丢皮得，锁定技）
@@ -5391,6 +5444,8 @@ func _do_awaken(p: Player):
 			or p.general_name != "史蒂芬·彼特先斯" or not p.awoken or p.awake_choice != 0 \
 			or revision != turn_manager.get_context_revision():
 		return
+	if choice == CHOICE_INVALID:
+		return
 	if choice not in [1, 2, 3]:
 		choice = 1 # 必选效果；自动策略拒绝或无效结果不留下未选择状态。
 	p.awake_choice = choice
@@ -5401,6 +5456,8 @@ func _do_awaken(p: Player):
 # 觉醒三选一弹窗（玩家0）：返回 1 / 2 / 3
 func _show_awaken_pick() -> int:
 	var idx = await _show_choice_popup("【觉醒】选择一项永久效果：", ["不能成为【杀】的目标", "不能成为【决斗】的目标", "不能成为【南蛮入侵】和【万箭齐发】的目标"])
+	if idx == CHOICE_INVALID:
+		return CHOICE_INVALID
 	if idx < 0:
 		idx = 1  # 取消默认选 1
 	return idx + 1
@@ -8478,6 +8535,7 @@ func _stop_countdown():
 	_refresh_status_line()
 
 func _halt_countdown():
+	_countdown_generation += 1
 	_countdown_active = false
 	_countdown_on_timeout = Callable()
 	_step_remaining = 0.0
