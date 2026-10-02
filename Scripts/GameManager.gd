@@ -1965,9 +1965,7 @@ func play_card(sub: CardData.CardSubType):
 
 		CardData.CardSubType.MOUNT_PLUS, CardData.CardSubType.MOUNT_MINUS, CardData.CardSubType.MULE_PLUS, CardData.CardSubType.MULE_MINUS:
 			# 装备坐骑：有空槽自动装入；槽满（4/4）可选择顶掉任意一匹
-			# 【苕】抢先明置（安普提·斯丢皮得）：暗置同类型装备时，可明置为该装备阻止本次装备
-			if await _try_sao_preempt(p, sub, "mount"):
-				return
+			# C-S3/E-04：普通坐骑及两种劣马均不打开抢先阻止窗口。
 			var target_slot: String = ""
 			if p.has_free_mount_slot():
 				var equipped_card = _take_play_card(p, sub)
@@ -4863,35 +4861,49 @@ func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
 	_refresh_detail_popup()
 	return true
 
-# 【苕】抢先明置：玩家0 有同类型暗置装备时，可明置为该装备阻止对方装备（对方手牌未消耗）
-# 返回 true = 抢先成功（调用方应中止本次装备流程）；type_key = "weapon" / "armor" / "mount"
+# C-S1～3：抢先只适用于其他角色尚未成功声明的唯一武器/防具。
+# true 表示原装备动作应停止（已被抢先，或等待后动作失效）；从未先收取手牌。
 func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: String) -> bool:
-	var owner = players[0]
-	if owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
+	if not ["weapon", "armor"].has(type_key) or equipment_pool.is_claimed(sub):
 		return false
-	if not owner.has_hidden_equip():
-		return false
-	if owner.get_hidden_equip_type() != type_key:
-		return false
-	var type_name = "武器" if type_key == "weapon" else ("防具" if type_key == "armor" else "坐骑")
-	if _sao_reveal_override.is_valid():
-		if not _sao_reveal_override.call():
-			return false
-	else:
-		if owner.seat_index != 0:
-			return false
-		var yes = await _show_sao_preempt_prompt(equipper, sub, type_name)
-		if not yes:
-			return false
-	if not _reveal_hidden_as(owner, sub):
-		return false
-	_update_debug("%s 抢先明置暗置%s为【%s】，%s 无法装备，消耗的手牌已退回！" % [owner.player_name, type_name, CardData.get_type_name(sub), equipper.player_name])
-	_sync_all_ui()
-	return true
+	var revision = turn_manager.get_context_revision()
+	var snapshot = HandSelection.new(equipper)
+	var pending = _pending_determined_card
+	var old_equipment = _equipment_resource_for_pick(equipper, type_key)
+	var action_valid = func():
+		return not _game_over and equipper.is_alive() and not _is_kneeling(equipper) \
+			and turn_manager.can_play_card() and turn_manager.current_player_idx == equipper.seat_index \
+			and turn_manager.get_context_revision() == revision \
+			and equipper.hand == snapshot.hand and equipper.determined_cards == snapshot.determined \
+			and _pending_determined_card == pending and _has_play_card(equipper, sub) \
+			and _equipment_resource_for_pick(equipper, type_key) == old_equipment
+	if not action_valid.call():
+		return true
+	for owner in players:
+		if owner == equipper or owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
+			continue
+		var original = owner.get_hidden_equipment_card(type_key)
+		if original == null or not _hidden_declaration_options(original).has(sub):
+			continue
+		var accepted = false
+		if _sao_reveal_override.is_valid():
+			accepted = await _sao_reveal_override.call()
+		elif owner.seat_index == 0:
+			accepted = await _show_sao_preempt_prompt(equipper, sub, "武器" if type_key == "weapon" else "防具")
+		# AI 暂保守不发动；D决策可接此入口，不能把角色是否可抢先硬编码为座位0。
+		if not action_valid.call():
+			return true
+		if not accepted or not owner.is_alive() or owner.general_name != "安普提·斯丢皮得" \
+				or owner.get_hidden_equipment_card(type_key) != original or equipment_pool.is_claimed(sub):
+			continue
+		if _reveal_hidden_slot_as(owner, type_key, original, sub):
+			_update_debug("%s 抢先明置【%s】，%s 本次未装备，手牌未消耗" % [owner.player_name, CardData.get_type_name(sub), equipper.player_name])
+			return true
+	return false
 
 # 抢先明置确认弹窗（玩家0）
 func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_name: String) -> bool:
-	var idx = await _show_choice_popup("%s 装备了【%s】\n你是否明置已装备%s为【%s】？" % [equipper.player_name, CardData.get_type_name(sub), type_name, CardData.get_type_name(sub)], ["明置并阻止", "不阻止"])
+	var idx = await _show_choice_popup("%s 声明将装备【%s】\n你是否将暗置%s明置为【%s】并阻止本次装备？" % [equipper.player_name, CardData.get_type_name(sub), type_name, CardData.get_type_name(sub)], ["明置并阻止", "不阻止"])
 	return idx == 0
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）

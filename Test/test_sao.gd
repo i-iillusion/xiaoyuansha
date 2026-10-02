@@ -212,7 +212,7 @@ func _run() -> void:
 	game.turn_manager.current_player_idx = 0
 	game._sao_reveal_override = Callable()
 
-	# ---- 用例 13.5：【苕】自己装备同类型武器时也可抢先明置（手牌退回） ----
+	# ---- 用例 13.5：【苕】自己装备不触发抢先，正常支付替换暗置装备 ----
 	_clear_equips(p0)
 	game._sao_type_override = func(): return "weapon"
 	await game._do_sao_hide(p0, false)
@@ -221,9 +221,9 @@ func _run() -> void:
 	p0.hand.append(CardBase.create(CardData.CardSubType.GUDING_BLADE))
 	game._sao_reveal_override = func(): return true
 	await game.play_card(CardData.CardSubType.GUDING_BLADE)
-	_check(p0.equipment["weapon"] == CardData.CardSubType.GUDING_BLADE, "自己装备抢先明置：暗置武器变为古锭刀")
-	_check(p0.hand_size() == 1, "自己装备被阻止：手牌退回: %d" % p0.hand_size())
-	_check(not p0.has_hidden_equip(), "自己装备抢先明置后暗置清除")
+	_check(p0.equipment["weapon"] == CardData.CardSubType.GUDING_BLADE, "自己正常装备古锭刀")
+	_check(p0.hand_size() == 0, "自己正常装备消耗手牌: %d" % p0.hand_size())
+	_check(not p0.has_hidden_equip(), "正常替换后旧暗置清除")
 	game._sao_reveal_override = Callable()
 	game._sao_type_override = Callable()
 	_clear_equips(p0)

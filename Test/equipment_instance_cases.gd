@@ -220,6 +220,8 @@ func run(host):
 	await _check_two_occupied_armor_lion_exchange()
 	var persistent_state_cases = load("res://Test/equipment_persistent_state_cases.gd").new()
 	await persistent_state_cases.run(suite)
+	var preempt_cases = load("res://Test/equipment_preempt_cases.gd").new()
+	await preempt_cases.run(suite)
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
