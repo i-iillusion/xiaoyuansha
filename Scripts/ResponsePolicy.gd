@@ -5,7 +5,7 @@ extends RefCounted
 static func choose(view: Dictionary, kind: String, options: Array) -> int:
 	if options.is_empty():
 		return -1
-	if kind == "basic":
+	if kind in ["basic", "awaken"]:
 		return options[0]
 	if kind != "rescue":
 		# 无懈/舍己默认保守放弃；可注入策略不会改变规则入口。

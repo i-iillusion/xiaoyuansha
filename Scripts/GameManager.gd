@@ -5300,21 +5300,32 @@ func _awake_blocks(p: Player, kind: int) -> bool:
 
 # 觉醒触发检查：手牌为 0 且未觉醒 → 立即觉醒（觉醒技；由 _sync_all_ui 与 hand_updated 驱动）
 func _check_awaken_trigger():
-	if players.is_empty():
+	if _game_over:
 		return
-	var p = players[0]
+	for p in players:
+		_check_player_awaken(p)
+
+func _check_player_awaken(p: Player):
+	if _game_over or not players.has(p):
+		return
 	if not p.is_alive() or p.general_name != "史蒂芬·彼特先斯" or p.awoken or p.hand_size() > 0:
 		return
 	p.awoken = true  # 先标记，防止 _do_awaken 内部再 sync 时重入
-	call_deferred("_do_awaken", p)
+	if p.seat_index == 0:
+		call_deferred("_do_awaken", p)
+	else:
+		_do_awaken(p) # 自动选择无等待；后续效果立即看到上限、摸牌和免疫。
 
 # 手牌变化监听（add_to_hand / remove_from_hand 路径的补充触发）
 func _on_hand_updated(p: Player):
-	if p == players[0]:
-		_check_awaken_trigger()
+	_check_player_awaken(p)
 
 # 觉醒：失去一点体力上限 → 摸两张牌 → 三选一
 func _do_awaken(p: Player):
+	if _game_over or not is_instance_valid(p) or not players.has(p) \
+			or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯" or not p.awoken or p.awake_choice != 0:
+		return
+	var revision = turn_manager.get_context_revision()
 	p.awoken = true
 	p.max_hp -= 1
 	p.hp = mini(p.hp, p.max_hp)
@@ -5322,9 +5333,17 @@ func _do_awaken(p: Player):
 	_draw_blank_cards(p, 2)
 	var choice: int
 	if _awaken_pick_override.is_valid():
-		choice = _awaken_pick_override.call()
+		choice = await _awaken_pick_override.call()
+	elif p.seat_index != 0:
+		choice = await _choose_ai_response(p, "awaken", [1, 2, 3])
 	else:
 		choice = await _show_awaken_pick()
+	if _game_over or not is_instance_valid(p) or not players.has(p) or not p.is_alive() \
+			or p.general_name != "史蒂芬·彼特先斯" or not p.awoken or p.awake_choice != 0 \
+			or revision != turn_manager.get_context_revision():
+		return
+	if choice not in [1, 2, 3]:
+		choice = 1 # 必选效果；自动策略拒绝或无效结果不留下未选择状态。
 	p.awake_choice = choice
 	var desc = "1.不能成为【杀】的目标" if choice == 1 else ("2.不能成为【决斗】的目标" if choice == 2 else "3.不能成为【南蛮入侵】和【万箭齐发】的目标")
 	_update_debug("%s 选择觉醒效果：%s" % [p.player_name, desc])

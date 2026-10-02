@@ -61,6 +61,7 @@ func run(host):
 	reset_case()
 	actor.hand.append(null)
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	game._paixiong_override = func(): return true
 	game._hand_discard_override = func(_snapshot, count, mandatory):
 		check(count == 1 and not mandatory, "拍胸脯的伤害来源可拒绝一张牌费用")
@@ -71,6 +72,7 @@ func run(host):
 	reset_case()
 	actor.hand.append(null)
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	game._paixiong_override = func(): return true
 	game._hand_discard_override = func(snapshot, count, mandatory):
 		check(count == 1 and not mandatory, "拍胸脯一次多点伤害只需选择一张牌")
@@ -188,6 +190,7 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 非空过期答复重选；具体牌只以原实例入弃牌堆一次。
 	reset_case()
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	actor.awoken = true
 	var concrete = CardBase.create(CardData.CardSubType.PEACH)
 	actor.determined_cards.append(concrete)
@@ -203,6 +206,7 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 同值恢复也属于旧动作；不能在日志中称作主动拒绝或防止伤害。
 	reset_case()
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	actor.hand.append(null)
 	game._paixiong_override = func(): return true
 	game._hand_discard_override = func(snapshot, count, _mandatory):
@@ -222,6 +226,7 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 来源在选择期间最终死亡，原伤害继续结算且改为无来源。
 	reset_case()
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	actor.hand.append(null)
 	game._paixiong_override = func(): return true
 	game._hand_discard_override = func(snapshot, count, _mandatory):
@@ -237,6 +242,7 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	# 失牌导致无法支付时，已发动技能按原文防止整次伤害。
 	reset_case()
 	target.general_name = "史蒂芬·彼特先斯"
+	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	actor.hand.append(null)
 	game._paixiong_override = func(): return true
 	game._hand_discard_override = func(snapshot, count, _mandatory):
