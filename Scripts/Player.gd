@@ -10,6 +10,12 @@ signal hand_updated()
 
 @export var player_name: String = "玩家"
 @export var max_hp: int = 4
+# 身份层由模式/身份转换入口维护；不属于武将牌开局快照。
+# 只调整上限，不隐含回复体力。身份转换对当前体力的处理在H03单独结算。
+var identity_max_hp_bonus: int = 0:
+	set(value):
+		max_hp += value - identity_max_hp_bonus
+		identity_max_hp_bonus = value
 @export var identity: String = "主公"   # 主公 / 忠臣 / 反贼 / 内奸
 # 身份是否已公开：主公开局公开；其余角色阵亡（翻开身份）后公开
 var identity_revealed: bool = false
@@ -26,7 +32,7 @@ var life_state: LifeState = LifeState.ACTIVE
 var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
-const GENERAL_STATE_FIELDS = ["general_name", "gender", "max_hp", "awoken",
+const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn"]
 var hand: Array[CardBase] = []
@@ -181,6 +187,7 @@ func reset_death_state():
 
 func capture_game_start_state():
 	_game_start_state.clear()
+	_game_start_state["general_max_hp"] = max_hp - identity_max_hp_bonus
 	for field in GENERAL_STATE_FIELDS:
 		_game_start_state[field] = get(field)
 
@@ -188,6 +195,7 @@ func restore_game_start_state():
 	assert(not _game_start_state.is_empty(), "缺少开局武将快照，不能猜测复活状态")
 	for field in GENERAL_STATE_FIELDS:
 		set(field, _game_start_state[field])
+	max_hp = _game_start_state["general_max_hp"] + identity_max_hp_bonus
 	life_state = LifeState.ACTIVE
 	hp = max_hp
 

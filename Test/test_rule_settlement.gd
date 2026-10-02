@@ -757,6 +757,8 @@ func _run():
 	await full_game_cases.run(self)
 	var max_skill_names_cases = load("res://Test/max_skill_names_cases.gd").new()
 	await max_skill_names_cases.run(self)
+	var general_state_cases = load("res://Test/general_state_cases.gd").new()
+	await general_state_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
