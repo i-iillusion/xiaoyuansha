@@ -31,6 +31,7 @@ func reset_players():
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
 	game.reset_game_over_state()
 	game._sacrifice_override = func(): return false
+	game._sacrifice_actor_override = Callable()
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
@@ -541,8 +542,8 @@ func _run():
 		return true
 	await strike(a, b)
 	check(b.hp == 10 and b.hand_size() == 1, "B 不扣血，也不替代受者出闪")
-	check(c.hp == 10 and c.hand_size() == 0, "C 支付舍己为人和闪，成功躲避")
-	check(observations == [1], "只询问实际目标 C 一次，且已先支付代受费用")
+	check(c.hp == 9 and c.hand_size() == 1 and c.hand[0].sub_type == CardData.CardSubType.DODGE, "C仅支付舍己并承受独立伤害，不能用原杀的闪窗口")
+	check(observations.is_empty(), "转移不给C重开出闪窗口")
 
 	reset_players()
 	var wrong_dodge = CardBase.create(CardData.CardSubType.PEACH)
@@ -571,7 +572,7 @@ func _run():
 		check(c.hp == 10 and b.hp == 10, "丈八询问时尚未扣血")
 		return 3
 	await strike(a, b)
-	check(a.hp == 7 and c.hp == 6 and b.hp == 10, "丈八加成给 C，B 的白银狮子不参与减伤")
+	check(a.hp == 7 and c.hp == 9 and b.hp == 10, "原伤害丈八加至4再由B狮子减至1，转移基数为1且不重付丈八")
 
 	reset_players()
 	a.equipment["weapon"] = CardData.CardSubType.ZHANGBA_SPEAR

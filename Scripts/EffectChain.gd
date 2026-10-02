@@ -77,6 +77,8 @@ var response_callback: Callable
 # 签名：func(chain, event_name, subject, source, data) -> bool
 # 返回 true → 该事件已处理/打断了流程
 var trigger_callback: Callable
+# 原伤害进入DONE后才能结算由它转移产生的新伤害。
+var completion_callback: Callable
 
 func _init(source: Player, target: Player, card: CardBase, etype: EffectType, value: int = 0):
 	damage = DamageRecord.new(source, target, card, value)
@@ -132,17 +134,13 @@ func start() -> ResponseResult:
 		return response_result
 	_started = true
 	await _phase_response()
-	if is_cancelled:
-		_finish()
-		return response_result
-
-	await _phase_effect()
-	if is_cancelled:
-		_finish()
-		return response_result
-
-	await _phase_resolution()
+	if not is_cancelled:
+		await _phase_effect()
+	if not is_cancelled:
+		await _phase_resolution()
 	_finish()
+	if completion_callback.is_valid():
+		await completion_callback.call(self)
 	return response_result
 
 func _finish():

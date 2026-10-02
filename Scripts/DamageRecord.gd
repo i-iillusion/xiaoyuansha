@@ -1,4 +1,4 @@
-# 一次伤害的共享记录。转移只改实际目标，不新建伤害或重放修正。
+# 一次伤害的记录。转移防止原伤害，另建记录；原目标始终不变。
 class_name DamageRecord
 extends RefCounted
 
@@ -14,11 +14,21 @@ var from_strike: bool = false
 var is_chain: bool = false
 var committed: bool = false
 var sacrifice_offered: bool = false
+var transfer_target: Player
+var transfer_amount: int = 0
+var transferred_damage: DamageRecord
+
 var source_modifiers_applied: bool = false
 var target_modifiers_applied: bool = false
 var hp_before: int = 0
 var hp_after: int = 0
 var events: Array[String] = []
+
+func final_damage() -> DamageRecord:
+	var current = self
+	while current.transferred_damage != null:
+		current = current.transferred_damage
+	return current
 
 func _init(attacker: Player, victim: Player, source_card: CardBase, value: int):
 	original_source = attacker

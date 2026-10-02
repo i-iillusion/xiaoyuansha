@@ -118,6 +118,8 @@ var _nullify_override: Callable = Callable()
 var rule_scheduler = RuleScheduler.new()
 var yudaxi = YudaxiResolver.new()
 var _sacrifice_override: Callable = Callable()
+# 座位无关的舍己决策入口；默认AI策略仍在D03接入。
+var _sacrifice_actor_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -1525,15 +1527,14 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				_update_debug("%s 发动【贯石斧】：此【杀】依然造成伤害" % p.player_name)
 				var hit = _new_damage_chain(p, actual, card, base_damage, element)
 				hit.damage.original_target = chain.damage.original_target
-				hit.damage.sacrifice_offered = true
 				hit.skip_response = true
-				hit.skip_targeting = true # 同一张杀，不重复声明、付费或询问代受。
+				hit.skip_targeting = true # 同一张杀不重复目标/出闪，伤害窗口仍允许舍己。
 				await hit.start()
 				await _finish_damage_chain(hit)
-				return hit.damage.committed
+				return hit.damage.final_damage().committed
 		return false
 	await _finish_damage_chain(chain)
-	return chain.damage.committed
+	return chain.damage.final_damage().committed
 
 func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
@@ -1646,7 +1647,26 @@ func _new_damage_chain(source: Player, target: Player, card: CardBase, amount: i
 	chain.damage_element = element
 	chain.scheduler = rule_scheduler
 	chain.trigger_callback = _on_chain_trigger
+	chain.completion_callback = _resolve_transferred_damage
 	return chain
+
+# TIME-02/C04-Q1：原记录先结束，继承来源/渠道/属性和数值，来源修正不重放。
+func _resolve_transferred_damage(original: EffectChain) -> void:
+	var record = original.damage
+	if record.transfer_target == null or _game_over or record.transfer_target.is_dead():
+		return
+	record.refresh_source()
+	var next = _new_damage_chain(record.source, record.transfer_target, record.card,
+		record.transfer_amount, record.element)
+	next.skip_targeting = true
+	next.skip_response = true
+	next.damage.from_strike = record.from_strike
+	next.damage.is_chain = record.is_chain
+	next.damage.source_modifiers_applied = true
+	record.transferred_damage = next.damage
+	record.events.append("damage_transferred")
+	await next.start()
+	await _finish_damage_chain(next)
 
 # 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
 func _finish_damage_chain(chain: EffectChain):
@@ -3422,7 +3442,6 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 		chain.skip_response = true
 		chain.damage.is_chain = true
 		chain.damage.from_strike = from_strike
-		chain.damage.sacrifice_offered = true
 		await chain.start()
 		await _finish_damage_chain(chain)
 	_sync_all_ui()
@@ -4082,25 +4101,12 @@ func _show_target_confirm(attacker_name: String, target_name: String, sub: CardD
 func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
 	var record = chain.damage
 	if event_name == "on_being_targeted":
-		if not record.sacrifice_offered:
-			record.sacrifice_offered = true
-			var substitute = await _maybe_sacrifice(source, subject, chain.effect_value, chain.damage_element)
-			if substitute != null:
-				chain.target_player = substitute
-				_update_debug("%s 打出【舍己为人】，成为【杀】的新目标，可正常出闪" % substitute.player_name)
-				return false # EffectChain 会为新目标重新发出“成为目标”事件。
 		return not await _prepare_strike_target(source, subject, chain.ignore_target_restrictions)
 
 	if event_name == "before_deal_damage":
 		if record.source_modifiers_applied:
 			return false
 		record.source_modifiers_applied = true
-		# 非杀伤害保留原有代受入口；传导不重复代受或源侧数值修正。
-		if not record.from_strike and not record.is_chain and not record.sacrifice_offered:
-			record.sacrifice_offered = true
-			var substitute = await _maybe_sacrifice(subject, chain.target_player, chain.effect_value, chain.damage_element)
-			if substitute != null:
-				chain.target_player = substitute
 		var actual = chain.target_player
 		if subject == null or record.is_chain:
 			return false
@@ -4160,6 +4166,21 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		if await _try_fate_blade_save(subject, data["value"]):
 			data["value"] = 0
 			return true
+		if data["value"] > 0 and not record.sacrifice_offered:
+			record.sacrifice_offered = true
+			var revision = turn_manager.get_context_revision()
+			var valid = func():
+				return not _game_over and revision == turn_manager.get_context_revision() \
+					and subject.is_alive() and chain.target_player == subject
+			var substitute = await _maybe_sacrifice(source, subject, data["value"], chain.damage_element, valid)
+			if not valid.call():
+				chain.is_cancelled = true
+				return true
+			if substitute != null:
+				record.transfer_target = substitute
+				record.transfer_amount = data["value"]
+				_update_debug("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
+				return true
 
 	if event_name == "damage_applied":
 		_update_debug("%s 受到 %d 点伤害" % [subject.player_name, data["damage"]])
@@ -4329,10 +4350,10 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 	chain.skip_response = true
 	await chain.start()
 	await _finish_damage_chain(chain)
-	if chain.damage.committed:
+	if chain.damage.final_damage().committed:
 		await _try_calamity_transfer(chain.source_player)
 	await _maybe_ask_reveal()
-	return chain.target_player
+	return chain.damage.final_damage().target
 
 func _trigger_pofeng(source: Player, amount: int):
 	if source == null or amount <= 0:
@@ -6961,8 +6982,10 @@ func _show_soul_blade_discard_prompt(victim_name: String, need: int) -> bool:
 # 询问所有存活角色是否打出【舍己为人】代替 target 承受即将到来的伤害
 # 返回打出者（null = 无人打出）
 # 规则：受伤者本人不能使用；AI 暂不主动打出（与无懈一致）；玩家0有手牌时弹窗询问
-func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType) -> Player:
+func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Player:
 	for i in range(player_count):
+		if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
+			return null
 		var p = players[i]
 		if p == target or not p.is_alive():
 			continue
@@ -6971,18 +6994,24 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 			continue
 
 		var play = "skip"
-		if p.seat_index == 0:
+		if _sacrifice_actor_override.is_valid():
+			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
+		elif p.seat_index == 0:
 			play = await _show_sacrifice_prompt(target, amount)
 		else:
 			play = "skip"  # AI 暂不主动打出舍己为人
 
 		if play != "skip":
+			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
+				return null
 			if not p.is_alive() or _is_kneeling(p):
 				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
 				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE))
+			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
+				return null
 			if not p.is_alive() or _is_kneeling(p):
 				continue
 			if yes_ah == "cancel":
@@ -6999,6 +7028,8 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 					continue
 				deck.discard(used_card)
 			_sync_all_ui()
+			if _game_over or not target.is_alive() or not p.is_alive() or (allowed.is_valid() and not allowed.call()):
+				return null # 已支付的费用不回滚。
 			return p
 	return null
 
