@@ -1630,6 +1630,7 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	if removed != null:
 		deck.discard(removed)
+	_record_card_action(p, incoming)
 	_claim_equipment_name(sub, incoming)
 	return true
 
@@ -2157,6 +2158,7 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("weapon", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
+			_record_card_action(p, equipped_card)
 			_claim_equipment_name(sub, equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -2204,6 +2206,7 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("armor", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
+			_record_card_action(p, equipped_card)
 			_claim_equipment_name(sub, equipped_card)
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -2214,11 +2217,17 @@ func play_card(sub: CardData.CardSubType):
 			# C-S3/E-04：普通坐骑及两种劣马均不打开抢先阻止窗口。
 			var target_slot: String = ""
 			if p.has_free_mount_slot():
+				var receipt = _equipment_payment_receipt(p, sub)
+				if receipt.is_empty():
+					return
 				var equipped_card = _take_play_card(p, sub)
 				if equipped_card == null:
 					_update_debug("所选装备已不在牌区，取消装备")
 					return
-				p.equip_mount_card(equipped_card)
+				if not p.equip_mount_card(equipped_card):
+					_restore_equipment_payment(receipt, equipped_card)
+					return
+				_record_card_action(p, equipped_card)
 				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
 				])
@@ -2281,6 +2290,7 @@ func play_card(sub: CardData.CardSubType):
 				return
 			if result.replaced_card != null:
 				deck.discard(result.replaced_card)
+			_record_card_action(p, equipped_card)
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
 				CardData.get_type_name(old_sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -5008,6 +5018,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	p.equipment_cards[slot] = source
 	p.hidden_equip_slot = slot
 	p.hidden_equip_card = source
+	_record_card_action(p, source)
 	_discard_exhausted_hidden_category(etype)
 	if p.get_hidden_equipment_card(slot) == source:
 		_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
