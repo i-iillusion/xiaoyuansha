@@ -5207,16 +5207,22 @@ func _show_reveal_opportunity_prompt(owner: Player) -> bool:
 # ============================
 
 # 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
-func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer) -> int:
+func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable()) -> int:
 	var actor: Player = players[0]
+	var actor_ref = weakref(actor)
+	var window_ref = weakref(overlay)
 	var revision = turn_manager.get_context_revision()
 	answer.allowed = func():
-		return not _game_over and is_instance_valid(actor) and players.has(actor) \
-			and players[0] == actor and not actor.is_dead() \
+		var current_actor = actor_ref.get_ref()
+		var current_window = window_ref.get_ref()
+		return not _game_over and current_actor != null and players.has(current_actor) \
+			and players[0] == current_actor and not current_actor.is_dead() \
 			and revision == turn_manager.get_context_revision() \
-			and is_instance_valid(overlay) and not overlay.is_queued_for_deletion()
+			and current_window != null and not current_window.is_queued_for_deletion() \
+			and (not allowed.is_valid() or allowed.call())
 	var stop = func(_winner): answer.submit(CHOICE_INVALID)
-	var close = answer.submit.bind(CHOICE_INVALID)
+	# tree_exiting内不能立即恢复调用者，否则其下一窗口会在父节点忙时add_child。
+	var close = func(): answer.submit.call_deferred(CHOICE_INVALID)
 	var watch = func():
 		if answer.allowed.is_valid() and not answer.allowed.call():
 			answer.submit(CHOICE_INVALID)
@@ -5261,7 +5267,7 @@ func _start_choice_countdown(pending: Dictionary):
 	_update_countdown_label()
 
 # 通用按钮选择弹窗（锚点居中）：返回选中索引，取消返回 -1
-func _show_choice_popup(title: String, buttons: Array) -> int:
+func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Callable()) -> int:
 	if _game_over:
 		return CHOICE_INVALID
 	if buttons.is_empty():
@@ -5308,7 +5314,7 @@ func _show_choice_popup(title: String, buttons: Array) -> int:
 	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	return await _wait_choice_prompt(overlay, answer)
+	return await _wait_choice_prompt(overlay, answer, allowed)
 
 # 明置具体装备选择弹窗（网格布局，装备多）：返回选中索引，取消返回 -1
 func _show_sao_reveal_picker(texts: Array) -> int:
@@ -5407,55 +5413,82 @@ func _check_awaken_trigger():
 	for p in players:
 		_check_player_awaken(p)
 
+var _awaken_in_progress: Dictionary = {}
+
 func _check_player_awaken(p: Player):
-	if _game_over or not players.has(p):
+	if _game_over or not players.has(p) or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯":
 		return
-	if not p.is_alive() or p.general_name != "史蒂芬·彼特先斯" or p.awoken or p.hand_size() > 0:
-		return
-	p.awoken = true  # 先标记，防止 _do_awaken 内部再 sync 时重入
-	if p.seat_index == 0:
-		call_deferred("_do_awaken", p)
+	if p.awoken:
+		if p.awake_choice != 0 or not p.awaken_effects_applied:
+			return
+	elif p.hand_size() == 0:
+		p.awoken = true
 	else:
-		_do_awaken(p) # 自动选择无等待；后续效果立即看到上限、摸牌和免疫。
+		return
+	if _awaken_in_progress.get(p, -1) == p.awakening_revision:
+		return
+	if p.seat_index == 0:
+		call_deferred("_do_awaken", p, p.awakening_revision)
+	else:
+		_do_awaken(p, p.awakening_revision)
 
 # 手牌变化监听（add_to_hand / remove_from_hand 路径的补充触发）
 func _on_hand_updated(p: Player):
 	_check_player_awaken(p)
 
 # 觉醒：失去一点体力上限 → 摸两张牌 → 三选一
-func _do_awaken(p: Player):
-	if _game_over or not is_instance_valid(p) or not players.has(p) \
-			or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯" or not p.awoken or p.awake_choice != 0:
+func _awaken_choice_pending(p: Player, revision: int) -> bool:
+	return not _game_over and is_instance_valid(p) and players.has(p) and p.is_alive() \
+		and p.general_name == "史蒂芬·彼特先斯" and p.awoken and p.awake_choice == 0 \
+		and p.awakening_revision == revision
+
+func _do_awaken(p: Player, expected_revision: int = -1):
+	if not is_instance_valid(p):
 		return
+	var generation = p.awakening_revision
+	if expected_revision >= 0 and expected_revision != generation:
+		return
+	if not _awaken_choice_pending(p, generation) or _awaken_in_progress.get(p, -1) == generation:
+		return
+	_awaken_in_progress[p] = generation
+	if not p.awaken_effects_applied:
+		# 先记已结算，摸牌及UI信号不能重入扣上限/摸牌。
+		p.awaken_effects_applied = true
+		p.max_hp -= 1
+		p.hp = mini(p.hp, p.max_hp)
+		_update_debug("%s 觉醒！失去 1 点体力上限（上限 %d，体力 %d/%d），摸两张牌" % [p.player_name, p.max_hp, p.hp, p.max_hp])
+		_draw_blank_cards(p, 2)
+	await _resolve_awaken_choice(p, generation)
+	if _awaken_in_progress.get(p, -1) == generation:
+		_awaken_in_progress.erase(p)
+	# 人类必选窗口被销毁或阶段过期时，重新显示待选择项；不重做已结算效果。
+	if _awaken_choice_pending(p, generation) and p.seat_index == 0:
+		call_deferred("_do_awaken", p, generation)
+
+func _resolve_awaken_choice(p: Player, generation: int):
 	var revision = turn_manager.get_context_revision()
-	p.awoken = true
-	p.max_hp -= 1
-	p.hp = mini(p.hp, p.max_hp)
-	_update_debug("%s 觉醒！失去 1 点体力上限（上限 %d，体力 %d/%d），摸两张牌" % [p.player_name, p.max_hp, p.hp, p.max_hp])
-	_draw_blank_cards(p, 2)
 	var choice: int
 	if _awaken_pick_override.is_valid():
 		choice = await _awaken_pick_override.call()
 	elif p.seat_index != 0:
 		choice = await _choose_ai_response(p, "awaken", [1, 2, 3])
 	else:
-		choice = await _show_awaken_pick()
-	if _game_over or not is_instance_valid(p) or not players.has(p) or not p.is_alive() \
-			or p.general_name != "史蒂芬·彼特先斯" or not p.awoken or p.awake_choice != 0 \
-			or revision != turn_manager.get_context_revision():
+		var actor_ref = weakref(p)
+		choice = await _show_awaken_pick(func(): return _awaken_choice_pending(actor_ref.get_ref(), generation))
+	if not _awaken_choice_pending(p, generation) or revision != turn_manager.get_context_revision():
 		return
 	if choice == CHOICE_INVALID:
 		return
 	if choice not in [1, 2, 3]:
-		choice = 1 # 必选效果；自动策略拒绝或无效结果不留下未选择状态。
+		choice = 1 # 自动策略无效选项仍沿用既有必选兜底；人类取消默认另待裁决。
 	p.awake_choice = choice
 	var desc = "1.不能成为【杀】的目标" if choice == 1 else ("2.不能成为【决斗】的目标" if choice == 2 else "3.不能成为【南蛮入侵】和【万箭齐发】的目标")
 	_update_debug("%s 选择觉醒效果：%s" % [p.player_name, desc])
 	_sync_all_ui()
 
 # 觉醒三选一弹窗（玩家0）：返回 1 / 2 / 3
-func _show_awaken_pick() -> int:
-	var idx = await _show_choice_popup("【觉醒】选择一项永久效果：", ["不能成为【杀】的目标", "不能成为【决斗】的目标", "不能成为【南蛮入侵】和【万箭齐发】的目标"])
+func _show_awaken_pick(allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("【觉醒】选择一项永久效果：", ["不能成为【杀】的目标", "不能成为【决斗】的目标", "不能成为【南蛮入侵】和【万箭齐发】的目标"], allowed)
 	if idx == CHOICE_INVALID:
 		return CHOICE_INVALID
 	if idx < 0:

@@ -33,7 +33,7 @@ var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
-	"awake_choice", "kneeling", "kneel_used", "facedown", "shensu_penalty",
+	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn"]
 var hand: Array[CardBase] = []
 var equipment: Dictionary = {}
@@ -110,7 +110,16 @@ var hidden_equip_slot: String = ""
 var hidden_equip_card: CardBase = null
 
 # 【觉醒】（史蒂芬·彼特先斯）：觉醒技已发动 / 觉醒三选一（1=不能成为【杀】的目标，2=不能成为【决斗】的目标，3=不能成为【南蛮入侵】和【万箭齐发】的目标）
-var awoken: bool = false
+# 代次只用于拒绝旧异步答复，不属于可复原的游戏效果。
+var awakening_revision: int = 0
+var awaken_effects_applied: bool = false
+var awoken: bool = false:
+	set(value):
+		if awoken != value:
+			awakening_revision += 1
+		awoken = value
+		if not value:
+			awaken_effects_applied = false
 var awake_choice: int = 0
 
 # 是否有暗置装备
@@ -192,6 +201,7 @@ func capture_game_start_state():
 		_game_start_state[field] = get(field)
 
 func restore_game_start_state():
+	awakening_revision += 1 # 即便复原前后标记同值，也使旧窗口失效。
 	assert(not _game_start_state.is_empty(), "缺少开局武将快照，不能猜测复活状态")
 	for field in GENERAL_STATE_FIELDS:
 		set(field, _game_start_state[field])
