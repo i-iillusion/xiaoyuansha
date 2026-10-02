@@ -16,6 +16,11 @@ var source_seat: int = -1
 var hidden_category: String = ""
 var hidden_original_sub_type: int = -1
 
+# E-06：离开装备区后仍跟随原牌的持久状态。佩戴期间由 Player 维护，卸下时保存。
+var soul_blade_activated: bool = false
+var sage_tokens: int = 0
+var sage_activated: bool = false
+
 static func create(sub: CardData.CardSubType) -> CardBase:
 	var card = CardBase.new()
 	card.card_id = "card_%d" % Time.get_ticks_usec()

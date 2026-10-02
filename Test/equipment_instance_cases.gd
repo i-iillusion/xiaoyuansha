@@ -218,6 +218,8 @@ func run(host):
 	await _check_claimed_original_active_replace()
 	await _check_claimed_original_transfer_chain()
 	await _check_two_occupied_armor_lion_exchange()
+	var persistent_state_cases = load("res://Test/equipment_persistent_state_cases.gd").new()
+	await persistent_state_cases.run(suite)
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()

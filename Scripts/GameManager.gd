@@ -2453,14 +2453,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if _game_over or target.is_dead() or target.equipment.get(slot, -1) != sub \
 			or (selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card):
 		return
-	# 【贤者的加护】标记跟随装备：被顺手牵羊时标记/激活状态一并转移给新持有者（被拆/卸甲进弃牌堆则清空）
-	var sage_transfer := false
-	var sage_tokens_save := 0
-	var sage_activated_save := false
-	if sub == CardData.CardSubType.SAGE_PROTECTION:
-		sage_transfer = true
-		sage_tokens_save = target.sage_tokens
-		sage_activated_save = target.sage_activated
+	# 持久状态由原牌在卸下/装备时保存恢复；入手不授予佩戴效果。
 	var equipment_card = target.remove_equipment(slot)
 	if equipment_card == null:
 		return
@@ -2468,12 +2461,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		attacker.determined_cards.append(equipment_card)
 		if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
 			await _declare_stolen_hidden_equipment(target, attacker, equipment_card)
-		if sage_transfer:
-			attacker.sage_tokens = sage_tokens_save
-			attacker.sage_activated = sage_activated_save
-			_update_debug("%s 获得 %s 的【%s】（贤者标记 %d 一并转移）" % [attacker.player_name, target.player_name, CardData.get_type_name(sub), sage_tokens_save])
-		else:
-			_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
+		_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
 		deck.discard(equipment_card)
 		_update_debug("%s 弃置了 %s 的【%s】" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
@@ -6080,28 +6068,17 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 			var exchange_visible_card = exchange_visible_owner.get_equipment_card(exchange_visible_slot)
 			if exchange_hidden_card == null or exchange_visible_card == null:
 				return false
-			var sage_tokens_before = exchange_visible_owner.sage_tokens if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION else 0
-			var sage_active_before = exchange_visible_owner.sage_activated if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION else false
 			exchange_hidden_owner.remove_equipment(exchange_hidden_slot)
 			exchange_visible_owner.remove_equipment(exchange_visible_slot)
 			if not exchange_hidden_owner.equip_card_to_slot(exchange_hidden_slot, exchange_visible_card):
 				exchange_hidden_owner.equip_hidden_card_to_slot(exchange_hidden_slot, exchange_hidden_card)
 				exchange_visible_owner.equip_card_to_slot(exchange_visible_slot, exchange_visible_card)
-				if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
-					exchange_visible_owner.sage_tokens = sage_tokens_before
-					exchange_visible_owner.sage_activated = sage_active_before
 				return false
 			if not exchange_visible_owner.equip_hidden_card_to_slot(exchange_visible_slot, exchange_hidden_card):
 				exchange_hidden_owner.remove_equipment(exchange_hidden_slot)
 				exchange_hidden_owner.equip_hidden_card_to_slot(exchange_hidden_slot, exchange_hidden_card)
 				exchange_visible_owner.equip_card_to_slot(exchange_visible_slot, exchange_visible_card)
-				if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
-					exchange_visible_owner.sage_tokens = sage_tokens_before
-					exchange_visible_owner.sage_activated = sage_active_before
 				return false
-			if exchange_visible_card.sub_type == CardData.CardSubType.SAGE_PROTECTION:
-				exchange_hidden_owner.sage_tokens = sage_tokens_before
-				exchange_hidden_owner.sage_activated = sage_active_before
 			_update_debug("交换了 %s 的暗置装备与 %s 的【%s】" % [exchange_hidden_owner.player_name, exchange_visible_owner.player_name, exchange_visible_card.card_name])
 			return true
 		if has_a == has_b:
@@ -6123,29 +6100,14 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		var source_slot = slot_a if has_a else slot_b
 		var dest = pB if has_a else pA
 		var dest_slot = slot_b if has_a else slot_a
-		var sage_tokens_before = source.sage_tokens if source.equipment[source_slot] == CardData.CardSubType.SAGE_PROTECTION else 0
-		var sage_active_before = source.sage_activated if source.equipment[source_slot] == CardData.CardSubType.SAGE_PROTECTION else false
 		var moved = source.remove_equipment(source_slot)
 		if moved == null:
 			return false
 		if not dest.equip_card_to_slot(dest_slot, moved):
 			source.equip_card_to_slot(source_slot, moved)
-			if moved.sub_type == CardData.CardSubType.SAGE_PROTECTION:
-				source.sage_tokens = sage_tokens_before
-				source.sage_activated = sage_active_before
 			return false
-		if moved.sub_type == CardData.CardSubType.SAGE_PROTECTION:
-			dest.sage_tokens = sage_tokens_before
-			dest.sage_activated = sage_active_before
 		_update_debug("%s 的【%s】交换至 %s 的空装备槽" % [source.player_name, moved.card_name, dest.player_name])
 		return true
-	# 贤者的加护：贤者标记跟随装备转移
-	var sage_a = {"t": 0, "a": false}
-	var sage_b = {"t": 0, "a": false}
-	if subA == CardData.CardSubType.SAGE_PROTECTION:
-		sage_a = {"t": pA.sage_tokens, "a": pA.sage_activated}
-	if subB == CardData.CardSubType.SAGE_PROTECTION:
-		sage_b = {"t": pB.sage_tokens, "a": pB.sage_activated}
 	var card_a = pA.detach_equipment_quiet(slot_a)
 	var card_b = pB.detach_equipment_quiet(slot_b)
 	if card_a == null or card_b == null:
@@ -6157,12 +6119,6 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		return false
 	pA.equip_card_to_slot(slot_a, card_b)
 	pB.equip_card_to_slot(slot_b, card_a)
-	if subA == CardData.CardSubType.SAGE_PROTECTION:
-		pB.sage_tokens = sage_a.t
-		pB.sage_activated = sage_a.a
-	if subB == CardData.CardSubType.SAGE_PROTECTION:
-		pA.sage_tokens = sage_b.t
-		pA.sage_activated = sage_b.a
 	_update_debug("交换了 %s 的【%s】与 %s 的【%s】" % [pA.player_name, CardData.get_type_name(subA), pB.player_name, CardData.get_type_name(subB)])
 	return true
 

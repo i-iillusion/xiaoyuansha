@@ -29,11 +29,12 @@ func _run() -> void:
 	p0.sage_activated = false
 	await game._steal_equip(p0, p1, true, "顺手牵羊")
 	_check(p1.sage_tokens == 0 and not p1.sage_activated, "原持有者标记清空")
-	_check(p0.sage_tokens == 2, "新持有者获得标记: %d" % p0.sage_tokens)
+	_check(p0.sage_tokens == 0, "入手不授予佩戴者标记")
 	var has_sage = false
 	for c in p0.determined_cards:
 		if c.sub_type == CardData.CardSubType.SAGE_PROTECTION:
 			has_sage = true
+			_check(c.sage_tokens == 2, "两标记保存在顺走的原牌")
 	_check(has_sage, "贤者的加护进入已确定牌区")
 
 	# ---- 用例 2：激活状态也一并转移 ----
@@ -45,7 +46,7 @@ func _run() -> void:
 	p0.sage_activated = false
 	await game._steal_equip(p0, p2, true, "顺手牵羊")
 	_check(p2.sage_tokens == 0 and not p2.sage_activated, "原持有者已激活清空")
-	_check(p0.sage_activated, "激活状态一并转移")
+	_check(not p0.sage_activated and p0.determined_cards.back().sage_activated, "激活状态保存在原牌，手持者无效果")
 
 	# ---- 用例 3：过河拆桥不转移（标记直接消失） ----
 	var p3 = game.players[3]

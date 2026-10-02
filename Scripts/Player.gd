@@ -281,6 +281,7 @@ func equip_card_to_slot(slot: String, card: CardBase) -> bool:
 	equipment[slot] = card.sub_type
 	equipment_cards[slot] = card
 	_apply_equipment_state(card.sub_type)
+	_restore_equipment_persistent_state(card)
 	return true
 
 # 暗置原牌落入空装备槽；允许同一角色在不同槽保留多张原牌。
@@ -305,6 +306,7 @@ func equip_hidden_card_to_slot(slot: String, card: CardBase) -> bool:
 func remove_equipment(slot: String) -> CardBase:
 	var sub = equipment.get(slot, -1)
 	var card = get_hidden_equipment_card(slot) if sub == CardData.CardSubType.HIDDEN_EQUIPMENT else get_equipment_card(slot)
+	_save_equipment_persistent_state(card)
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
@@ -338,6 +340,8 @@ func remove_equipment(slot: String) -> CardBase:
 							hidden_equip_slot = remaining_slot
 							hidden_equip_card = remaining_card
 							break
+	if sub == CardData.CardSubType.SOUL_BLADE:
+		_clear_equipment_state(sub)
 	return card
 
 # 双方明置交换时保留原牌实例；依E-01，离开原持有者仍算失去白银狮子。
@@ -346,12 +350,32 @@ func detach_equipment_quiet(slot: String) -> CardBase:
 		return null
 	var sub = equipment.get(slot, -1)
 	var card = get_equipment_card(slot)
+	_save_equipment_persistent_state(card)
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	_clear_equipment_state(sub)
 	if sub == CardData.CardSubType.SILVER_LION and is_alive():
 		heal(1)
 	return card
+
+# 仅保存E-06已裁定字段；摄魂刀未激活的伤害跟踪仍为佩戴者暂态。
+func _save_equipment_persistent_state(card: CardBase) -> void:
+	if card == null:
+		return
+	match card.sub_type:
+		CardData.CardSubType.SOUL_BLADE:
+			card.soul_blade_activated = soul_blade_activated
+		CardData.CardSubType.SAGE_PROTECTION:
+			card.sage_tokens = sage_tokens
+			card.sage_activated = sage_activated
+
+func _restore_equipment_persistent_state(card: CardBase) -> void:
+	match card.sub_type:
+		CardData.CardSubType.SOUL_BLADE:
+			soul_blade_activated = card.soul_blade_activated
+		CardData.CardSubType.SAGE_PROTECTION:
+			sage_tokens = card.sage_tokens
+			sage_activated = card.sage_activated
 
 func _apply_equipment_state(sub: CardData.CardSubType):
 	match sub:
@@ -374,6 +398,7 @@ func _clear_equipment_state(sub: CardData.CardSubType):
 		CardData.CardSubType.POFENG_SPEAR:
 			hand_limit_bonus = 0
 		CardData.CardSubType.SOUL_BLADE:
+			soul_blade_activated = false
 			soul_blade_track_target = null
 			soul_blade_track_count = 0
 		CardData.CardSubType.SAGE_PROTECTION:
