@@ -122,6 +122,8 @@ var _sacrifice_override: Callable = Callable()
 var _sacrifice_actor_override: Callable = Callable()
 var ai_driver = DecisionDriver.new()
 var _ai_running_revisions: Dictionary = {}
+var _ai_hand_snapshot: HandSelection
+var _ai_offered_actions: Array = []
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -949,13 +951,80 @@ func _ai_observation(actor: Player) -> Dictionary:
 	return PlayerObservation.capture(players, actor, turn_manager.current_phase,
 		turn_manager.get_context_revision())
 
-# D02在这里接共同规则生成的基本牌/装备候选；空候选明确结束自主出牌。
-func _ai_play_candidates(_observation: Dictionary) -> Array:
-	return []
+# 规则查询同时供普通出牌和AI使用；策略不会另造次数、距离或支付规则。
+func can_declare_basic(p: Player, sub: int) -> bool:
+	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card() or not _has_play_card(p, sub):
+		return false
+	match sub:
+		CardData.CardSubType.PEACH:
+			return p.hp < p.max_hp
+		CardData.CardSubType.WINE:
+			return p.wine_stacks == 0 or p.get_weapon() == CardData.CardSubType.RAGING_AXE
+		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
+			return turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty()
+	return false
 
-func _execute_ai_action(_action: Dictionary):
-	# 执行入口随D02候选一起接入；不允许策略直接改牌区。
-	pass
+func _ai_play_candidates(observation: Dictionary) -> Array:
+	_ai_offered_actions.clear()
+	var seat = int(observation.actor)
+	if seat < 0 or seat >= players.size() or seat != turn_manager.current_player_idx \
+			or observation.revision != turn_manager.get_context_revision():
+		return []
+	var p = players[seat]
+	_ai_hand_snapshot = HandSelection.new(p)
+	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
+		return []
+	var choices: Array = []
+	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE,
+			CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]:
+		if not can_declare_basic(p, sub):
+			continue
+		if sub == CardData.CardSubType.PEACH:
+			choices.append({"sub": sub, "target": -1, "priority": 100})
+		elif sub == CardData.CardSubType.WINE:
+			# 保守意愿：有余牌且本阶段还能出杀时才喝一层，规则仍允许战斧继续叠酒。
+			if p.hand_size() >= 2 and p.wine_stacks == 0 and turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty():
+				choices.append({"sub": sub, "target": -1, "priority": 90})
+		else:
+			for target in _get_strike_targets(p):
+				choices.append({"sub": sub, "target": target.seat_index, "priority": 80})
+	# 本批普通装备策略只填空槽；不反复替换装备/满槽坐骑消耗任意牌。
+	for sub in CardSelector.EQUIP_WEAPON + CardSelector.EQUIP_ARMOR + CardSelector.EQUIP_MOUNT:
+		if not _has_play_card(p, sub):
+			continue
+		var slot = "weapon" if CardSelector.EQUIP_WEAPON.has(sub) else "armor"
+		if CardSelector.EQUIP_MOUNT.has(sub):
+			if not p.has_free_mount_slot():
+				continue
+		elif p.equipment.has(slot) or not _can_play_equipment_instance(p, sub):
+			continue
+		choices.append({"sub": sub, "target": -1, "priority": 40})
+	var best = -1
+	for action in choices:
+		best = maxi(best, action.priority)
+	for action in choices:
+		if action.priority == best:
+			action["actor"] = seat
+			action["revision"] = observation.revision
+			action["phase"] = TurnManager.Phase.PLAY
+			_ai_offered_actions.append(action)
+	return _ai_offered_actions.duplicate(true)
+
+func _execute_ai_action(action: Dictionary):
+	if not _ai_offered_actions.has(action) or _ai_hand_snapshot == null:
+		return
+	var p = _ai_hand_snapshot.owner
+	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
+			or action.actor != turn_manager.current_player_idx or action.revision != turn_manager.get_context_revision() \
+			or p.hand != _ai_hand_snapshot.hand or p.determined_cards != _ai_hand_snapshot.determined:
+		return
+	var sub = int(action.sub)
+	if action.target >= 0:
+		var target = players[action.target]
+		if can_declare_basic(p, sub) and _get_strike_targets(p).has(target):
+			await execute_card_on_target(target, sub)
+	else:
+		await play_card(sub)
 
 func _run_ai_play(actor: Player):
 	var revision = turn_manager.get_context_revision()
@@ -1737,6 +1806,10 @@ func play_card(sub: CardData.CardSubType):
 		return
 	if _pending_determined_card != null and not _has_play_card(p, sub):
 		_update_debug("所选的【%s】已不在已确定牌区，未使用其他手牌代替" % CardData.get_type_name(sub))
+		return
+	if sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE, CardData.CardSubType.STRIKE,
+			CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE] and not can_declare_basic(p, sub):
+		_update_debug("当前不能使用【%s】：检查牌源、次数、体力及合法目标" % CardData.get_type_name(sub))
 		return
 	# 每张牌从干净状态开始（【是~啊~】激活标记：选锦囊时设置，消耗锦囊时消费；取消/中止路径由下次出牌重置）
 	_yes_ah_active = false

@@ -745,6 +745,8 @@ func _run():
 	await living_table_cases.run(self)
 	var decision_driver_cases = load("res://Test/decision_driver_cases.gd").new()
 	await decision_driver_cases.run(self)
+	var ai_basic_cases = load("res://Test/ai_basic_cases.gd").new()
+	await ai_basic_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])

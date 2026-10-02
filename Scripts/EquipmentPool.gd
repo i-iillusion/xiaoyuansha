@@ -16,7 +16,7 @@ func is_claimed(sub: CardData.CardSubType) -> bool:
 	return _claimed.has(sub)
 
 func is_claimed_original(sub: CardData.CardSubType, card: CardBase) -> bool:
-	return card != null and _claimed.has(sub) and _claimed[sub] == card
+	return card != null and _claimed.get(sub) is CardBase and _claimed[sub] == card
 
 # 尝试占用该装备；已被占用返回 false
 func claim(sub: CardData.CardSubType, card: CardBase = null) -> bool:

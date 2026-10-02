@@ -71,6 +71,8 @@ func run(host):
 	check(traces[0] == traces[1], "相同种子动作序列可重放")
 	var phase = game.turn_manager.current_phase
 	var actor_idx = game.turn_manager.current_player_idx
+	b.hand.clear()
+	b.determined_cards.clear()
 	# 隔离本测试的阶段推进观察，避免继续启动下一名角色的真实回合。
 	game.turn_manager.phase_changed.disconnect(game._on_phase_changed)
 	game.turn_manager.current_player_idx = 1
