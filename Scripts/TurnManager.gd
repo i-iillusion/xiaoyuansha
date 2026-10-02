@@ -28,6 +28,8 @@ var _context_revision: int = 0
 var turn_id: int = 0
 var phase_id: int = 0
 var _turn_card_counts: Dictionary = {}
+# 技能名 -> 座位 -> 最近使用/禁用的阶段ID；固定键不随回合数增长。
+var _phase_skill_uses: Dictionary = {}
 var current_player_idx: int = 0:
 	set(value):
 		if value != current_player_idx:
@@ -179,6 +181,21 @@ func _set_turn_count(key: String, value: int):
 	if not _turn_card_counts.has(seat):
 		_turn_card_counts[seat] = {}
 	_turn_card_counts[seat][key] = value
+
+func phase_skill_used(key: String, seat: int = -1) -> bool:
+	if seat < 0:
+		seat = get_play_actor_idx()
+	return _phase_skill_uses.get(key, {}).get(seat, -1) == phase_id
+
+func set_phase_skill_used(key: String, used: bool, seat: int = -1):
+	if seat < 0:
+		seat = get_play_actor_idx()
+	if not _phase_skill_uses.has(key):
+		_phase_skill_uses[key] = {}
+	if used:
+		_phase_skill_uses[key][seat] = phase_id
+	else:
+		_phase_skill_uses[key].erase(seat)
 
 # ---- 出牌约束 ----
 

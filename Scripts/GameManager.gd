@@ -255,7 +255,9 @@ var _skipping_dead: bool = false
 
 # 【装逼】（史蒂芬·彼特先斯）：点击头像 → 详情弹窗 → 技能发动 + 目标选择模式
 var _is_zhuangbi_targeting: bool = false
-var _zhuangbi_blocked_this_phase: bool = false
+var _zhuangbi_blocked_this_phase: bool:
+	get: return turn_manager.phase_skill_used("zhuangbi_blocked")
+	set(value): turn_manager.set_phase_skill_used("zhuangbi_blocked", value)
 var _zhuangbi_targets: Array[Player] = []
 
 # 【拍胸脯】测试钩子（正常游戏不设置）：返回 true = 玩家0发动【拍胸脯】（要求伤害来源弃一张手牌）
@@ -272,14 +274,18 @@ var _is_campus_targeting: bool = false
 var _is_shensu_targeting: bool = false
 # 【Gay】（比尔·盖伊）：回复目标选择中
 var _is_gay_targeting: bool = false
-# 【Gay】本回合是否已使用（出牌阶段限一次）
-var _gay_used: bool = false
+# 【Gay】按实际操作者与规则阶段登记，响应返回不刷新。
+var _gay_used: bool:
+	get: return turn_manager.phase_skill_used("gay")
+	set(value): turn_manager.set_phase_skill_used("gay", value)
 # 【觉醒】三选一测试钩子（正常游戏不设置）：返回 1 / 2 / 3（觉醒效果选择）
 var _awaken_pick_override: Callable = Callable()
 
 # 内部历史ID保持不变：lanzhonghou = 交换【没用】，meiyong = 赠送【烂忠厚】。
 # ---- 【没用】（麦克斯·欧尼斯特）：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域 ----
-var _lanzhonghou_used: bool = false                 # 本回合是否已使用（每回合重置）
+var _lanzhonghou_used: bool:
+	get: return turn_manager.phase_skill_used("max_exchange")
+	set(value): turn_manager.set_phase_skill_used("max_exchange", value)
 var _is_lanzhonghou_targeting: bool = false         # 选择两名角色中
 var _lanzhonghou_selected: Array[Player] = []       # 已选角色（0/1 个，选满 2 个进入区域选择）
 var _lanzhonghou_pending: Array = []                # 待执行交换（确认后统一结算）：{a, slot_a, b, slot_b, ok}
@@ -755,8 +761,6 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 		TurnManager.Phase.JUDGE:   _do_judge(pid)
 		TurnManager.Phase.DRAW:    _do_draw(pid)
 		TurnManager.Phase.PLAY:
-			if old_phase != TurnManager.Phase.WAITING:
-				_zhuangbi_blocked_this_phase = false
 			_do_play(pid)
 		TurnManager.Phase.DISCARD: _do_discard(pid)
 		TurnManager.Phase.END:     _do_end(pid)
@@ -789,8 +793,6 @@ func _reset_turn_flags():
 		pl.shensu_used_this_turn = false  # 【神速】选2 标记每回合重置
 		if pl.get_weapon() != CardData.CardSubType.RAGING_AXE:
 			pl.consume_wine_bonus()
-	_lanzhonghou_used = false  # 【没用】每回合限一次
-	_gay_used = false  # 【Gay】每回合限一次
 
 # 判定阶段：结算判定区的延时锦囊（后放置的先判定）
 # 无花色点数 → 判定必定生效
@@ -941,6 +943,10 @@ func _do_play(pid: int):
 		p = target
 		pid = target.seat_index
 		_update_debug("【烂忠厚】：%s 立刻获得一个出牌阶段" % target.player_name)
+	elif turn_manager.play_actor_idx >= 0:
+		# 获赠阶段从响应返回时，授予索引已消费，仍恢复实际操作者。
+		pid = turn_manager.get_play_actor_idx()
+		p = players[pid]
 	_play_btn.visible = (pid == 0)
 	_end_play_btn.visible = (pid == 0)
 	_sync_all_ui()
@@ -5858,7 +5864,7 @@ func _on_gay_skill_clicked(p: Player) -> void:
 		_update_debug("【Gay】只能在出牌阶段发动")
 		return
 	if _gay_used:
-		_update_debug("【Gay】每回合限一次，本回合已使用")
+		_update_debug("【Gay】每出牌阶段限一次，本阶段已使用")
 		return
 	if p.hand_size() <= 0:
 		_update_debug("你没有手牌，无法发动【Gay】")
@@ -5912,6 +5918,7 @@ func _execute_gay(p: Player, target: Player) -> void:
 		return
 	if _gay_used:
 		return
+	var revision = turn_manager.get_context_revision()
 	var max_x = mini(p.max_hp, target.max_hp)
 	max_x = mini(max_x, p.hand_size())
 	if max_x <= 0:
@@ -5927,9 +5934,11 @@ func _execute_gay(p: Player, target: Player) -> void:
 		_sync_all_ui()
 		return
 	# 弹窗返回后重新验证，数量不足不得部分支付或获得效果。
-	if not p.is_alive() or not target.is_alive():
+	if _game_over or revision != turn_manager.get_context_revision() \
+			or not p.is_alive() or not target.is_alive() or _gay_used:
 		return
-	if not await _select_hand_discard(p, x, false, func(): return target.is_alive()):
+	if not await _select_hand_discard(p, x, false, func():
+		return target.is_alive() and revision == turn_manager.get_context_revision() and not _gay_used):
 		return
 	_gay_used = true
 	var p_before = p.hp
@@ -5966,7 +5975,7 @@ func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 		_show_toast("【没用】只能在你的出牌阶段发动")
 		return
 	if _lanzhonghou_used:
-		_show_toast("本回合已使用过【没用】")
+		_show_toast("本出牌阶段已使用过【没用】")
 		return
 	if p.hand_size() <= 0:
 		_show_toast("【没用】发动条件：至少有一张手牌（弃 X 张牌）")
@@ -6019,11 +6028,17 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 	var p = players[0]
 	if p.general_name != "麦克斯·欧尼斯特" or not p.is_alive():
 		return
+	var revision = turn_manager.get_context_revision()
+	if _lanzhonghou_used:
+		return
 	# X = 交换区域对数：武器/防具各最多 1 对，坐骑最多 4 对（每名角色 4 个坐骑槽）→ 上限 6 对，弃 X 张牌
 	var max_pick = mini(6, p.hand_size())
 	_lanzhonghou_pending.clear()
 	while true:
 		var zone = await _ask_lanzhonghou_zone(a, b, _lanzhonghou_pending, max_pick)
+		if _game_over or revision != turn_manager.get_context_revision():
+			_lanzhonghou_pending.clear()
+			return
 		if zone == "cancel":
 			_lanzhonghou_pending.clear()
 			_update_debug("取消【没用】，未消耗手牌")
@@ -6092,10 +6107,12 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
 	var valid = func():
-		return a.is_alive() and b.is_alive() and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
+		return revision == turn_manager.get_context_revision() and a.is_alive() and b.is_alive() \
+			and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
 	if not await _select_hand_discard(p, x, false, valid):
 		_lanzhonghou_pending.clear()
 		return
+	_lanzhonghou_used = true # 支付后立即记入当前阶段；后续暗置声明等待不能写进另一个阶段。
 	# 统一执行交换
 	var swapped = 0
 	for entry in _lanzhonghou_pending:
@@ -6120,7 +6137,6 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 			for declaration in declarations:
 				await _declare_exchanged_hidden_equipment(declaration[0], declaration[1], declaration[2], declaration[3])
 	_update_debug("%s 发动【没用】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
-	_lanzhonghou_used = true
 	_lanzhonghou_pending.clear()
 	_sync_all_ui()
 

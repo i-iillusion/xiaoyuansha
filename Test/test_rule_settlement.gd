@@ -44,6 +44,7 @@ func reset_players():
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.play_actor_idx = -1
 	game.turn_manager._reset_turn_counts()
+	game.turn_manager._phase_skill_uses.clear()
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -762,6 +763,8 @@ func _run():
 	await awaken_seat_cases.run(self)
 	var turn_counter_cases = load("res://Test/turn_counter_cases.gd").new()
 	await turn_counter_cases.run(self)
+	var phase_skill_cases = load("res://Test/phase_skill_cases.gd").new()
+	await phase_skill_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
