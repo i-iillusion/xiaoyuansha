@@ -28,6 +28,8 @@ class RpsAnswer extends RefCounted:
 
 signal game_started()
 signal game_over(winner_identity: String)
+signal card_action_committed(event: CardActionEvent)
+var _card_action_serial: int = 0
 
 @export var player_count: int = 5
 @export var auto_start: bool = true
@@ -1634,6 +1636,14 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 func _clear_pending_determined_card():
 	_pending_determined_card = null
 
+# 仅在具体规则入口确认使用/打出后调用，不能放进通用取牌/弃牌函数。
+func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind = CardActionEvent.Kind.USE,
+		from_hand: bool = true, is_virtual: bool = false) -> CardActionEvent:
+	_card_action_serial += 1
+	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
+	card_action_committed.emit(event)
+	return event
+
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	var p = players[turn_manager.get_play_actor_idx()]
 	if sub in TARGET_TRICKS and (not can_declare_trick(p, sub, _yes_ah_active) or not get_trick_targets(p, sub).has(target)):
@@ -1656,6 +1666,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += _rage_bonus(p)
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
+			_record_card_action(p, card)
 			_record_strike_played(p)
 			_sync_all_ui()
 
@@ -1811,6 +1822,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
+	_record_card_action(p, card)
 	_record_strike_played(p)
 	_sync_all_ui()
 
@@ -1954,6 +1966,7 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			turn_manager.use_card("wine")
+			_record_card_action(p, used_wine)
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
@@ -1970,6 +1983,7 @@ func play_card(sub: CardData.CardSubType):
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
+			_record_card_action(p, used_peach)
 			var healed = _heal_with_staff(p)
 			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
@@ -2371,6 +2385,7 @@ func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt:
 	if used_card == null:
 		return false
 	deck.discard(used_card)
+	_record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE)
 	if expected == CardData.CardSubType.STRIKE:
 		_record_strike_played(p)
 	if expected == CardData.CardSubType.DODGE:
@@ -5841,6 +5856,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
 	var card = CardBase.create(CardData.CardSubType.STRIKE)
+	_record_card_action(p, card, CardActionEvent.Kind.USE, false, true)
 	_record_strike_played(p)
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
@@ -7778,6 +7794,7 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if card == null:
 		return false
 	deck.discard(card)
+	_record_card_action(rescuer, card)
 	var healed = 1
 	if sub == CardData.CardSubType.PEACH:
 		healed = _heal_with_staff(rescuer, dying)
