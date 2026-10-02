@@ -24,6 +24,10 @@ signal turn_ended(player_idx: int)
 # 交互上下文代次：字段离开又回到同值也不能重新授权旧答复。
 # 不是规则中的轮数/回合次数，不参与技能次数刷新。
 var _context_revision: int = 0
+# 规则回合/阶段标识与交互代次分开；WAITING暂停不创建新规则阶段。
+var turn_id: int = 0
+var phase_id: int = 0
+var _turn_card_counts: Dictionary = {}
 var current_player_idx: int = 0:
 	set(value):
 		if value != current_player_idx:
@@ -42,18 +46,32 @@ var play_actor_idx: int = -1:
 		if value != play_actor_idx:
 			_context_revision += 1
 		play_actor_idx = value
-# 本回合已使用的【杀】次数（摸牌阶段重置；上限由武器决定，-1 = 无限制）
-var strike_count_this_turn: int = 0
+# 本回合已使用的【杀】次数（回合开始重置；上限由武器决定，-1 = 无限制）
+var strike_count_this_turn: int:
+	get: return _get_turn_count("strike")
+	set(value): _set_turn_count("strike", value)
 # 每个座位本回合是否已经使用/打出过杀；与主动杀使用次数分开。
 # 属于回合历史，不是武将牌状态，阶段切换/装备变动不清空。
 var _strike_actors_this_turn: Dictionary = {}
-# 每回合卡牌使用次数限制（摸牌阶段重置，与杀次数一起）
-var duel_count_this_turn: int = 0      # 决斗 ≤2
-var aoe_count_this_turn: int = 0       # 南蛮入侵+万箭齐发 合计 ≤2
-var steal_count_this_turn: int = 0     # 顺手牵羊+过河拆桥 合计 ≤2
-var peach_garden_count_this_turn: int = 0  # 桃园结义 ≤1
-var harvest_count_this_turn: int = 0   # 五谷丰登 ≤1
-var disarm_count_this_turn: int = 0    # 卸甲归田 ≤1（回合开始重置）
+# 每回合卡牌使用次数限制（按实际操作者登记，回合开始统一重置）
+var duel_count_this_turn: int:
+	get: return _get_turn_count("duel")
+	set(value): _set_turn_count("duel", value)
+var aoe_count_this_turn: int:
+	get: return _get_turn_count("aoe")
+	set(value): _set_turn_count("aoe", value)
+var steal_count_this_turn: int:
+	get: return _get_turn_count("steal")
+	set(value): _set_turn_count("steal", value)
+var peach_garden_count_this_turn: int:
+	get: return _get_turn_count("peach_garden")
+	set(value): _set_turn_count("peach_garden", value)
+var harvest_count_this_turn: int:
+	get: return _get_turn_count("harvest")
+	set(value): _set_turn_count("harvest", value)
+var disarm_count_this_turn: int:
+	get: return _get_turn_count("disarm")
+	set(value): _set_turn_count("disarm", value)
 # 酒状态已改为按玩家存（Player.wine_stacks）：狂暴战斧可叠加且跨回合保留，普通玩家每回合最多 1 层
 
 # 判定效果标志
@@ -86,14 +104,15 @@ func get_play_actor_idx() -> int:
 func start_game():
 	_context_revision += 1
 	current_player_idx = 0
-	_strike_actors_this_turn.clear()
-	disarm_count_this_turn = 0
+	_begin_turn()
 	_change_phase(Phase.START)
 
 func _change_phase(new_phase: Phase):
 	var old = current_phase
 	if old == new_phase:
 		_context_revision += 1 # 显式进入同名阶段仍是新上下文。
+	if new_phase != Phase.WAITING and not (old == Phase.WAITING and new_phase == Phase.PLAY):
+		phase_id += 1
 	current_phase = new_phase
 	phase_changed.emit(old, new_phase, current_player_idx)
 	if debug_log:
@@ -111,12 +130,6 @@ func advance_phase():
 				_change_phase(Phase.JUDGE)
 		Phase.JUDGE:   _change_phase(Phase.DRAW)
 		Phase.DRAW:
-			strike_count_this_turn = 0
-			duel_count_this_turn = 0
-			aoe_count_this_turn = 0
-			steal_count_this_turn = 0
-			peach_garden_count_this_turn = 0
-			harvest_count_this_turn = 0
 			if skip_play_phase and granted_play_target_idx < 0:
 				# 乐不思蜀：跳过出牌阶段（但【烂忠厚】已授予他人出牌阶段时，出牌阶段仍进行并交给目标）
 				skip_play_phase = false
@@ -136,8 +149,12 @@ func advance_phase():
 func next_turn():
 	_context_revision += 1
 	current_player_idx = (current_player_idx + 1) % player_count
-	_strike_actors_this_turn.clear()
-	disarm_count_this_turn = 0
+	_begin_turn()
+	_change_phase(Phase.START)
+
+func _begin_turn():
+	turn_id += 1
+	_reset_turn_counts()
 	skip_play_phase = false
 	skip_judge_phase = false
 	skip_play_discard_phase = false
@@ -146,7 +163,22 @@ func next_turn():
 	granted_judge_target_idx = -1
 	granted_draw_target_idx = -1
 	granted_play_target_idx = -1
-	_change_phase(Phase.START)
+	waiting_responder_idx = -1
+	waiting_response_type = ""
+
+# 测试可清理回合历史；不刷新回合/阶段ID或调度状态。
+func _reset_turn_counts():
+	_turn_card_counts.clear()
+	_strike_actors_this_turn.clear()
+
+func _get_turn_count(key: String) -> int:
+	return int(_turn_card_counts.get(get_play_actor_idx(), {}).get(key, 0))
+
+func _set_turn_count(key: String, value: int):
+	var seat = get_play_actor_idx()
+	if not _turn_card_counts.has(seat):
+		_turn_card_counts[seat] = {}
+	_turn_card_counts[seat][key] = value
 
 # ---- 出牌约束 ----
 
@@ -184,7 +216,7 @@ func can_use(card_key: String, limit: int = -1) -> bool:
 		"disarm": return disarm_count_this_turn < 1
 	return true
 
-# 记录一次使用（摸牌阶段重置）
+# 记录当前出牌操作者的一次使用（回合开始重置）
 func use_card(card_key: String):
 	match card_key:
 		"duel": duel_count_this_turn += 1

@@ -43,8 +43,7 @@ func reset_players():
 	game._duel_second_override = func(): return false
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.play_actor_idx = -1
-	game.turn_manager.strike_count_this_turn = 0
-	game.turn_manager._strike_actors_this_turn.clear()
+	game.turn_manager._reset_turn_counts()
 	for p in game.players:
 		p.reset_death_state()
 		p.general_name = "稻草人"
@@ -761,6 +760,8 @@ func _run():
 	await general_state_cases.run(self)
 	var awaken_seat_cases = load("res://Test/awaken_seat_cases.gd").new()
 	await awaken_seat_cases.run(self)
+	var turn_counter_cases = load("res://Test/turn_counter_cases.gd").new()
+	await turn_counter_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
