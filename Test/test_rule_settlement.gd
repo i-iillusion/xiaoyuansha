@@ -751,6 +751,8 @@ func _run():
 	await ai_basic_cases.run(self)
 	var ai_response_cases = load("res://Test/ai_response_cases.gd").new()
 	await ai_response_cases.run(self)
+	var ai_trick_cases = load("res://Test/ai_trick_cases.gd").new()
+	await ai_trick_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])

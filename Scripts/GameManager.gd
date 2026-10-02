@@ -970,6 +970,47 @@ func can_declare_basic(p: Player, sub: int) -> bool:
 			return turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty()
 	return false
 
+const TARGET_TRICKS = [CardData.CardSubType.DUEL, CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE,
+	CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP,
+	CardData.CardSubType.IRON_CHAIN]
+const GLOBAL_TRICKS = [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS,
+	CardData.CardSubType.PEACH_GARDEN, CardData.CardSubType.HARVEST, CardData.CardSubType.DISARM]
+
+func get_trick_targets(p: Player, sub: int) -> Array[Player]:
+	var result: Array[Player] = []
+	for target in players:
+		if not target.is_alive() or _is_kneeling(target) or (target == p and sub != CardData.CardSubType.IRON_CHAIN):
+			continue
+		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
+			continue
+		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and p.attack_distance_to(target) > 1:
+			continue
+		if sub == CardData.CardSubType.DUEL and (not _get_duel_targets(p).has(target)
+				or target.get_armor() == CardData.CardSubType.ZHANQI or _awake_blocks(target, 2)):
+			continue
+		result.append(target)
+	return result
+
+func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bool:
+	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card() or (not virtual_payment and not _has_play_card(p, sub)):
+		return false
+	if sub in TARGET_TRICKS and get_trick_targets(p, sub).is_empty():
+		return false
+	match sub:
+		CardData.CardSubType.DUEL:
+			return turn_manager.can_use("duel", 3 if p.general_name == "杰基·斯特朗" else 2)
+		CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE:
+			return turn_manager.can_use("steal")
+		CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS:
+			return turn_manager.can_use("aoe")
+		CardData.CardSubType.PEACH_GARDEN:
+			return turn_manager.can_use("peach_garden")
+		CardData.CardSubType.HARVEST:
+			return turn_manager.can_use("harvest")
+		CardData.CardSubType.DISARM:
+			return turn_manager.can_use("disarm")
+	return sub in TARGET_TRICKS
+
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat = int(observation.actor)
@@ -994,6 +1035,33 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 		else:
 			for target in _get_strike_targets(p):
 				choices.append({"sub": sub, "target": target.seat_index, "priority": 80})
+	for sub in TARGET_TRICKS + GLOBAL_TRICKS:
+		if not can_declare_trick(p, sub):
+			continue
+		if sub in TARGET_TRICKS:
+			for target in get_trick_targets(p, sub):
+				# 延时同名已有时策略不重复放置；铁索保守只连未连环的其他角色。
+				if sub == CardData.CardSubType.IRON_CHAIN and (target == p or target.chained):
+					continue
+				var duplicate = false
+				for judgment in target.judgment_cards:
+					if judgment.sub_type == sub:
+						duplicate = true
+				if not duplicate:
+					choices.append({"sub": sub, "target": target.seat_index, "priority": 60})
+		else:
+			var useful = false
+			for target in players:
+				if not target.is_alive() or _is_kneeling(target):
+					continue
+				if sub in [CardData.CardSubType.PEACH_GARDEN, CardData.CardSubType.HARVEST]:
+					useful = useful or target.hp < target.max_hp
+				elif sub == CardData.CardSubType.DISARM:
+					useful = useful or not target.equipment.is_empty()
+				else:
+					useful = useful or target != p
+			if useful:
+				choices.append({"sub": sub, "target": -1, "priority": 60})
 	# 本批普通装备策略只填空槽；不反复替换装备/满槽坐骑消耗任意牌。
 	for sub in CardSelector.EQUIP_WEAPON + CardSelector.EQUIP_ARMOR + CardSelector.EQUIP_MOUNT:
 		if not _has_play_card(p, sub):
@@ -1005,15 +1073,11 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 		elif p.equipment.has(slot) or not _can_play_equipment_instance(p, sub):
 			continue
 		choices.append({"sub": sub, "target": -1, "priority": 40})
-	var best = -1
 	for action in choices:
-		best = maxi(best, action.priority)
-	for action in choices:
-		if action.priority == best:
-			action["actor"] = seat
-			action["revision"] = observation.revision
-			action["phase"] = TurnManager.Phase.PLAY
-			_ai_offered_actions.append(action)
+		action["actor"] = seat
+		action["revision"] = observation.revision
+		action["phase"] = TurnManager.Phase.PLAY
+		_ai_offered_actions.append(action)
 	return _ai_offered_actions.duplicate(true)
 
 func _execute_ai_action(action: Dictionary):
@@ -1027,7 +1091,14 @@ func _execute_ai_action(action: Dictionary):
 	var sub = int(action.sub)
 	if action.target >= 0:
 		var target = players[action.target]
-		if can_declare_basic(p, sub) and _get_strike_targets(p).has(target):
+		if sub in TARGET_TRICKS:
+			if not can_declare_trick(p, sub) or not get_trick_targets(p, sub).has(target):
+				return
+			if sub == CardData.CardSubType.IRON_CHAIN:
+				await _execute_iron_chain([target])
+			else:
+				await execute_card_on_target(target, sub)
+		elif can_declare_basic(p, sub) and _get_strike_targets(p).has(target):
 			await execute_card_on_target(target, sub)
 	else:
 		await play_card(sub)
@@ -1548,6 +1619,8 @@ func _clear_pending_determined_card():
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	var p = players[turn_manager.get_play_actor_idx()]
+	if sub in TARGET_TRICKS and (not can_declare_trick(p, sub, _yes_ah_active) or not get_trick_targets(p, sub).has(target)):
+		return
 	# 选完目标开始执行：玩家0出牌阶段重置每步倒计时
 	_reset_play_countdown_if_p0()
 	var card = CardBase.create(sub)
@@ -1816,6 +1889,9 @@ func play_card(sub: CardData.CardSubType):
 	if sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE, CardData.CardSubType.STRIKE,
 			CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE] and not can_declare_basic(p, sub):
 		_update_debug("当前不能使用【%s】：检查牌源、次数、体力及合法目标" % CardData.get_type_name(sub))
+		return
+	if (sub in TARGET_TRICKS or sub in GLOBAL_TRICKS) and not can_declare_trick(p, sub, p.general_name == "安普提·斯丢皮得"):
+		_update_debug("当前不能使用【%s】：检查牌源、次数与合法目标" % CardData.get_type_name(sub))
 		return
 	# 每张牌从干净状态开始（【是~啊~】激活标记：选锦囊时设置，消耗锦囊时消费；取消/中止路径由下次出牌重置）
 	_yes_ah_active = false
@@ -2127,7 +2203,7 @@ func play_card(sub: CardData.CardSubType):
 			else:
 				# AI 随机顶掉一匹
 				var slots = p.get_mount_slots()
-				target_slot = slots[randi() % slots.size()]
+				target_slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
 			# 选槽期间若行动或所选原牌过期，不先扣手牌，也不顶掉后来换上的马。
 			if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
@@ -2348,6 +2424,7 @@ func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
 # ============================
 
 func _play_peach_garden():
+	var revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 
 	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN):
@@ -2371,6 +2448,8 @@ func _play_peach_garden():
 			continue
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if _game_over or revision != turn_manager.get_context_revision():
+			break
 		if nullified:
 			_update_debug("【桃园结义】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -2387,6 +2466,7 @@ func _play_peach_garden():
 # ============================
 
 func _play_harvest():
+	var revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 
 	if not await _consume_trick(p, CardData.CardSubType.HARVEST):
@@ -2414,6 +2494,8 @@ func _play_harvest():
 
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if _game_over or revision != turn_manager.get_context_revision():
+			break
 		if nullified:
 			_update_debug("【五谷丰登】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -2434,6 +2516,7 @@ func _play_harvest():
 # ============================
 
 func _play_disarm():
+	var revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 	if not turn_manager.can_use("disarm"):
 		_update_debug("本回合已使用【卸甲归田】")
@@ -2464,6 +2547,8 @@ func _play_disarm():
 
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if _game_over or revision != turn_manager.get_context_revision():
+			break
 		if nullified:
 			_update_debug("【卸甲归田】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -2597,7 +2682,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 			_update_debug("取消选择装备，【%s】未生效（牌已消耗）" % card_name)
 			return
 	else:
-		slot = slots[randi() % slots.size()]
+		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
 	if _game_over or target.is_dead() or not slots.has(slot) or not target.equipment.has(slot):
 		return
@@ -2801,7 +2886,7 @@ func _pick_random_zone(target: Player) -> String:
 		zones.append("judgment")
 	if zones.is_empty():
 		return "cancel"
-	return zones[randi() % zones.size()]
+	return zones[ai_driver.rng.randi_range(0, zones.size() - 1)]
 
 # 选择牌区域弹窗（手牌/装备牌/判定牌）——锚点布局，窗口缩放自动居中
 func _show_zone_picker(action: String, target: Player) -> String:
@@ -4576,7 +4661,7 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 			return
 	else:
 		# AI 默认发动，随机选一匹
-		slot = slots[randi() % slots.size()]
+		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
 	var sub = victim.equipment[slot]
 	var card = victim.remove_equipment(slot)
@@ -7946,6 +8031,8 @@ func _on_target_click(target: Player):
 			_update_debug("%s 距离 %s 为 %d，超出攻击距离 1！请选择其他目标" % [attacker.player_name, target.player_name, dist])
 		return
 
+	if _targeting_card_sub in TARGET_TRICKS and not get_trick_targets(attacker, _targeting_card_sub).has(target):
+		return
 	# 目标有效 → 确认弹窗
 	var confirmed = await _show_target_confirm(attacker.player_name, target.player_name, _targeting_card_sub)
 	if not confirmed:

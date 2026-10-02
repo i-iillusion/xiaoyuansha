@@ -23,7 +23,16 @@ func run(observe: Callable, candidates: Callable, execute: Callable, valid: Call
 		if chooser.is_valid():
 			index = await chooser.call(observation.duplicate(true), options.duplicate(true))
 		else:
-			index = rng.randi_range(0, options.size() - 1)
+			var best = -2147483648
+			var preferred: Array[int] = []
+			for i in options.size():
+				var priority = int(options[i].get("priority", 0))
+				if priority > best:
+					best = priority
+					preferred.clear()
+				if priority == best:
+					preferred.append(i)
+			index = preferred[rng.randi_range(0, preferred.size() - 1)]
 		if not valid.call():
 			return {"reason": "stale", "actions": executed}
 		if index < 0 or index >= options.size():
