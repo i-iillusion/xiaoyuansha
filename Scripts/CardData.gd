@@ -149,7 +149,7 @@ const CARD_DESCRIPTIONS = {
 	CardSubType.THUNDER_STRIKE: "出牌阶段，对攻击范围内的一名角色使用，对其造成 1 点雷电伤害（每回合限使用一张；触发铁索连环传导）",
 	CardSubType.DODGE: "响应牌：抵消【杀】或【万箭齐发】对你造成的伤害",
 	CardSubType.PEACH: "出牌阶段或濒死时使用，回复 1 点体力",
-	CardSubType.WINE: "出牌阶段使用，令本回合下一张【杀】伤害+1（不可叠加）；濒死时使用回复 1 点体力",
+	CardSubType.WINE: "出牌阶段每回合限使用一次，令本回合下一张【杀】伤害+1（不可叠加）；濒死时可对自己使用回复1点体力，不计入此次数",
 	CardSubType.BARBARIAN_INVASION: "出牌阶段，对所有其他角色使用，每名角色需打出【杀】，否则受到 1 点伤害（从你起顺时针结算）",
 	CardSubType.VOLLEY_OF_ARROWS: "出牌阶段，对所有其他角色使用，每名角色需打出【闪】，否则受到 1 点伤害（从你起顺时针结算）",
 	CardSubType.DUEL: "出牌阶段，对一名角色使用，由目标开始轮流出【杀】，无法打出者受到 1 点伤害（距离 2 内，每回合限两张）",

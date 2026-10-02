@@ -52,6 +52,10 @@ var play_actor_idx: int = -1:
 var strike_count_this_turn: int:
 	get: return _get_turn_count("strike")
 	set(value): _set_turn_count("strike", value)
+# 主动使用酒的历史，不是下一张杀的加伤层数；濒死自救不占此额度。
+var wine_count_this_turn: int:
+	get: return _get_turn_count("wine")
+	set(value): _set_turn_count("wine", value)
 # 每个座位本回合是否已经使用/打出过杀；与主动杀使用次数分开。
 # 属于回合历史，不是武将牌状态，阶段切换/装备变动不清空。
 var _strike_actors_this_turn: Dictionary = {}
@@ -173,8 +177,10 @@ func _reset_turn_counts():
 	_turn_card_counts.clear()
 	_strike_actors_this_turn.clear()
 
-func _get_turn_count(key: String) -> int:
-	return int(_turn_card_counts.get(get_play_actor_idx(), {}).get(key, 0))
+func _get_turn_count(key: String, seat: int = -1) -> int:
+	if seat < 0:
+		seat = get_play_actor_idx()
+	return int(_turn_card_counts.get(seat, {}).get(key, 0))
 
 func _set_turn_count(key: String, value: int):
 	var seat = get_play_actor_idx()
@@ -210,6 +216,9 @@ func can_play_strike(limit: int = 1) -> bool:
 func use_strike():
 	strike_count_this_turn += 1
 
+func can_play_wine(unlimited: bool = false, seat: int = -1) -> bool:
+	return current_phase == Phase.PLAY and (unlimited or _get_turn_count("wine", seat) < 1)
+
 # 成功使用/打出后调用；返回是否为此角色在当前回合的第一次。
 func record_strike_played(seat: int) -> bool:
 	var first := not _strike_actors_this_turn.has(seat)
@@ -236,6 +245,7 @@ func can_use(card_key: String, limit: int = -1) -> bool:
 # 记录当前出牌操作者的一次使用（回合开始重置）
 func use_card(card_key: String):
 	match card_key:
+		"wine": wine_count_this_turn += 1
 		"duel": duel_count_this_turn += 1
 		"aoe": aoe_count_this_turn += 1
 		"steal": steal_count_this_turn += 1

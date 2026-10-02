@@ -765,6 +765,8 @@ func _run():
 	await turn_counter_cases.run(self)
 	var phase_skill_cases = load("res://Test/phase_skill_cases.gd").new()
 	await phase_skill_cases.run(self)
+	var wine_counter_cases = load("res://Test/wine_counter_cases.gd").new()
+	await wine_counter_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])

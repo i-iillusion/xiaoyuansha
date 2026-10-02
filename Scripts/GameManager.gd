@@ -978,7 +978,7 @@ func can_declare_basic(p: Player, sub: int) -> bool:
 		CardData.CardSubType.PEACH:
 			return p.hp < p.max_hp
 		CardData.CardSubType.WINE:
-			return p.wine_stacks == 0 or p.get_weapon() == CardData.CardSubType.RAGING_AXE
+			return turn_manager.can_play_wine(p.get_weapon() == CardData.CardSubType.RAGING_AXE, p.seat_index)
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
 			return turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty()
 	return false
@@ -1946,13 +1946,14 @@ func play_card(sub: CardData.CardSubType):
 
 		CardData.CardSubType.WINE:
 			# 出牌阶段使用：buff 下一张杀（狂暴战斧可叠加：连续喝；普通玩家本回合只能喝一次）
-			if p.get_weapon() != CardData.CardSubType.RAGING_AXE and p.wine_stacks > 0:
-				_update_debug("【酒】的效果尚未消耗，不能连续使用")
+			if not turn_manager.can_play_wine(p.get_weapon() == CardData.CardSubType.RAGING_AXE, p.seat_index):
+				_update_debug("本回合已使用过【酒】")
 				return
 			var used_wine = _take_play_card(p, sub)
 			if used_wine == null:
 				_update_debug("没有可用的【酒】或任意牌")
 				return
+			turn_manager.use_card("wine")
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
