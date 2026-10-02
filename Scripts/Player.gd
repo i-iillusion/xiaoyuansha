@@ -426,6 +426,10 @@ func set_total_players(count: int):
 
 # 计算与另一玩家的座位距离（顺时针与逆时针取最小值）
 func seat_distance_to(other: Player) -> int:
+	var table = get_parent()
+	if table != null and table.has_method("ordinary_seat_distance"):
+		return table.ordinary_seat_distance(self, other)
+	# 独立构造的Player没有对局圆桌，保留旧纯模型测试的开局距离。
 	var diff = abs(seat_index - other.seat_index)
 	return mini(diff, _total_players - diff)
 

@@ -1067,6 +1067,10 @@ func _kneel_conditions_met(p: Player) -> bool:
 		return false
 	return true
 
+# 固定座号的存活圆桌；濒死待救者仍占座位。
+func ordinary_seat_distance(source: Player, target: Player) -> int:
+	return LivingTable.distance(players, source, target)
+
 # 【劣马】全局距离修正：-1劣马 → 其他玩家（非持有者）视作额外装备 -1马（攻击距离-1）；
 # +1劣马 → 其他玩家（非持有者）视作额外装备 +1马（被攻击距离+1）
 # 返回 Vector2i(minus, plus)；由 Player.attack_distance_to 调用（玩家是 GameManager 子节点）
