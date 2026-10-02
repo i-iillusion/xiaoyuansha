@@ -4222,16 +4222,27 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 		return
 	if not kaiwen.is_alive() or not opponent.is_alive():
 		return
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and kaiwen.is_alive() and opponent.is_alive() and kaiwen.general_name == "凯文·罗本"
 	for i in amount:
-		if not kaiwen.is_alive() or not opponent.is_alive():
+		if not valid.call():
 			break
 		# 伤害效果先展示（日志 + 体力变化），稍作停顿再询问是否发动
-		await get_tree().create_timer(0.8).timeout
+		if not _kaiwen_override.is_valid():
+			await get_tree().create_timer(0.8).timeout
+		if not valid.call():
+			break
 		var use = await _ask_kaiwen(kaiwen, opponent, is_receive)
+		if not valid.call():
+			break
 		if not use:
 			continue
 		# 拼点结果（出拳 + 胜负，按胜负着色）由 _do_ping_dian_once 输出，这里不再补日志覆盖它
-		var r = await _do_ping_dian_once(kaiwen, opponent)
+		var r = await _do_ping_dian(kaiwen, opponent, valid)
+		if r == RPS_INVALID or not valid.call():
+			break
 		if r == RPS_WIN:
 			_draw_blank_cards(kaiwen, 2)
 	_sync_all_ui()
@@ -5043,7 +5054,7 @@ func _show_sao_reveal_picker(texts: Array) -> int:
 #  【装傻】濒死拼点（安普提·斯丢皮得，锁定技）
 # ============================
 
-# 将要死亡时与场上所有存活玩家各拼点一次；赢超过一半（严格大于半数）则回复至 1 点体力
+# 将要死亡时与场上所有存活玩家各拼点一次；赢至少一半（向上取整）则回复至 1 点体力；每名对手只猜一次，平局不重猜
 func _try_zhuangsha(dying: Player) -> void:
 	var opponents: Array[Player] = []
 	for pl in players:
@@ -5052,12 +5063,18 @@ func _try_zhuangsha(dying: Player) -> void:
 	if opponents.is_empty():
 		return
 	_update_debug("%s 发动【装傻】：与场上所有存活玩家拼点！" % dying.player_name)
+	var revision = turn_manager.get_context_revision()
 	var wins := 0
 	for opp in opponents:
-		var r = await _do_ping_dian_once(dying, opp)
+		var valid = func():
+			return not _game_over and revision == turn_manager.get_context_revision() \
+				and dying.is_dying() and opp.is_alive()
+		var r = await _do_ping_dian_once(dying, opp, valid)
+		if r == RPS_INVALID or not valid.call():
+			return
 		if r == RPS_WIN:
 			wins += 1
-	if wins * 2 > opponents.size():
+	if wins >= ceili(opponents.size() / 2.0):
 		dying.hp = 1
 		_update_debug("%s 【装傻】拼点胜 %d/%d，回复至 1 点体力！（%d/%d）" % [dying.player_name, wins, opponents.size(), dying.hp, dying.max_hp])
 	else:
@@ -6271,14 +6288,25 @@ func _try_bloodthirsty(source: Player, victim: Player, amount: int):
 	if victim.get_armor() == CardData.CardSubType.QINGGANG_SHIELD:
 		_update_debug("%s 的【青釭盾】无视了 %s 的【噬血之刃】！" % [victim.player_name, source.player_name])
 		return
+	var original = source.get_equipment_card("weapon")
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and source.is_alive() and victim.is_alive() \
+			and source.get_equipment_card("weapon") == original \
+			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 	for i in amount:
-		if not source.is_alive() or not victim.is_alive():
+		if not valid.call():
 			break
 		# 可选择是否发动（每一点伤害独立询问）
 		var use = await _ask_bloodthirsty(source, victim)
+		if not valid.call():
+			break
 		if not use:
 			continue
-		var r = await _do_ping_dian_once(source, victim)
+		var r = await _do_ping_dian(source, victim, valid)
+		if r == RPS_INVALID or not valid.call():
+			break
 		if r == RPS_WIN:
 			source.heal(1)
 			_update_debug("%s 赢得拼点，回复 1 点体力（%d/%d）" % [source.player_name, source.hp, source.max_hp])
@@ -7136,7 +7164,7 @@ func _check_dying(dying: Player):
 	if _game_over:
 		return
 
-	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢超过一半回复至 1 点体力
+	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢至少一半（向上取整）回复至 1 点体力
 	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
 		await _try_zhuangsha(dying)
 		if dying.is_alive():

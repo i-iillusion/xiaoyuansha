@@ -224,6 +224,8 @@ func run(host):
 	await preempt_cases.run(suite)
 	var liehuo_cases = load("res://Test/liehuo_target_cases.gd").new()
 	await liehuo_cases.run(suite)
+	var optional_ping_cases = load("res://Test/optional_damage_ping_cases.gd").new()
+	await optional_ping_cases.run(suite)
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
