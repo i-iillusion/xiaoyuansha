@@ -2,11 +2,13 @@ extends RefCounted
 
 var suite
 var game: GameManager
+var events: Array[CardActionEvent] = []
 
 func check(ok: bool, label: String):
 	suite.check(ok, "D03b：" + label)
 
 func reset_case():
+	events.clear()
 	suite.reset_players()
 	game.deck._discard.clear()
 	game.equipment_pool.clear()
@@ -29,6 +31,8 @@ func reset_case():
 func run(host):
 	suite = host
 	game = host.game
+	var collect = func(event): events.append(event)
+	game.card_action_committed.connect(collect)
 	var phase = game.turn_manager.current_phase
 	var previous_chooser = game.ai_driver.chooser
 	game.turn_manager.phase_changed.disconnect(game._on_phase_changed)
@@ -57,6 +61,9 @@ func run(host):
 						return i
 				return -1
 			await game._run_ai_play(a)
+			check(events.size() == 1 and events[0].sub_type == sub and events[0].actor_seat == 1
+				and events[0].kind == CardActionEvent.Kind.USE and events[0].from_hand and not events[0].is_virtual
+				and (not concrete or events[0].card == payment), "每张实际锦囊只记录一次手牌使用事件")
 			check(selected == [sub] and game.turn_manager.current_phase == TurnManager.Phase.DISCARD,
 				"非0号合法候选真实执行并结束：" + CardData.get_type_name(sub))
 			if sub in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP]:
@@ -87,6 +94,7 @@ func run(host):
 	game.turn_manager.steal_count_this_turn = 2
 	check(game._ai_play_candidates(game._ai_observation(actor)).is_empty(), "拆顺共用次数耗尽后无非法候选")
 	game.ai_driver.chooser = previous_chooser
+	game.card_action_committed.disconnect(collect)
 	reset_case()
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.current_phase = phase

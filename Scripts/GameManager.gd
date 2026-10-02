@@ -1699,11 +1699,13 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP:
 			# 延时锦囊（对目标使用）：进入目标判定区，待其下回合判定阶段结算
 			# （闪电不走此路径：只能对自己，由 play_card 直接处理）
+			var virtual_use = _yes_ah_active
 			card = await _take_trick_card(p, sub)
 			if card == null:
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
+			_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 
@@ -2075,11 +2077,13 @@ func play_card(sub: CardData.CardSubType):
 			if not p.is_alive():
 				_update_debug("你已阵亡，无法使用【闪电】")
 				return
+			var virtual_use = _yes_ah_active
 			var card = await _take_trick_card(p, sub)
 			if card == null:
 				return
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
+			_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -3977,15 +3981,21 @@ func _ask_nullification_round(desc: String) -> String:
 				_update_debug("%s 取消了打出【无懈可击】" % p.player_name)
 				_sync_all_ui()
 				return ""
+			var action_card: CardBase
 			if yes_ah == "skill":
 				if not await _pay_yes_ah_cost(p):
 					_sync_all_ui()
 					return ""
+				if _game_over or revision != turn_manager.get_context_revision():
+					return ""
+				action_card = CardBase.create(CardData.CardSubType.NULLIFICATION)
 			else:
 				var used_card = HandPayment.take_card(p, CardData.CardSubType.NULLIFICATION)
 				if used_card == null:
 					continue
 				deck.discard(used_card)
+				action_card = used_card
+			_record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -4877,7 +4887,10 @@ func _pay_yes_ah_cost(p: Player) -> bool:
 func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	if _yes_ah_active:
 		_yes_ah_active = false
+		var revision = turn_manager.get_context_revision()
 		if not await _pay_yes_ah_cost(p):
+			return null
+		if _game_over or revision != turn_manager.get_context_revision():
 			return null
 		return CardBase.create(sub)
 	var card = _take_play_card(p, sub)
@@ -4893,6 +4906,7 @@ func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
 		return false
 	if not virtual_use:
 		deck.discard(card)
+	_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 	return true
 
 # ============================
@@ -7261,18 +7275,22 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 				_update_debug("%s 取消了打出【舍己为人】" % p.player_name)
 				_sync_all_ui()
 				continue
+			var action_card: CardBase
 			if yes_ah == "skill":
 				if not await _pay_yes_ah_cost(p):
 					_sync_all_ui()
 					continue
+				action_card = CardBase.create(CardData.CardSubType.SACRIFICE)
 			else:
 				var used_card = HandPayment.take_card(p, CardData.CardSubType.SACRIFICE)
 				if used_card == null:
 					continue
 				deck.discard(used_card)
+				action_card = used_card
 			_sync_all_ui()
 			if _game_over or not target.is_alive() or not p.is_alive() or (allowed.is_valid() and not allowed.call()):
 				return null # 已支付的费用不回滚。
+			_record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			return p
 	return null
 

@@ -769,6 +769,8 @@ func _run():
 	await wine_counter_cases.run(self)
 	var card_action_cases = load("res://Test/card_action_cases.gd").new()
 	await card_action_cases.run(self)
+	var trick_event_cases = load("res://Test/trick_event_cases.gd").new()
+	await trick_event_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
