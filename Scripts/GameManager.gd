@@ -774,7 +774,7 @@ func _reset_turn_flags():
 		pl.heal_staff_peach_used = false
 		pl.shensu_used_this_turn = false  # 【神速】选2 标记每回合重置
 		if pl.get_weapon() != CardData.CardSubType.RAGING_AXE:
-			pl.wine_stacks = 0
+			pl.consume_wine_bonus()
 	_lanzhonghou_used = false  # 【烂忠厚】每回合限一次
 	_gay_used = false  # 【Gay】每回合限一次
 
@@ -1448,8 +1448,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 				return
 			turn_manager.use_strike()
 			var base_damage = 1
-			var wine_stacks = p.wine_stacks
-			p.wine_stacks = 0
+			var wine_stacks = p.consume_wine_bonus()
 			base_damage += wine_stacks
 			# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 			base_damage += _rage_bonus(p)
@@ -1606,8 +1605,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 
 	turn_manager.use_strike()
 	var base_damage = 1
-	var wine_stacks = p.wine_stacks
-	p.wine_stacks = 0
+	var wine_stacks = p.consume_wine_bonus()
 	base_damage += wine_stacks
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
@@ -1729,6 +1727,8 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			p.wine_stacks += 1
+			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
+				p.raging_wine_stacks += 1
 			deck.discard(used_wine)
 			_update_debug("%s 使用了【酒】（当前 %d 层，下一张【杀】伤害+%d）" % [p.player_name, p.wine_stacks, p.wine_stacks])
 			_sync_all_ui()
@@ -5582,8 +5582,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
 	if p.wine_stacks > 0:
-		base_damage += p.wine_stacks
-		p.wine_stacks = 0
+		base_damage += p.consume_wine_bonus()
 		_update_debug("%s 的【酒】加成：神速杀伤害 +%d" % [p.player_name, base_damage - 1])
 	await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
 	_sync_all_ui()
@@ -7440,7 +7439,7 @@ func _do_sage_save(p: Player):
 	_discard_all_cards(p, true)
 	p.restore_game_start_state()
 	p.chained = false
-	p.wine_stacks = 0
+	p.consume_wine_bonus()
 	p.sage_tokens = 0
 	p.sage_activated = false
 	p.hand_limit_bonus = 0

@@ -41,7 +41,7 @@ func reset_case():
 		p.judgment_cards.clear()
 		p.equipment.clear()
 		p.chained = false
-		p.wine_stacks = 0
+		p.consume_wine_bonus()
 		p.mount_minus = 0
 		p.mount_plus = 0
 	game.reset_game_over_state()

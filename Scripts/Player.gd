@@ -72,6 +72,8 @@ var heal_staff_peach_used: bool = false
 
 # 【酒】层数（狂暴战斧可叠加且跨回合保留；普通玩家每回合最多 1 层，回合开始清零）
 var wine_stacks: int = 0
+# wine_stacks 中由佩戴狂暴战斧期间产生的部分；离区只撤销这部分，不转移给新持有者。
+var raging_wine_stacks: int = 0
 
 # 武将牌状态：反面 = 下个自己的回合开始前翻回正面并跳过该回合（摄魂刀）
 var facedown: bool = false
@@ -135,6 +137,12 @@ var mount_plus: int = 0
 
 # 总玩家数（用于距离计算）
 var _total_players: int = 5
+
+func consume_wine_bonus() -> int:
+	var bonus = wine_stacks
+	wine_stacks = 0
+	raging_wine_stacks = 0
+	return bonus
 
 func _ready():
 	hp = max_hp
@@ -340,7 +348,7 @@ func remove_equipment(slot: String) -> CardBase:
 							hidden_equip_slot = remaining_slot
 							hidden_equip_card = remaining_card
 							break
-	if sub == CardData.CardSubType.SOUL_BLADE:
+	if sub == CardData.CardSubType.SOUL_BLADE or sub == CardData.CardSubType.RAGING_AXE:
 		_clear_equipment_state(sub)
 	return card
 
@@ -391,6 +399,9 @@ func _apply_equipment_state(sub: CardData.CardSubType):
 
 func _clear_equipment_state(sub: CardData.CardSubType):
 	match sub:
+		CardData.CardSubType.RAGING_AXE:
+			wine_stacks = maxi(0, wine_stacks - raging_wine_stacks)
+			raging_wine_stacks = 0
 		CardData.CardSubType.MOUNT_PLUS:
 			mount_plus = maxi(mount_plus - 1, 0)
 		CardData.CardSubType.MOUNT_MINUS:

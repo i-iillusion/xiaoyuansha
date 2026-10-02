@@ -53,7 +53,7 @@ func reset_players():
 		p.equipment_cards.clear()
 		p.chained = false
 		p.kneeling = false
-		p.wine_stacks = 0
+		p.consume_wine_bonus()
 		p.heal_staff_peach_used = false
 		p.awoken = false
 		p.awake_choice = 0

@@ -14,6 +14,7 @@ func run(host):
 	for sub in [CardData.CardSubType.SOUL_BLADE, CardData.CardSubType.SAGE_PROTECTION]:
 		for concrete in [false, true]:
 			await check_transfer(sub, concrete)
+	await check_wearer_bonuses()
 	await check_hidden_state()
 	await check_waiting_state()
 	game._equip_pick_override = Callable()
@@ -221,3 +222,44 @@ func check_waiting_state():
 				expected_calls = 2 if sub == CardData.CardSubType.SAGE_PROTECTION else 4
 			check(calls.size() == expected_calls, "过期后不继续询问下一拳：" + mode)
 	game._soul_blade_activate_override = Callable()
+
+func check_wearer_bonuses():
+	for sub in [CardData.CardSubType.POFENG_SPEAR, CardData.CardSubType.RAGING_AXE]:
+		for path in ["snatch", "exchange", "replace", "discard"]:
+			suite.reset_players()
+			game.equipment_pool.clear()
+			game.deck._discard.clear()
+			game.turn_manager.current_phase = TurnManager.Phase.PLAY
+			var a: Player = game.players[0]
+			var b: Player = game.players[1]
+			var original = CardBase.create(sub)
+			a.equip_card_to_slot("weapon", original)
+			a.hand_limit_bonus = 0
+			b.hand_limit_bonus = 0
+			if sub == CardData.CardSubType.POFENG_SPEAR:
+				game._trigger_pofeng(a, 2)
+				check(a.hand_limit_bonus == 2, "破风枪实际伤害计数入口增加上限")
+			else:
+				for i in 2:
+					a.hand.append(null)
+					await game.play_card(CardData.CardSubType.WINE)
+				check(a.wine_stacks == 2 and a.raging_wine_stacks == 2, "战斧期间两张酒产生两层暂态")
+				game._reset_turn_flags()
+				check(a.wine_stacks == 2, "仍佩戴战斧时跨回合保留")
+			if path == "snatch":
+				await game._steal_equip(b, a, true, "顺手牵羊")
+				game.turn_manager.current_player_idx = 1
+				await game.play_card(sub)
+			elif path == "exchange":
+				b.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.LIANNU))
+				check(game._swap_equip_slot(a, "weapon", b, "weapon"), "双方占槽交換走佩戴状态清理入口")
+			elif path == "replace":
+				a.hand.append(null)
+				game._weapon_replace_override = func(): return true
+				await game.play_card(CardData.CardSubType.LIANNU)
+			else:
+				await game._steal_equip(b, a, false, "过河拆桥")
+			check(a.hand_limit_bonus == 0 and a.raging_wine_stacks == 0 and a.wine_stacks == 0,
+				"离区立即清原持有者加成：" + path)
+			check(b.hand_limit_bonus == 0 and b.wine_stacks == 0, "暂态不随原牌转给接收者：" + path)
+	game._weapon_replace_override = Callable()
