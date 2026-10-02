@@ -2364,13 +2364,15 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
-		var responded = await _ask_basic_card_response(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
+		var responded = await _ask_basic_card_response_result(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
 		if _game_over or response_revision != turn_manager.get_context_revision():
 			break
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 
-		if responded:
+		if responded == BasicResponseOutcome.INVALIDATED:
+			break
+		if responded == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
@@ -2379,28 +2381,39 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 	_sync_all_ui()
 
 # 杀/决斗/AOE共用物理响应，不消耗主动杀次数和酒，也不创建新出牌阶段。
+enum BasicResponseOutcome { DECLINED, PAID, INVALIDATED }
+
+# 保留bool兼容入口；实际伤害链须解释失效，不能把失效当主动放弃。
 func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> bool:
+	return await _ask_basic_card_response_result(p, expected, prompt, decision) == BasicResponseOutcome.PAID
+
+func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> BasicResponseOutcome:
 	if _game_over or not p.is_alive() or _is_kneeling(p):
-		return false
+		return BasicResponseOutcome.INVALIDATED
 	if not HandPayment.has_response(p, expected):
-		return false
+		return BasicResponseOutcome.DECLINED
 	var revision = turn_manager.get_context_revision()
 	var snapshot = HandSelection.new(p)
 	var accepted: bool
 	if decision.is_valid():
 		accepted = await decision.call()
 	elif p.seat_index == 0:
-		accepted = await prompt.call()
+		var answer = await prompt.call()
+		if typeof(answer) == TYPE_INT and answer == CHOICE_INVALID:
+			return BasicResponseOutcome.INVALIDATED
+		accepted = bool(answer)
 	else:
 		accepted = await _choose_ai_response(p, "basic", [expected]) == expected
 	if not accepted:
-		return false
-	if _game_over or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision() \
-			or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
-		return false
+		return BasicResponseOutcome.DECLINED
+	if _game_over or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision():
+		return BasicResponseOutcome.INVALIDATED
+	# 原响应牌失效/无法支付仍是未能响应；不借新接口改变既有伤害结算。
+	if p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
+		return BasicResponseOutcome.DECLINED
 	var used_card = HandPayment.take_player_response(p, expected)
 	if used_card == null:
-		return false
+		return BasicResponseOutcome.DECLINED
 	deck.discard(used_card)
 	_record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE)
 	if expected == CardData.CardSubType.STRIKE:
@@ -2408,13 +2421,16 @@ func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt:
 	if expected == CardData.CardSubType.DODGE:
 		_try_bagua_draw(p)
 	_sync_all_ui()
-	return true
+	return BasicResponseOutcome.PAID
 
-func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
+func _show_aoe_prompt(card_name: String, required_name: String) -> int:
 	# 测试钩子：跳过 UI 直接返回
 	if _aoe_override.is_valid():
-		return _aoe_override.call()
+		return 1 if _aoe_override.call() else 0
 
+	if _game_over:
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -2452,22 +2468,10 @@ func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
 	skip_btn.custom_minimum_size = Vector2(160, 44)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	respond_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	respond_btn.pressed.connect(answer.submit.bind(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(answer.submit.bind(0), CONNECT_ONE_SHOT)
+	var result = await _wait_choice_prompt(overlay, answer)
+	return 0 if result == -1 else result
 
 # ============================
 #  桃园结义
@@ -3752,11 +3756,13 @@ func _play_duel(attacker: Player, target: Player):
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			break
 		var needs_two = jacqui != null and current != jacqui
-		var can_respond = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
+		var can_respond = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			break
 
-		if can_respond:
+		if can_respond == BasicResponseOutcome.INVALIDATED:
+			break
+		if can_respond == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
 			# 【霸王】：对方还需打出第二张杀
 			if needs_two:
@@ -3765,10 +3771,12 @@ func _play_duel(attacker: Player, target: Player):
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
 					break
-				var cont = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
+				var cont = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
 				if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 					break
-				if cont:
+				if cont == BasicResponseOutcome.INVALIDATED:
+					break
+				if cont == BasicResponseOutcome.PAID:
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)
@@ -3787,9 +3795,12 @@ func _play_duel(attacker: Player, target: Player):
 	_sync_all_ui()
 
 # 决斗响应弹窗（玩家0）：needs_two = 【霸王】下对方需依次打出两张杀
-func _show_duel_prompt(needs_two: bool = false) -> bool:
+func _show_duel_prompt(needs_two: bool = false) -> int:
 	if _duel_respond_override.is_valid():
-		return _duel_respond_override.call()
+		return 1 if _duel_respond_override.call() else 0
+	if _game_over:
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3830,27 +3841,18 @@ func _show_duel_prompt(needs_two: bool = false) -> bool:
 	skip_btn.custom_minimum_size = Vector2(160, 44)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	respond_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	respond_btn.pressed.connect(answer.submit.bind(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(answer.submit.bind(0), CONNECT_ONE_SHOT)
+	var result = await _wait_choice_prompt(overlay, answer)
+	return 0 if result == -1 else result
 
 # 【霸王】第二张杀询问（玩家0）：打出第一张杀后，询问是否继续响应
-func _show_duel_second_strike_prompt() -> bool:
+func _show_duel_second_strike_prompt() -> int:
 	if _duel_second_override.is_valid():
-		return _duel_second_override.call()
+		return 1 if _duel_second_override.call() else 0
+	if _game_over:
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3888,22 +3890,10 @@ func _show_duel_second_strike_prompt() -> bool:
 	give_btn.custom_minimum_size = Vector2(160, 44)
 	hbox.add_child(give_btn)
 
-	var result = [false]
-	cont_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	give_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	cont_btn.pressed.connect(answer.submit.bind(1), CONNECT_ONE_SHOT)
+	give_btn.pressed.connect(answer.submit.bind(0), CONNECT_ONE_SHOT)
+	var result = await _wait_choice_prompt(overlay, answer)
+	return 0 if result == -1 else result
 
 # ============================
 #  火烧连营
@@ -4213,13 +4203,16 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		return false
 	var revision = turn_manager.get_context_revision()
 	var prompt = _show_dodge_prompt.bind(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
-	var dodged = await _ask_basic_card_response(responder, expected_sub, prompt, _dodge_override)
-	if _game_over or revision != turn_manager.get_context_revision() or not responder.is_alive():
+	var dodged = await _ask_basic_card_response_result(responder, expected_sub, prompt, _dodge_override)
+	if dodged == BasicResponseOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or not responder.is_alive():
 		chain.is_cancelled = true
 		return false
-	return dodged
+	return dodged == BasicResponseOutcome.PAID
 
-func _show_dodge_prompt(attacker_name: String, card_name: String) -> bool:
+func _show_dodge_prompt(attacker_name: String, card_name: String) -> int:
+	if _game_over:
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -4257,22 +4250,10 @@ func _show_dodge_prompt(attacker_name: String, card_name: String) -> bool:
 	skip_btn.custom_minimum_size = Vector2(160, 44)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	dodge_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	dodge_btn.pressed.connect(answer.submit.bind(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(answer.submit.bind(0), CONNECT_ONE_SHOT)
+	var result = await _wait_choice_prompt(overlay, answer)
+	return 0 if result == -1 else result
 
 signal _target_cfm_result(result: bool)
 

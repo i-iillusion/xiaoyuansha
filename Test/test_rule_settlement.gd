@@ -779,6 +779,8 @@ func _run():
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
 	await awaken_lifecycle_cases.run(self)
+	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
+	await basic_prompt_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
