@@ -15,6 +15,7 @@ func reset_case():
 	suite.reset_players()
 	game._dying_peach_override = Callable()
 	game._rescue_choice_override = Callable()
+	game._ai_response_override = Callable()
 	var identities = ["主公", "忠臣", "反贼", "反贼", "内奸"]
 	for i in game.players.size():
 		var p = game.players[i]

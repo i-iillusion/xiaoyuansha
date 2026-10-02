@@ -124,6 +124,7 @@ var ai_driver = DecisionDriver.new()
 var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
 var _ai_offered_actions: Array = []
+var _ai_response_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -942,8 +943,19 @@ func _do_play(pid: int):
 		await _run_ai_play(p)
 
 func _ai_observation(actor: Player) -> Dictionary:
-	return PlayerObservation.capture(players, actor, turn_manager.current_phase,
+	var view = PlayerObservation.capture(players, actor, turn_manager.current_phase,
 		turn_manager.get_context_revision())
+	view["mode"] = game_mode
+	return view
+
+# 决策只接收白名单值快照；合法选项是牌型，-1表示自愿放弃。
+func _choose_ai_response(p: Player, kind: String, options: Array, context: Dictionary = {}) -> int:
+	if options.is_empty():
+		return -1
+	var view = _ai_observation(p)
+	view["response"] = context.duplicate(true)
+	var selected = await _ai_response_override.call(view, kind, options.duplicate()) if _ai_response_override.is_valid() else ResponsePolicy.choose(view, kind, options)
+	return selected if options.has(selected) else -1
 
 # 规则查询同时供普通出牌和AI使用；策略不会另造次数、距离或支付规则。
 func can_declare_basic(p: Player, sub: int) -> bool:
@@ -2179,6 +2191,7 @@ func play_card(sub: CardData.CardSubType):
 # ============================
 
 func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_name: String):
+	var response_revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 
 	# 消耗手牌
@@ -2203,7 +2216,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 		if not target.is_alive():
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
-		if _game_over:
+		if _game_over or response_revision != turn_manager.get_context_revision():
 			break
 
 		# 【仁王盾】：南蛮入侵和万箭齐发对你无效（锁定技；判定在无懈询问之前，青釭剑只对杀生效不例外）
@@ -2227,7 +2240,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			continue
 
 		var responded = await _ask_basic_card_response(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
-		if _game_over:
+		if _game_over or response_revision != turn_manager.get_context_revision():
 			break
 		if not target.is_alive() or _is_kneeling(target):
 			continue
@@ -2240,16 +2253,25 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 
 	_sync_all_ui()
 
-# 决斗/AOE 的物理响应：提示只决定意愿，成功支付后才算打出。
-# 保持 AI 暂不响应的边界；不消耗出牌阶段杀次数和酒。
-func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable) -> bool:
-	if _game_over or not p.is_alive() or _is_kneeling(p) or p.seat_index != 0:
+# 杀/决斗/AOE共用物理响应，不消耗主动杀次数和酒，也不创建新出牌阶段。
+func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> bool:
+	if _game_over or not p.is_alive() or _is_kneeling(p):
 		return false
 	if not HandPayment.has_response(p, expected):
 		return false
-	if not await prompt.call():
+	var revision = turn_manager.get_context_revision()
+	var snapshot = HandSelection.new(p)
+	var accepted: bool
+	if decision.is_valid():
+		accepted = await decision.call()
+	elif p.seat_index == 0:
+		accepted = await prompt.call()
+	else:
+		accepted = await _choose_ai_response(p, "basic", [expected]) == expected
+	if not accepted:
 		return false
-	if _game_over or not p.is_alive() or _is_kneeling(p):
+	if _game_over or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision() \
+			or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 		return false
 	var used_card = HandPayment.take_player_response(p, expected)
 	if used_card == null:
@@ -3552,6 +3574,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 	_sync_all_ui()
 
 func _play_duel(attacker: Player, target: Player):
+	var response_revision = turn_manager.get_context_revision()
 	# 【决斗】距离限制 2（含马修正，兜底防直调）；【霸王】（杰基·斯特朗）你的决斗无距离限制
 	if attacker.general_name != "杰基·斯特朗" and attacker.attack_distance_to(target) > 2:
 		_update_debug("%s 距离 %s 为 %d，超出决斗距离 2，无法发起【决斗】！" % [attacker.player_name, target.player_name, attacker.attack_distance_to(target)])
@@ -3591,11 +3614,11 @@ func _play_duel(attacker: Player, target: Player):
 
 	while true:
 		# 【霸王】：非杰基方每次响应需打出两张杀（杰基本人只需一张）
-		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			break
 		var needs_two = jacqui != null and current != jacqui
 		var can_respond = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
-		if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			break
 
 		if can_respond:
@@ -3608,7 +3631,7 @@ func _play_duel(attacker: Player, target: Player):
 					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
 					break
 				var cont = await _ask_basic_card_response(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
-				if _game_over or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
+				if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 					break
 				if cont:
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
@@ -3803,6 +3826,7 @@ func _ask_nullification_chain(desc: String) -> bool:
 
 # 询问一轮：按座位顺序询问所有存活角色，返回打出无懈的玩家名（无人打出返回 ""）
 func _ask_nullification_round(desc: String) -> String:
+	var revision = turn_manager.get_context_revision()
 	for i in range(player_count):
 		var p = players[i]
 		if not p.is_alive():
@@ -3810,21 +3834,27 @@ func _ask_nullification_round(desc: String) -> String:
 		# 【下跪】：无法使用或打出任何牌 → 不询问
 		if _is_kneeling(p):
 			continue
+		var snapshot = HandSelection.new(p)
 		var played = "skip"
 		if p.seat_index == 0:
 			played = await _show_nullification_prompt(desc, p)
 		else:
-			# AI 暂不主动响应无懈
-			played = "skip"
+			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else []
+			if await _choose_ai_response(p, "nullification", options, {"description": desc}) == CardData.CardSubType.NULLIFICATION:
+				played = "card"
+		if _game_over or revision != turn_manager.get_context_revision():
+			return ""
 		if played != "skip":
-			if not p.is_alive() or _is_kneeling(p):
+			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
 				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION))
-			if not p.is_alive() or _is_kneeling(p):
+			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
+			if _game_over or revision != turn_manager.get_context_revision():
+				return ""
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【无懈可击】" % p.player_name)
 				_sync_all_ui()
@@ -4040,56 +4070,13 @@ func _show_liehuo_prompt() -> bool:
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
-	if not HandPayment.has_card(responder, expected_sub):
+	var revision = turn_manager.get_context_revision()
+	var prompt = _show_dodge_prompt.bind(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
+	var dodged = await _ask_basic_card_response(responder, expected_sub, prompt, _dodge_override)
+	if _game_over or revision != turn_manager.get_context_revision() or not responder.is_alive():
+		chain.is_cancelled = true
 		return false
-	# 【下跪】：无法使用或打出任何牌 → 不能出闪
-	if _is_kneeling(responder):
-		return false
-
-	var responder_idx = -1
-	for i in players.size():
-		if players[i] == responder:
-			responder_idx = i
-			break
-	if responder_idx < 0:
-		return false
-
-	_play_btn.visible = false
-	_end_play_btn.visible = false
-	_cancel_target_btn.visible = false
-	_confirm_target_btn.visible = false
-	turn_manager.start_waiting("dodge_for_strike", responder_idx)
-
-	var dodged = false
-	if _dodge_override.is_valid():
-		# 测试钩子：模拟响应者打出【闪】（对任意响应者生效，含 AI）
-		dodged = _dodge_override.call()
-	elif responder_idx == 0:
-		dodged = await _show_dodge_prompt(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
-	else:
-		dodged = false
-
-	turn_manager.end_waiting()
-
-	if turn_manager.get_play_actor_idx() == 0:
-		_play_btn.visible = true
-		_end_play_btn.visible = true
-		_sync_all_ui()
-
-	if dodged:
-		# 弹窗返回后重新验证；没有合法闪时按未响应处理，不扣除其他类型。
-		if not responder.is_alive() or _is_kneeling(responder):
-			return false
-		var used_dodge = HandPayment.take_card(responder, expected_sub)
-		if used_dodge == null:
-			return false
-		deck.discard(used_dodge)
-		# 【八卦阵】：使用/打出【闪】时摸一张牌（杀→闪路径）
-		if expected_sub == CardData.CardSubType.DODGE:
-			_try_bagua_draw(responder)
-		_sync_all_ui()
-		return true
-	return false
+	return dodged
 
 func _show_dodge_prompt(attacker_name: String, card_name: String) -> bool:
 	var overlay = ColorRect.new()
@@ -7098,18 +7085,21 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 		if _is_kneeling(p):
 			continue
 
+		var snapshot = HandSelection.new(p)
 		var play = "skip"
 		if _sacrifice_actor_override.is_valid():
 			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
 		elif p.seat_index == 0:
 			play = await _show_sacrifice_prompt(target, amount)
 		else:
-			play = "skip"  # AI 暂不主动打出舍己为人
+			var options: Array = [CardData.CardSubType.SACRIFICE] if HandPayment.has_card(p, CardData.CardSubType.SACRIFICE) else []
+			if await _choose_ai_response(p, "sacrifice", options, {"target": target.seat_index, "amount": amount}) == CardData.CardSubType.SACRIFICE:
+				play = "card"
 
 		if play != "skip":
 			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
 				return null
-			if not p.is_alive() or _is_kneeling(p):
+			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
@@ -7117,7 +7107,7 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE))
 			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
 				return null
-			if not p.is_alive() or _is_kneeling(p):
+			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【舍己为人】" % p.player_name)
@@ -7688,26 +7678,27 @@ func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
 	var options = _rescue_options(rescuer, dying)
 	if options.is_empty():
 		return -1
-	# 保留旧玩家0自救钩子；其他角色的测试决策使用新钩子。
+	var revision = turn_manager.get_context_revision()
+	var snapshot = HandSelection.new(rescuer)
+	var selected: int
 	if rescuer == dying and rescuer == players[0] and _dying_peach_override.is_valid():
-		return CardData.CardSubType.PEACH if _dying_peach_override.call() else -1
-	if _rescue_choice_override.is_valid():
-		return await _rescue_choice_override.call(rescuer, dying, options)
-	if rescuer != players[0]:
-		return _choose_ai_rescue(rescuer, dying, options)
-	return await _show_rescue_prompt(rescuer, dying, options)
+		selected = CardData.CardSubType.PEACH if _dying_peach_override.call() else -1
+	elif _rescue_choice_override.is_valid():
+		selected = await _rescue_choice_override.call(rescuer, dying, options)
+	elif rescuer != players[0]:
+		selected = await _choose_ai_response(rescuer, "rescue", options, {"target": dying.seat_index})
+	else:
+		selected = await _show_rescue_prompt(rescuer, dying, options)
+	if _game_over or revision != turn_manager.get_context_revision() \
+			or rescuer.hand != snapshot.hand or rescuer.determined_cards != snapshot.determined:
+		return -1
+	return selected if _rescue_options(rescuer, dying).has(selected) else -1
 
 # 保守 AI 策略，不是规则限制：自救；救公开同阵营者；不读取他人隐藏身份。
 func _choose_ai_rescue(rescuer: Player, dying: Player, options: Array[int]) -> int:
-	if options.is_empty():
-		return -1
-	if rescuer == dying:
-		return options[0]
-	if not dying.identity_revealed:
-		return -1
-	var allies = (rescuer.identity in ["主公", "忠臣"] and dying.identity in ["主公", "忠臣"]) \
-		or (rescuer.identity == "反贼" and dying.identity == "反贼")
-	return CardData.CardSubType.PEACH if allies and options.has(CardData.CardSubType.PEACH) else -1
+	var view = _ai_observation(rescuer)
+	view["response"] = {"target": dying.seat_index}
+	return ResponsePolicy.choose(view, "rescue", options)
 
 func _show_dying_prompt(dying: Player):
 	var sub = await _ask_rescue_card(dying, dying)

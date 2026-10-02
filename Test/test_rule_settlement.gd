@@ -32,6 +32,7 @@ func reset_players():
 	game.reset_game_over_state()
 	game._sacrifice_override = func(): return false
 	game._sacrifice_actor_override = Callable()
+	game._ai_response_override = func(_view, _kind, _options): return -1
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
@@ -748,6 +749,8 @@ func _run():
 	await decision_driver_cases.run(self)
 	var ai_basic_cases = load("res://Test/ai_basic_cases.gd").new()
 	await ai_basic_cases.run(self)
+	var ai_response_cases = load("res://Test/ai_response_cases.gd").new()
+	await ai_response_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
