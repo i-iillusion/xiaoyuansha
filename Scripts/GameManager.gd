@@ -120,6 +120,8 @@ var yudaxi = YudaxiResolver.new()
 var _sacrifice_override: Callable = Callable()
 # 座位无关的舍己决策入口；默认AI策略仍在D03接入。
 var _sacrifice_actor_override: Callable = Callable()
+var ai_driver = DecisionDriver.new()
+var _ai_running_revisions: Dictionary = {}
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -940,6 +942,38 @@ func _do_play(pid: int):
 	_sync_all_ui()
 	_refresh_status_line()
 	_update_debug("%s 出牌阶段 — 点击「出牌」选择牌型，或「结束出牌」" % p.player_name)
+	if pid != 0:
+		await _run_ai_play(p)
+
+func _ai_observation(actor: Player) -> Dictionary:
+	return PlayerObservation.capture(players, actor, turn_manager.current_phase,
+		turn_manager.get_context_revision())
+
+# D02在这里接共同规则生成的基本牌/装备候选；空候选明确结束自主出牌。
+func _ai_play_candidates(_observation: Dictionary) -> Array:
+	return []
+
+func _execute_ai_action(_action: Dictionary):
+	# 执行入口随D02候选一起接入；不允许策略直接改牌区。
+	pass
+
+func _run_ai_play(actor: Player):
+	var revision = turn_manager.get_context_revision()
+	if _ai_running_revisions.has(revision):
+		return
+	_ai_running_revisions[revision] = true
+	var valid = func():
+		return not _game_over and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
+			and turn_manager.current_player_idx == actor.seat_index \
+			and turn_manager.get_context_revision() == revision
+	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
+	await get_tree().process_frame
+	var result = await ai_driver.run(func(): return _ai_observation(actor),
+		_ai_play_candidates, _execute_ai_action, valid)
+	_ai_running_revisions.erase(revision)
+	if result.reason != "stale" and valid.call():
+		_update_debug("%s 结束出牌阶段" % actor.player_name)
+		turn_manager.advance_phase()
 
 func _do_discard(pid: int):
 	var p = players[pid]
