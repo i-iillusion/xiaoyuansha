@@ -96,9 +96,9 @@ func _populate():
 			# 【校园霸主】：可点击的按钮（出牌阶段发动，选一名角色拼点）
 			elif sk.begins_with("【校园霸主】"):
 				_add_skill_btn("校园霸主", sk)
-			# 【烂忠厚】：可点击的按钮（出牌阶段发动，选两名角色交换装备区域）
-			elif sk.begins_with("【烂忠厚】"):
-				_add_skill_btn("烂忠厚", sk)
+			# 【没用】：可点击的按钮（出牌阶段发动，选两名角色交换装备区域）
+			elif sk.begins_with("【没用】"):
+				_add_skill_btn("没用", sk)
 			# 【Gay】：可点击的按钮（出牌阶段限一次，弃 X 张手牌双方回血）
 			elif sk.begins_with("【Gay】"):
 				_add_skill_btn("Gay", sk)

@@ -68,7 +68,7 @@ var supply_shortage_active: bool = false
 # 武将牌反面：本回合被整回合跳过（摄魂刀翻面）
 var skip_full_turn: bool = false
 
-# 【没用】麦克斯·欧尼斯特：回合开始阶段跳过自己的阶段，并指定其他角色立刻获得对应阶段（-1 = 无）
+# 【烂忠厚】麦克斯·欧尼斯特：回合开始阶段跳过自己的阶段，并指定其他角色立刻获得对应阶段（-1 = 无）
 var granted_judge_target_idx: int = -1   # 跳过自己的判定阶段 → 目标立刻进行判定阶段（乐不思蜀/兵粮寸断失效）
 var granted_draw_target_idx: int = -1    # 跳过自己的摸牌阶段 → 目标立刻获得一个摸牌阶段
 var granted_play_target_idx: int = -1    # 跳过自己的出牌阶段 → 目标立刻获得一个出牌阶段
@@ -118,7 +118,7 @@ func advance_phase():
 			peach_garden_count_this_turn = 0
 			harvest_count_this_turn = 0
 			if skip_play_phase and granted_play_target_idx < 0:
-				# 乐不思蜀：跳过出牌阶段（但【没用】已授予他人出牌阶段时，出牌阶段仍进行并交给目标）
+				# 乐不思蜀：跳过出牌阶段（但【烂忠厚】已授予他人出牌阶段时，出牌阶段仍进行并交给目标）
 				skip_play_phase = false
 				_change_phase(Phase.DISCARD)
 			else:

@@ -277,7 +277,8 @@ var _gay_used: bool = false
 # 【觉醒】三选一测试钩子（正常游戏不设置）：返回 1 / 2 / 3（觉醒效果选择）
 var _awaken_pick_override: Callable = Callable()
 
-# ---- 【烂忠厚】（麦克斯·欧尼斯特）：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域 ----
+# 内部历史ID保持不变：lanzhonghou = 交换【没用】，meiyong = 赠送【烂忠厚】。
+# ---- 【没用】（麦克斯·欧尼斯特）：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域 ----
 var _lanzhonghou_used: bool = false                 # 本回合是否已使用（每回合重置）
 var _is_lanzhonghou_targeting: bool = false         # 选择两名角色中
 var _lanzhonghou_selected: Array[Player] = []       # 已选角色（0/1 个，选满 2 个进入区域选择）
@@ -288,22 +289,22 @@ var _lanzhonghou_zone_override: Callable = Callable()    # 返回 "weapon"/"armo
 var _lanzhonghou_mount_override: Callable = Callable()   # 返回 {"a": 槽位, "b": 槽位} 或 "cancel"（坐骑槽选择）
 var _lanzhonghou_hidden_first_override: Callable = Callable()  # 测试钩子：双暗置时返回 true 表示 A 先声明
 
-# ---- 【没用】（麦克斯·欧尼斯特）：回合开始阶段摸一张牌并跳过自己的一个阶段 ----
+# ---- 【烂忠厚】（麦克斯·欧尼斯特）：回合开始阶段摸一张牌并跳过自己的一个阶段 ----
 var _is_meiyong_targeting: bool = false             # 选择目标中
 var _meiyong_option: int = -1                       # 0=判定 / 1=摸牌 / 2=出牌
 # 测试钩子（正常游戏不设置）：
-var _meiyong_override: Callable = Callable()             # 返回 true = 发动【没用】
+var _meiyong_override: Callable = Callable()             # 返回 true = 发动【烂忠厚】
 var _meiyong_option_override: Callable = Callable()      # 返回 0/1/2（三选一）
 var _meiyong_target_override: Callable = Callable()      # 返回 Player（目标角色）
 
 # 通用按钮选择弹窗结果（返回选中索引，-1 = 取消）
 signal _choice_pick_result(idx: int)
-# 【没用】目标选择结果（返回 Player，null = 取消）
+# 【烂忠厚】目标选择结果（返回 Player，null = 取消）
 signal _meiyong_pick_result(target: Player)                       
 signal _shensu_pick_result(target: Player)                       
-# 【烂忠厚】区域选择结果（"weapon"/"armor"/"mount"/"done"/"cancel"）
+# 【没用】区域选择结果（"weapon"/"armor"/"mount"/"done"/"cancel"）
 signal _lanzhonghou_zone_result(zone: String)
-# 【烂忠厚】坐骑槽选择结果（返回槽位，"cancel" = 取消）
+# 【没用】坐骑槽选择结果（返回槽位，"cancel" = 取消）
 signal _lanzhonghou_mount_result(slot: String)
 
 # 【苕】可明置的装备列表（武器/防具/马）
@@ -774,7 +775,7 @@ func _do_start(pid: int):
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "比尔·盖伊" and p.is_alive() and not turn_manager.skip_full_turn:
 		await _maybe_shensu(p)
-	# 【没用】（麦克斯·欧尼斯特）：回合开始阶段可摸一张牌并选择跳过自己的一个阶段
+	# 【烂忠厚】（麦克斯·欧尼斯特）：回合开始阶段可摸一张牌并选择跳过自己的一个阶段
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "麦克斯·欧尼斯特" and p.is_alive() and not turn_manager.skip_full_turn:
 		await _maybe_meiyong(p)
@@ -788,7 +789,7 @@ func _reset_turn_flags():
 		pl.shensu_used_this_turn = false  # 【神速】选2 标记每回合重置
 		if pl.get_weapon() != CardData.CardSubType.RAGING_AXE:
 			pl.consume_wine_bonus()
-	_lanzhonghou_used = false  # 【烂忠厚】每回合限一次
+	_lanzhonghou_used = false  # 【没用】每回合限一次
 	_gay_used = false  # 【Gay】每回合限一次
 
 # 判定阶段：结算判定区的延时锦囊（后放置的先判定）
@@ -802,7 +803,7 @@ func _do_judge(pid: int):
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
-	# 【没用】（麦克斯·欧尼斯特）授予的判定阶段：跳过自己的判定，目标角色立刻进行判定阶段
+	# 【烂忠厚】（麦克斯·欧尼斯特）授予的判定阶段：跳过自己的判定，目标角色立刻进行判定阶段
 	# （其乐不思蜀/兵粮寸断失效，闪电/火烧连营正常生效）
 	if turn_manager.granted_judge_target_idx >= 0:
 		var target = players[turn_manager.granted_judge_target_idx]
@@ -828,7 +829,7 @@ func _do_judge(pid: int):
 	turn_manager.advance_phase()
 
 # 判定结算循环（抽取公用）：结算角色 p 判定区的全部延时锦囊（后放置的先判定）
-# granted=true = 【没用】授予的判定阶段：乐不思蜀/兵粮寸断失效（不触发效果）；闪电/火烧连营正常生效
+# granted=true = 【烂忠厚】授予的判定阶段：乐不思蜀/兵粮寸断失效（不触发效果）；闪电/火烧连营正常生效
 func _run_judgment(p: Player, granted: bool):
 	if granted:
 		_update_debug("%s 进行（授予的）判定阶段：判定区 %d 张牌（乐不思蜀/兵粮寸断失效）" % [p.player_name, p.judgment_cards.size()])
@@ -849,7 +850,7 @@ func _run_judgment(p: Player, granted: bool):
 					await _deal_damage(null, p, 3, EffectChain.DamageType.THUNDER)
 			CardData.CardSubType.INDULGENCE:
 				if granted:
-					# 【没用】授予的判定阶段：乐不思蜀失效（不触发效果）
+					# 【烂忠厚】授予的判定阶段：乐不思蜀失效（不触发效果）
 					_update_debug("【乐不思蜀】在授予的判定阶段失效，不触发效果")
 				else:
 					var ig_nullified = await _ask_nullification_chain("%s的【乐不思蜀】即将生效，是否打出一张【无懈可击】？" % p.player_name)
@@ -860,7 +861,7 @@ func _run_judgment(p: Player, granted: bool):
 						turn_manager.skip_play_phase = true
 			CardData.CardSubType.SUPPLY_SHORTAGE:
 				if granted:
-					# 【没用】授予的判定阶段：兵粮寸断失效（不触发效果）
+					# 【烂忠厚】授予的判定阶段：兵粮寸断失效（不触发效果）
 					_update_debug("【兵粮寸断】在授予的判定阶段失效，不触发效果")
 				else:
 					var ss_nullified = await _ask_nullification_chain("%s的【兵粮寸断】即将生效，是否打出一张【无懈可击】？" % p.player_name)
@@ -895,13 +896,13 @@ func _run_judgment(p: Player, granted: bool):
 
 func _do_draw(pid: int):
 	var p = players[pid]
-	# 【没用】（麦克斯·欧尼斯特）授予的摸牌阶段：跳过自己的摸牌，目标角色立刻获得一个摸牌阶段
+	# 【烂忠厚】（麦克斯·欧尼斯特）授予的摸牌阶段：跳过自己的摸牌，目标角色立刻获得一个摸牌阶段
 	if turn_manager.granted_draw_target_idx >= 0:
 		var target = players[turn_manager.granted_draw_target_idx]
 		turn_manager.granted_draw_target_idx = -1
 		if target.is_alive():
 			_draw_blank_cards(target, 2)
-			_update_debug("【没用】：%s 立刻获得一个摸牌阶段，摸了 2 张牌（手牌 %d 张）" % [target.player_name, target.hand_size()])
+			_update_debug("【烂忠厚】：%s 立刻获得一个摸牌阶段，摸了 2 张牌（手牌 %d 张）" % [target.player_name, target.hand_size()])
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
@@ -928,7 +929,7 @@ func _do_draw(pid: int):
 
 func _do_play(pid: int):
 	var p = players[pid]
-	# 【没用】（麦克斯·欧尼斯特）授予的出牌阶段：跳过自己的出牌，目标角色立刻获得一个出牌阶段
+	# 【烂忠厚】（麦克斯·欧尼斯特）授予的出牌阶段：跳过自己的出牌，目标角色立刻获得一个出牌阶段
 	if turn_manager.granted_play_target_idx >= 0:
 		var target = players[turn_manager.granted_play_target_idx]
 		turn_manager.granted_play_target_idx = -1
@@ -1352,13 +1353,13 @@ func _on_cancel_target_pressed():
 		_cancel_target_btn.visible = false
 		_play_btn.visible = true
 		_end_play_btn.visible = true
-		_update_debug("取消【烂忠厚】")
+		_update_debug("取消【没用】")
 		return
 	if _is_meiyong_targeting:
 		_is_meiyong_targeting = false
 		_cancel_target_btn.visible = false
 		_meiyong_pick_result.emit(null)
-		_update_debug("取消【没用】")
+		_update_debug("取消【烂忠厚】")
 		return
 	if _is_sage_targeting:
 		_is_sage_targeting = false
@@ -5930,26 +5931,26 @@ func _show_gay_x_picker(max_x: int) -> int:
 	return idx + 1
 
 # ============================
-#  【烂忠厚】麦克斯·欧尼斯特：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域
-#  X = 选择的区域类别数（武器/防具/坐骑各最多一次）；坐骑可跨槽位交换（A的坐骑1 ↔ B的坐骑2）
-#  当前已接入明置武器/防具与单侧空槽；暗置及空坐骑槽另分子项。
+#  【没用】麦克斯·欧尼斯特：出牌阶段限一次，弃 X 张牌交换两名角色的 X 个装备区域
+#  X = 选择的区域对数（武器/防具各最多一对、坐骑最多四对）；坐骑可跨槽位交换。
+#  E05：空槽与暗置均可交换；暗置声明由原持有者完成。
 # ============================
 
 # 详情弹窗技能点击：进入两名角色选择模式（与【装逼】等主动技能一致）
 func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 	if p != players[0] or p.seat_index != 0:
-		_update_debug("只能对自己使用【烂忠厚】")
+		_update_debug("只能对自己使用【没用】")
 		return
 	if p.general_name != "麦克斯·欧尼斯特":
 		return
 	if turn_manager.current_phase != TurnManager.Phase.PLAY:
-		_show_toast("【烂忠厚】只能在你的出牌阶段发动")
+		_show_toast("【没用】只能在你的出牌阶段发动")
 		return
 	if _lanzhonghou_used:
-		_show_toast("本回合已使用过【烂忠厚】")
+		_show_toast("本回合已使用过【没用】")
 		return
 	if p.hand_size() <= 0:
-		_show_toast("【烂忠厚】发动条件：至少有一张手牌（弃 X 张牌）")
+		_show_toast("【没用】发动条件：至少有一张手牌（弃 X 张牌）")
 		return
 	_start_lanzhonghou_mode()
 
@@ -5964,9 +5965,9 @@ func _start_lanzhonghou_mode():
 	for child in _detail_popup_root.get_children():
 		child.queue_free()
 	_detail_popup_root.visible = false
-	_update_debug("【烂忠厚】：请点击两名角色（可含自己）的头像，选择交换装备的角色（当前 0/2）")
+	_update_debug("【没用】：请点击两名角色（可含自己）的头像，选择交换装备的角色（当前 0/2）")
 
-# 烂忠厚角色选择：点击头像 toggle（选满 2 名进入区域选择）
+# 没用角色选择：点击头像 toggle（选满 2 名进入区域选择）
 func _on_lanzhonghou_target_click(target: Player):
 	if not target.is_alive():
 		_update_debug("目标已阵亡")
@@ -6006,7 +6007,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		var zone = await _ask_lanzhonghou_zone(a, b, _lanzhonghou_pending, max_pick)
 		if zone == "cancel":
 			_lanzhonghou_pending.clear()
-			_update_debug("取消【烂忠厚】，未消耗手牌")
+			_update_debug("取消【没用】，未消耗手牌")
 			return
 		if zone == "done":
 			break
@@ -6055,7 +6056,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 					"card_a": _equipment_resource_for_pick(a, slot_a), "card_b": _equipment_resource_for_pick(b, slot_b), "ok": true})
 	var x = _lanzhonghou_pending.size()
 	if x <= 0:
-		_update_debug("没有选择任何区域，取消【烂忠厚】")
+		_update_debug("没有选择任何区域，取消【没用】")
 		return
 	for entry in _lanzhonghou_pending:
 		if entry.has("card_a") and (_equipment_resource_for_pick(entry.a, entry.slot_a) != entry.card_a \
@@ -6099,7 +6100,7 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 					declarations.reverse()
 			for declaration in declarations:
 				await _declare_exchanged_hidden_equipment(declaration[0], declaration[1], declaration[2], declaration[3])
-	_update_debug("%s 发动【烂忠厚】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
+	_update_debug("%s 发动【没用】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
 	_lanzhonghou_used = true
 	_lanzhonghou_pending.clear()
 	_sync_all_ui()
@@ -6365,16 +6366,16 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 	return true
 
 # ============================
-#  【没用】麦克斯·欧尼斯特：回合开始阶段摸一张牌，跳过自己的一个阶段，令其他角色立刻获得对应阶段
+#  【烂忠厚】麦克斯·欧尼斯特：回合开始阶段摸一张牌，跳过自己的一个阶段，令其他角色立刻获得对应阶段
 #  选项1（判定）：目标立刻判定，其乐不思蜀/兵粮寸断失效（闪电/火烧连营正常生效）
-#  选项2（摸牌）：目标立刻摸 2 张；选项3（出牌）：目标立刻获得出牌阶段（AI 不出牌，立即结束）
+#  选项2（摸牌）：目标立刻摸 2 张；选项3（出牌）：目标立刻获得出牌阶段，AI使用共同决策入口。
 # ============================
 
 # 回合开始阶段询问：是否发动 + 三选一 + 选择目标（由 _do_start 调用）
 func _maybe_meiyong(p: Player) -> void:
 	if p.general_name != "麦克斯·欧尼斯特" or not p.is_alive():
 		return
-	# AI 暂不主动发动（与全游戏 AI 行为一致；测试钩子可强制）
+	# AI策略暂不主动发动此技能；获得的出牌阶段仍正常决策。
 	if p.seat_index != 0 and not _meiyong_override.is_valid():
 		return
 	# 是否发动（玩家0弹窗 / 测试钩子）
@@ -6387,7 +6388,7 @@ func _maybe_meiyong(p: Player) -> void:
 		return
 	# 摸一张牌
 	_draw_blank_cards(p, 1)
-	_update_debug("%s 发动【没用】！摸了 1 张牌（手牌 %d 张），选择跳过一个阶段" % [p.player_name, p.hand_size()])
+	_update_debug("%s 发动【烂忠厚】！摸了 1 张牌（手牌 %d 张），选择跳过一个阶段" % [p.player_name, p.hand_size()])
 	# 三选一（取消 → 收回已摸的牌）
 	var option := -1
 	if _meiyong_option_override.is_valid():
@@ -6396,27 +6397,27 @@ func _maybe_meiyong(p: Player) -> void:
 		option = await _show_meiyong_option_prompt()
 	if option < 0 or option > 2:
 		p.hand.pop_back()
-		_update_debug("取消【没用】（已摸的牌收回）")
+		_update_debug("取消【烂忠厚】（已摸的牌收回）")
 		return
 	match option:
 		0:
 			var target0 = await _pick_meiyong_target(0, p)
 			if target0 == null:
-				_update_debug("没有可选的判定目标，【没用】未生效（已摸的牌保留）")
+				_update_debug("没有可选的判定目标，【烂忠厚】未生效（已摸的牌保留）")
 				return
 			turn_manager.granted_judge_target_idx = target0.seat_index
 			_update_debug("%s 跳过自己的判定阶段！%s 立刻进行判定阶段（其乐不思蜀/兵粮寸断失效，闪电/火烧连营正常生效）" % [p.player_name, target0.player_name])
 		1:
 			var target1 = await _pick_meiyong_target(1, p)
 			if target1 == null:
-				_update_debug("没有可选的摸牌目标，【没用】未生效（已摸的牌保留）")
+				_update_debug("没有可选的摸牌目标，【烂忠厚】未生效（已摸的牌保留）")
 				return
 			turn_manager.granted_draw_target_idx = target1.seat_index
 			_update_debug("%s 跳过自己的摸牌阶段！%s 立刻获得一个摸牌阶段" % [p.player_name, target1.player_name])
 		2:
 			var target2 = await _pick_meiyong_target(2, p)
 			if target2 == null:
-				_update_debug("没有可选的出牌目标，【没用】未生效（已摸的牌保留）")
+				_update_debug("没有可选的出牌目标，【烂忠厚】未生效（已摸的牌保留）")
 				return
 			turn_manager.granted_play_target_idx = target2.seat_index
 			_update_debug("%s 跳过自己的出牌阶段！%s 立刻获得一个出牌阶段" % [p.player_name, target2.player_name])
@@ -6438,11 +6439,11 @@ func _pick_meiyong_target(option: int, p: Player) -> Player:
 	_is_meiyong_targeting = true
 	_meiyong_option = option
 	_cancel_target_btn.visible = true
-	_update_debug("【没用】：请点击一名角色的头像（%s）" % ("判定区有牌的角色" if option == 0 else "任意其他角色"))
+	_update_debug("【烂忠厚】：请点击一名角色的头像（%s）" % ("判定区有牌的角色" if option == 0 else "任意其他角色"))
 	var target = await _meiyong_pick_result
 	return target
 
-# 没用目标点击：单选，点击即生效
+# 烂忠厚目标点击：单选，点击即生效
 func _on_meiyong_target_click(target: Player):
 	var p = players[turn_manager.current_player_idx]
 	if target == p:
@@ -6462,14 +6463,14 @@ func _on_meiyong_target_click(target: Player):
 	_cancel_target_btn.visible = false
 	_meiyong_pick_result.emit(target)
 
-# 是否发动【没用】（玩家0弹窗）
+# 是否发动【烂忠厚】（玩家0弹窗）
 func _show_meiyong_activate_prompt() -> bool:
-	var idx = await _show_choice_popup("是否发动【没用】？\n（摸一张牌，然后跳过你的判定/摸牌/出牌阶段之一，令一名其他角色立刻获得对应阶段）", ["发动", "不发动"])
+	var idx = await _show_choice_popup("是否发动【烂忠厚】？\n（摸一张牌，然后跳过你的判定/摸牌/出牌阶段之一，令一名其他角色立刻获得对应阶段）", ["发动", "不发动"])
 	return idx == 0
 
 # 三选一（玩家0弹窗）：返回 0/1/2，-1 = 取消
 func _show_meiyong_option_prompt() -> int:
-	var idx = await _show_choice_popup("选择【没用】的效果：", [
+	var idx = await _show_choice_popup("选择【烂忠厚】的效果：", [
 		"1.跳过判定阶段，令一名判定区有牌的角色立刻判定",
 		"2.跳过摸牌阶段，令一名角色立刻摸牌",
 		"3.跳过出牌阶段，令一名角色立刻出牌",
@@ -7953,12 +7954,12 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 			_on_gay_target_click(player)
 			return
 
-		# 【烂忠厚】角色选择：点击头像选择/取消（选满 2 名进入区域选择）
+		# 【没用】角色选择：点击头像选择/取消（选满 2 名进入区域选择）
 		if _is_lanzhonghou_targeting:
 			_on_lanzhonghou_target_click(player)
 			return
 
-		# 【没用】目标选择：点击头像选目标（单选）
+		# 【烂忠厚】目标选择：点击头像选目标（单选）
 		if _is_meiyong_targeting:
 			_on_meiyong_target_click(player)
 			return
@@ -8098,7 +8099,7 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if skill_key == "Gay":
 		await _on_gay_skill_clicked(owner_player)
 		return
-	if skill_key == "烂忠厚":
+	if skill_key == "没用":
 		await _on_lanzhonghou_skill_clicked(owner_player)
 		return
 	if skill_key != "下跪":
