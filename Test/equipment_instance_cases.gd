@@ -216,6 +216,7 @@ func run(host):
 	await _check_claimed_original_requip()
 	await _check_claimed_original_final_death()
 	await _check_claimed_original_active_replace()
+	await _check_claimed_original_transfer_chain()
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
@@ -954,6 +955,79 @@ func _check_claimed_original_active_replace():
 				label + "弃置旧原牌后他人不能用任意牌重造同名")
 			game._weapon_replace_override = Callable()
 			game._clear_pending_determined_card()
+	game.equipment_pool.clear()
+	game.deck._discard.clear()
+	game.turn_manager.current_phase = previous_phase
+
+# 只计物理牌区；EquipmentPool 的原牌引用是名称登记，不是第二个持有者。
+func _count_physical_locations(card: CardBase) -> int:
+	var count = game.deck._discard.count(card)
+	for player in game.players:
+		count += player.hand.count(card) + player.determined_cards.count(card)
+		count += player.judgment_cards.count(card)
+		for stored in player.equipment_cards.values():
+			if stored == card:
+				count += 1
+	return count
+
+# DEV-B03c-4：已占名原牌跨手牌／装备／弃牌真实链始终只有一个归属。
+func _check_claimed_original_transfer_chain():
+	var previous_phase = game.turn_manager.current_phase
+	for spec in [
+		{"sub": CardData.CardSubType.LIANNU, "slot": "weapon"},
+		{"sub": CardData.CardSubType.RENWANG_DUN, "slot": "armor"},
+	]:
+		suite.reset_players()
+		game.equipment_pool.clear()
+		game.deck._discard.clear()
+		game._clear_pending_determined_card()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game._lanzhonghou_used = false
+		var actor: Player = game.players[0]
+		var first: Player = game.players[1]
+		var second: Player = game.players[2]
+		var third: Player = game.players[3]
+		var fourth: Player = game.players[4]
+		var sub: CardData.CardSubType = spec.sub
+		var slot: String = spec.slot
+		first.hand.append(null)
+		game.turn_manager.current_player_idx = first.seat_index
+		await game.play_card(sub)
+		var original: CardBase = first.get_equipment_card(slot)
+		check(original != null and _count_physical_locations(original) == 1
+			and game.equipment_pool.is_claimed_original(sub, original),
+			"%s首次声明原牌只在A装备槽" % slot)
+		game._equip_pick_override = func(): return slot
+		await game._steal_equip(second, first, true, "顺手牵羊")
+		check(second.determined_cards.has(original) and not first.equipment.has(slot)
+			and _count_physical_locations(original) == 1, "%s顺走后原牌只在B手牌" % slot)
+		game.turn_manager.current_player_idx = second.seat_index
+		await game.play_card(sub)
+		check(second.get_equipment_card(slot) == original and second.determined_cards.is_empty()
+			and _count_physical_locations(original) == 1, "%s同一原牌再装备后只在B槽" % slot)
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		game.turn_manager.current_player_idx = actor.seat_index
+		var zones: Array = [slot, "done"]
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		await game._run_lanzhonghou(second, third)
+		game._lanzhonghou_zone_override = Callable()
+		check(not second.equipment.has(slot) and third.get_equipment_card(slot) == original
+			and _count_physical_locations(original) == 1 and game.deck._discard.is_empty(),
+			"%s没用交换后同一原牌只在C槽，不误入弃" % slot)
+		await game._steal_equip(fourth, third, true, "顺手牵羊")
+		check(fourth.determined_cards.has(original) and not third.equipment.has(slot)
+			and _count_physical_locations(original) == 1, "%s再次顺走后原牌只在D手牌" % slot)
+		game.turn_manager.current_player_idx = fourth.seat_index
+		await game.play_card(sub)
+		check(fourth.get_equipment_card(slot) == original and _count_physical_locations(original) == 1,
+			"%s再次装备仍是初次声明的同一原牌" % slot)
+		await game._steal_equip(first, fourth, false, "过河拆桥")
+		game._equip_pick_override = Callable()
+		check(not fourth.equipment.has(slot) and game.deck._discard.count(original) == 1
+			and _count_physical_locations(original) == 1
+			and game.equipment_pool.is_claimed_original(sub, original),
+			"%s最后拆除仅入弃一次，名称仍指初始原牌" % slot)
 	game.equipment_pool.clear()
 	game.deck._discard.clear()
 	game.turn_manager.current_phase = previous_phase
