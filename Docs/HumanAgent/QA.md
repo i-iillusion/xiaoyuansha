@@ -2,6 +2,15 @@
 
 ## 当前总览（2026-10-02）
 
+### QA-T85 / DEV-E03c：觉醒等待防重与复原隔离
+
+本地`7ec98dd`：Player登记awaken_effects_applied，区分已扣上限/摸两张与未完成三选一；awakening_revision作为不可回滚的异步代次。_do_awaken同代次等待防重，过期deferred拒绝；人类窗口销毁/阶段失效后重开只补必选效果，不重复上限/摸牌。贤者复原清已结算标记并推进代次，旧窗口即时失效；终局不重新弹窗。通用选择支持调用者有效性条件，外部销毁延后答复并用弱引用检查旧窗口/人物，避免tree_exiting里立即重开导致add_child失败。
+
+awaken_lifecycle_cases接核心，真实弹窗覆盖重复直接/deferred、关闭/阶段过期后恢复、已完成后再调用、实际贤者复原及再次失去最后手牌、旧答复隔离与终局。导入+七组2699断言通过（2392/40/53/103/24/51/36），退出0，无脚本错误/失败/超时，日志和结果`.git/local-ci/7ec98dd/`。前两轮分别出现父节点忙和已释放lambda捕获，均判失败并修复，失败日志保留E03c-first-close-failure、E03c-freed-capture-failure。
+
+E03-Q1已询问并登记：人类觉醒主动取消/正常超时默认第几项或重新选择，待负责人答复；不凭旧注释将默认改成第1项。只隔离该子项。下一E03d迁移_show_aoe_prompt/_show_duel_prompt/_show_duel_second_strike_prompt/_show_dodge_prompt共享_response_ready，核对终局、关闭与过期，之后装备/其他反制弹窗。全部失牌事件与觉醒的精确优先级仍未整体验收；只本地提交，stash保留。
+
+
 ### QA-T84 / DEV-E03b：通用选择窗口独立答复与清理
 
 本地`a0b0525`：_show_choice_popup与_show_sao_reveal_picker改为每窗口ChoicePromptAnswer；按钮重复答复只生效一次，每次答复核对交互代次、人物仍在名单、终局与窗口有效性。主动取消/正常超时返回-1，窗口销毁、阶段/操作者变化及终局返回CHOICE_INVALID=-2，觉醒包装器不会将此失效转成永久选项。完成时断开监听并销毁该窗口；通用选择的计时登记隔离旧超时回调，重叠窗口按各自答复完成，恢复前一个窗口保留其每步剩余时间。
