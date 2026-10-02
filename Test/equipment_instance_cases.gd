@@ -217,6 +217,7 @@ func run(host):
 	await _check_claimed_original_final_death()
 	await _check_claimed_original_active_replace()
 	await _check_claimed_original_transfer_chain()
+	await _check_two_occupied_armor_lion_exchange()
 	await _check_claimed_original_hidden_declaration()
 	await _check_claimed_original_hidden_exhaustion()
 	suite.reset_players()
@@ -1030,6 +1031,50 @@ func _check_claimed_original_transfer_chain():
 			"%s最后拆除仅入弃一次，名称仍指初始原牌" % slot)
 	game.equipment_pool.clear()
 	game.deck._discard.clear()
+	game.turn_manager.current_phase = previous_phase
+
+# DEV-B04a：双方防具槽都占用时，没用交换同样会让狮子原持有者失去装备。
+func _check_two_occupied_armor_lion_exchange():
+	var previous_phase = game.turn_manager.current_phase
+	for lion_on_a in [true, false]:
+		suite.reset_players()
+		game.deck._discard.clear()
+		game.turn_manager.current_phase = TurnManager.Phase.PLAY
+		game.turn_manager.current_player_idx = 0
+		game._lanzhonghou_used = false
+		var actor: Player = game.players[0]
+		var a: Player = game.players[1]
+		var b: Player = game.players[2]
+		var lion_owner: Player = a if lion_on_a else b
+		var other: Player = b if lion_on_a else a
+		actor.general_name = "麦克斯·欧尼斯特"
+		actor.hand.append(null)
+		a.max_hp = 4
+		b.max_hp = 4
+		a.hp = 2
+		b.hp = 2
+		var lion = CardBase.create(CardData.CardSubType.SILVER_LION)
+		var armor = CardBase.create(CardData.CardSubType.RENWANG_DUN)
+		check(lion_owner.equip_card_to_slot("armor", lion)
+			and other.equip_card_to_slot("armor", armor), "双方明置防具已分别落位")
+		var zones: Array = ["cancel"]
+		game._lanzhonghou_zone_override = func(): return zones.pop_front()
+		await game._run_lanzhonghou(a, b)
+		check(lion_owner.hp == 2 and lion_owner.get_equipment_card("armor") == lion
+			and other.get_equipment_card("armor") == armor and actor.hand_size() == 1
+			and game.deck._discard.is_empty(), "取消交换不失去狮子、不扣费用")
+		zones.assign(["armor", "done"])
+		await game._run_lanzhonghou(a, b)
+		check(lion_owner.hp == 3 and other.hp == 2
+			and lion_owner.get_equipment_card("armor") == armor
+			and other.get_equipment_card("armor") == lion,
+			"双方占槽交换时仅白银狮子原持有者回复一点")
+		check(actor.hand_size() == 0 and game._lanzhonghou_used
+			and game.deck._discard.is_empty()
+			and _count_physical_locations(lion) == 1
+			and _count_physical_locations(armor) == 1,
+			"双方明置交换仅付一张，原牌互换且不弃不复制")
+		game._lanzhonghou_zone_override = Callable()
 	game.turn_manager.current_phase = previous_phase
 
 # DEV-B03b-1：已占名的同一原牌被顺走后暗置，仍可主动明置或离区声明原名。

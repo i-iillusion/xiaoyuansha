@@ -340,7 +340,7 @@ func remove_equipment(slot: String) -> CardBase:
 							break
 	return card
 
-# 交换装备时使用：空间上确实卸下，但规则上“不算失去”，所以不触发白银狮子。
+# 双方明置交换时保留原牌实例；依E-01，离开原持有者仍算失去白银狮子。
 func detach_equipment_quiet(slot: String) -> CardBase:
 	if not equipment.has(slot):
 		return null
@@ -349,6 +349,8 @@ func detach_equipment_quiet(slot: String) -> CardBase:
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	_clear_equipment_state(sub)
+	if sub == CardData.CardSubType.SILVER_LION and is_alive():
+		heal(1)
 	return card
 
 func _apply_equipment_state(sub: CardData.CardSubType):
