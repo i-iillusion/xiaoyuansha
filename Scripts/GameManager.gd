@@ -728,6 +728,12 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 	# 胜负已分：不再推进任何阶段逻辑（当前结算链由各调用方的 _game_over 检查自行收尾）
 	if _game_over:
 		return
+	# 当前效果已返回并请求推进时，最终死亡者不再获得摸牌/出牌/弃牌。
+	# 不在伤害窗口中跳回合，以免吞掉当前判定/群体效果的后续结算。
+	if new_phase in [TurnManager.Phase.DRAW, TurnManager.Phase.PLAY, TurnManager.Phase.DISCARD] \
+			and players[pid].is_dead():
+		turn_manager._change_phase(TurnManager.Phase.END)
+		return
 	match new_phase:
 		TurnManager.Phase.START:
 			# 阵亡角色跳过自己的回合：推进到下一位存活角色
@@ -1031,10 +1037,10 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 		elif sub == CardData.CardSubType.WINE:
 			# 保守意愿：有余牌且本阶段还能出杀时才喝一层，规则仍允许战斧继续叠酒。
 			if p.hand_size() >= 2 and p.wine_stacks == 0 and turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty():
-				choices.append({"sub": sub, "target": -1, "priority": 90})
+				choices.append({"sub": sub, "target": -1, "priority": 110})
 		else:
 			for target in _get_strike_targets(p):
-				choices.append({"sub": sub, "target": target.seat_index, "priority": 80})
+				choices.append({"sub": sub, "target": target.seat_index, "priority": 120 if p.wine_stacks > 0 else 80})
 	for sub in TARGET_TRICKS + GLOBAL_TRICKS:
 		if not can_declare_trick(p, sub):
 			continue
@@ -1117,6 +1123,10 @@ func _run_ai_play(actor: Player):
 	var result = await ai_driver.run(func(): return _ai_observation(actor),
 		_ai_play_candidates, _execute_ai_action, valid)
 	_ai_running_revisions.erase(revision)
+	if not _game_over and actor.is_dead() and turn_manager.get_context_revision() == revision \
+			and turn_manager.current_phase == TurnManager.Phase.PLAY and turn_manager.get_play_actor_idx() == actor.seat_index:
+		turn_manager.advance_phase()
+		return
 	if result.reason != "stale" and valid.call():
 		_update_debug("%s 结束出牌阶段" % actor.player_name)
 		turn_manager.advance_phase()
