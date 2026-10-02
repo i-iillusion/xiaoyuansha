@@ -41,6 +41,7 @@ func reset_players():
 	game._duel_respond_override = func(): return false
 	game._duel_second_override = func(): return false
 	game.turn_manager.current_player_idx = 0
+	game.turn_manager.play_actor_idx = -1
 	game.turn_manager.strike_count_this_turn = 0
 	game.turn_manager._strike_actors_this_turn.clear()
 	for p in game.players:

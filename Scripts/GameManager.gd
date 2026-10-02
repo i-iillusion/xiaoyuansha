@@ -624,7 +624,7 @@ func _update_player_panel(panel: Control, player: Player):
 
 	# 更新酒标记
 	var wine_indicator: Label = panel.get_meta("wine_indicator")
-	var is_current = (turn_manager.current_player_idx == player.seat_index)
+	var is_current = (turn_manager.get_play_actor_idx() == player.seat_index)
 	wine_indicator.visible = is_current and player.wine_stacks > 0
 
 	# 更新连环标记
@@ -926,19 +926,13 @@ func _do_play(pid: int):
 		var target = players[turn_manager.granted_play_target_idx]
 		turn_manager.granted_play_target_idx = -1
 		turn_manager.skip_play_phase = false  # 自己已不出牌，乐不思蜀的跳过效果无意义（已判定消耗）
-		if target.is_alive() and target.seat_index == 0:
-			# 玩家0 被授予出牌阶段（正常不会出现：麦克斯·欧尼斯特即玩家0，目标必须除自己以外）
-			_play_btn.visible = true
-			_end_play_btn.visible = true
-			_sync_all_ui()
-			_refresh_status_line()
-			_update_debug("【没用】：你立刻获得一个出牌阶段！")
+		if not target.is_alive():
+			turn_manager.advance_phase()
 			return
-		# AI 不出牌：立即结束
-		_update_debug("【没用】：%s 立刻获得一个出牌阶段（AI 不出牌，立即结束）" % target.player_name)
-		_sync_all_ui()
-		turn_manager.advance_phase()
-		return
+		turn_manager.play_actor_idx = target.seat_index
+		p = target
+		pid = target.seat_index
+		_update_debug("【烂忠厚】：%s 立刻获得一个出牌阶段" % target.player_name)
 	_play_btn.visible = (pid == 0)
 	_end_play_btn.visible = (pid == 0)
 	_sync_all_ui()
@@ -967,7 +961,7 @@ func can_declare_basic(p: Player, sub: int) -> bool:
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat = int(observation.actor)
-	if seat < 0 or seat >= players.size() or seat != turn_manager.current_player_idx \
+	if seat < 0 or seat >= players.size() or seat != turn_manager.get_play_actor_idx() \
 			or observation.revision != turn_manager.get_context_revision():
 		return []
 	var p = players[seat]
@@ -1015,7 +1009,7 @@ func _execute_ai_action(action: Dictionary):
 		return
 	var p = _ai_hand_snapshot.owner
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or action.actor != turn_manager.current_player_idx or action.revision != turn_manager.get_context_revision() \
+			or action.actor != turn_manager.get_play_actor_idx() or action.revision != turn_manager.get_context_revision() \
 			or p.hand != _ai_hand_snapshot.hand or p.determined_cards != _ai_hand_snapshot.determined:
 		return
 	var sub = int(action.sub)
@@ -1033,7 +1027,7 @@ func _run_ai_play(actor: Player):
 	_ai_running_revisions[revision] = true
 	var valid = func():
 		return not _game_over and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
-			and turn_manager.current_player_idx == actor.seat_index \
+			and turn_manager.get_play_actor_idx() == actor.seat_index \
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
@@ -1323,7 +1317,7 @@ func _exit_multi_target_mode():
 
 # 方天画戟：点击角色头像 toggle 加入/移除目标
 func _on_multi_target_click(target: Player):
-	var attacker = players[turn_manager.current_player_idx]
+	var attacker = players[turn_manager.get_play_actor_idx()]
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -1384,7 +1378,7 @@ func _on_confirm_multi_target():
 func _on_detail_equip_clicked(sub: CardData.CardSubType, owner_player: Player):
 	if sub != CardData.CardSubType.SAGE_PROTECTION:
 		return
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	if owner_player != p or p.seat_index != 0:
 		_update_debug("只有装备者本人（你）能发动【贤者的加护】")
 		return
@@ -1412,7 +1406,7 @@ func _start_sage_ping_mode(p: Player):
 
 # 拼点目标点击（任意其他存活角色，无距离限制）
 func _on_sage_target_click(target: Player):
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	if target == p or not target.is_alive():
 		_update_debug("目标无效")
 		return
@@ -1510,7 +1504,7 @@ func _restore_equipment_payment(receipt: Dictionary, card: CardBase):
 func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.CardSubType,
 		old_sub: CardData.CardSubType, old_card: CardBase, context_revision: int) -> bool:
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or turn_manager.current_player_idx != p.seat_index \
+			or turn_manager.get_play_actor_idx() != p.seat_index \
 			or turn_manager.get_context_revision() != context_revision \
 			or p.equipment.get(slot, -1) != old_sub or p.get_equipment_card(slot) != old_card \
 			or not _can_play_equipment_instance(p, sub):
@@ -1541,7 +1535,7 @@ func _clear_pending_determined_card():
 	_pending_determined_card = null
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	# 选完目标开始执行：玩家0出牌阶段重置每步倒计时
 	_reset_play_countdown_if_p0()
 	var card = CardBase.create(sub)
@@ -1702,7 +1696,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		return
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	var card = _take_play_card(p, sub)
 	if card == null:
 		_update_debug("没有可用的【%s】或任意牌，未使用多目标杀" % CardData.get_type_name(sub))
@@ -1791,7 +1785,7 @@ func _finish_damage_chain(chain: EffectChain):
 	_sync_all_ui()
 
 func play_card(sub: CardData.CardSubType):
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 
 	# 【下跪】：无法使用或打出任何牌
 	if _is_kneeling(p):
@@ -2125,7 +2119,7 @@ func play_card(sub: CardData.CardSubType):
 
 			# 选槽期间若行动或所选原牌过期，不先扣手牌，也不顶掉后来换上的马。
 			if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-					or turn_manager.current_player_idx != p.seat_index \
+					or turn_manager.get_play_actor_idx() != p.seat_index \
 					or turn_manager.get_context_revision() != play_context \
 					or not Player.MOUNT_SLOTS.has(target_slot) or not mount_snapshot.has(target_slot) \
 					or not p.equipment.has(target_slot):
@@ -2185,7 +2179,7 @@ func play_card(sub: CardData.CardSubType):
 # ============================
 
 func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_name: String):
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 
 	# 消耗手牌
 	var card_sub: CardData.CardSubType
@@ -2332,7 +2326,7 @@ func _show_aoe_prompt(card_name: String, required_name: String) -> bool:
 # ============================
 
 func _play_peach_garden():
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 
 	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN):
 		return
@@ -2371,7 +2365,7 @@ func _play_peach_garden():
 # ============================
 
 func _play_harvest():
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 
 	if not await _consume_trick(p, CardData.CardSubType.HARVEST):
 		return
@@ -2418,7 +2412,7 @@ func _play_harvest():
 # ============================
 
 func _play_disarm():
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	if not turn_manager.can_use("disarm"):
 		_update_debug("本回合已使用【卸甲归田】")
 		return
@@ -3155,9 +3149,9 @@ func _resolve_chixiong(p: Player, target: Player):
 	if _game_over or p == null or target == null or not p.is_alive() or not target.is_alive():
 		return
 	var phase = turn_manager.current_phase
-	var actor = turn_manager.current_player_idx
+	var actor = turn_manager.get_play_actor_idx()
 	var valid = func():
-		return not _game_over and p.is_alive() and target.is_alive() and turn_manager.current_phase == phase and turn_manager.current_player_idx == actor
+		return not _game_over and p.is_alive() and target.is_alive() and turn_manager.current_phase == phase and turn_manager.get_play_actor_idx() == actor
 	_update_debug("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
 
 	if target.hand_size() <= 0:
@@ -3504,7 +3498,7 @@ func _show_more_target_confirm(target_name: String) -> bool:
 
 # 执行铁索连环：对每个目标切换连环状态
 func _execute_iron_chain(targets: Array[Player]):
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	# 铁索连环：选完目标执行时重置每步倒计时
 	_reset_play_countdown_if_p0()
 
@@ -4077,7 +4071,7 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 
 	turn_manager.end_waiting()
 
-	if turn_manager.current_player_idx == 0:
+	if turn_manager.get_play_actor_idx() == 0:
 		_play_btn.visible = true
 		_end_play_btn.visible = true
 		_sync_all_ui()
@@ -4732,8 +4726,8 @@ func _do_ping_dian(challenger: Player, opponent: Player, allowed: Callable = Cal
 func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool:
 	return not _game_over and revision == turn_manager.get_context_revision() \
 		and turn_manager.current_phase == TurnManager.Phase.PLAY \
-		and turn_manager.current_player_idx >= 0 and turn_manager.current_player_idx < players.size() \
-		and players[turn_manager.current_player_idx] == actor \
+		and turn_manager.get_play_actor_idx() >= 0 and turn_manager.get_play_actor_idx() < players.size() \
+		and players[turn_manager.get_play_actor_idx()] == actor \
 		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target)))
 
 # ============================
@@ -4855,7 +4849,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 		_:
 			return
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or turn_manager.current_player_idx != p.seat_index \
+			or turn_manager.get_play_actor_idx() != p.seat_index \
 			or turn_manager.get_context_revision() != hide_context or p.has_hidden_equip():
 		return
 	var source: CardBase = null
@@ -5014,7 +5008,7 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 	var old_equipment = _equipment_resource_for_pick(equipper, type_key)
 	var action_valid = func():
 		return not _game_over and equipper.is_alive() and not _is_kneeling(equipper) \
-			and turn_manager.can_play_card() and turn_manager.current_player_idx == equipper.seat_index \
+			and turn_manager.can_play_card() and turn_manager.get_play_actor_idx() == equipper.seat_index \
 			and turn_manager.get_context_revision() == revision \
 			and equipper.hand == snapshot.hand and equipper.determined_cards == snapshot.determined \
 			and _pending_determined_card == pending and _has_play_card(equipper, sub) \
@@ -7798,13 +7792,13 @@ func end_play_phase():
 func _on_play_btn_pressed():
 	if turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	if p.hand_size() <= 0 and p.determined_cards.is_empty():
 		_update_debug("没有手牌了")
 		return
 
 	var selector = _selector_scene.instantiate()
-	selector.player = players[turn_manager.current_player_idx]
+	selector.player = players[turn_manager.get_play_actor_idx()]
 	$UI.add_child(selector)
 	selector.confirmed.connect(_on_selector_confirmed)
 	selector.cancelled.connect(_on_selector_cancelled)
@@ -7826,7 +7820,7 @@ func _on_selector_cancelled():
 func _on_determined_card_clicked(card: CardBase):
 	if turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
-	var p = players[turn_manager.current_player_idx]
+	var p = players[turn_manager.get_play_actor_idx()]
 	if p.seat_index != 0 or not p.determined_cards.has(card):
 		_update_debug("所选的已确定牌已不在当前玩家牌区")
 		return
@@ -7903,7 +7897,7 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 
 # 目标选择模式下的点击处理
 func _on_target_click(target: Player):
-	var attacker = players[turn_manager.current_player_idx]
+	var attacker = players[turn_manager.get_play_actor_idx()]
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -8155,7 +8149,7 @@ func _sync_all_ui():
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])
 
-	var my_turn = (turn_manager.current_player_idx == 0)
+	var my_turn = (turn_manager.get_play_actor_idx() == 0)
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
 		_play_btn.disabled = ((players[0].hand_size() <= 0 and players[0].determined_cards.is_empty()) or _is_kneeling(players[0]))
 	else:
@@ -8203,7 +8197,7 @@ func _refresh_status_line():
 		_halt_countdown()
 		_set_status_line("游戏已结束")
 		return
-	var pid = turn_manager.current_player_idx
+	var pid = turn_manager.get_play_actor_idx()
 	if pid >= players.size():
 		return
 	var pname = players[pid].player_name
@@ -8243,7 +8237,7 @@ func _start_response_countdown(overlay: Control, who: String, on_timeout: Callab
 
 # 出牌阶段成功打出一张牌后重置每步倒计时（仅玩家0出牌阶段且倒计时运行中）
 func _reset_play_countdown_if_p0():
-	if turn_manager.current_player_idx == 0 and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
+	if turn_manager.get_play_actor_idx() == 0 and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
 		_start_play_countdown()
 
 # 停止倒计时并恢复阶段提示（响应结束后回到当前阶段状态）

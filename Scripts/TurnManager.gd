@@ -34,6 +34,14 @@ var current_phase: Phase = Phase.START:
 		if value != current_phase:
 			_context_revision += 1
 		current_phase = value
+		if value not in [Phase.PLAY, Phase.WAITING]:
+			play_actor_idx = -1
+# 单独出牌阶段的操作者，不改变当前回合角色或发放额外回合。
+var play_actor_idx: int = -1:
+	set(value):
+		if value != play_actor_idx:
+			_context_revision += 1
+		play_actor_idx = value
 # 本回合已使用的【杀】次数（摸牌阶段重置；上限由武器决定，-1 = 无限制）
 var strike_count_this_turn: int = 0
 # 每个座位本回合是否已经使用/打出过杀；与主动杀使用次数分开。
@@ -71,6 +79,9 @@ var waiting_response_type: String = ""  # 如 "dodge_for_strike", "strike_for_ba
 
 func get_context_revision() -> int:
 	return _context_revision
+
+func get_play_actor_idx() -> int:
+	return play_actor_idx if play_actor_idx >= 0 and current_phase in [Phase.PLAY, Phase.WAITING] else current_player_idx
 
 func start_game():
 	_context_revision += 1

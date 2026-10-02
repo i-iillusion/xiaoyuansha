@@ -82,6 +82,31 @@ func run(host):
 	actor.hand.append(null)
 	await game._execute_ai_action(old_choices[0])
 	check(actor.hp == 9 and actor.hand == [null], "决策期间换牌不挪用新牌支付旧动作")
+	for recipient in [0, 2]:
+		reset_case()
+		var owner: Player = game.players[1]
+		var receiver: Player = game.players[recipient]
+		owner.general_name = "麦克斯·欧尼斯特"
+		var owner_card = CardBase.create(CardData.CardSubType.DODGE)
+		owner.hand.append(owner_card)
+		var receiver_card = CardBase.create(CardData.CardSubType.PEACH)
+		receiver.determined_cards.append(receiver_card)
+		receiver.hp = 9
+		game.turn_manager.granted_play_target_idx = recipient
+		game.ai_driver.chooser = func(view, _options):
+			check(view.actor == recipient and game.turn_manager.current_player_idx == 1,
+				"赠送阶段AI看到自己的牌，当前回合角色仍是赠送者")
+			return 0
+		await game._do_play(1)
+		if recipient == 0:
+			check(game.turn_manager.get_play_actor_idx() == 0 and game._play_btn.visible,
+				"赠送给真人时显示实际操作者的出牌入口")
+			await game.play_card(CardData.CardSubType.PEACH)
+			game._on_end_play_pressed()
+		check(owner.hand == [owner_card] and receiver.hand_size() == 0 and receiver.hp == 10
+			and game.deck._discard.count(receiver_card) == 1, "赠送阶段只支付/回复实际操作者")
+		check(game.turn_manager.current_player_idx == 1 and game.turn_manager.current_phase == TurnManager.Phase.DISCARD
+			and game.turn_manager.play_actor_idx == -1, "单独阶段结束回到原回合，清除操作者覆盖")
 	game.ai_driver.chooser = previous_chooser
 	reset_case()
 	game.turn_manager.current_player_idx = 0
