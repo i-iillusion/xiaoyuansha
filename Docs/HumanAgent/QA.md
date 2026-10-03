@@ -1,6 +1,24 @@
 # 校园杀开发 QA
 
-## 当前总览（2026-10-02）
+## 当前总览（2026-10-03）
+
+### QA-T88 / DEV-C00：验证超时定位及草稿接收完成
+
+代码/测试本地提交`17b67f3`，规则不变（C-S3/E-04/OPT-01），不改生产GameManager。早期QA-T87超时仍是有效失败记录；本条为后续修复证据，不抹去失败。计时诊断显示完整回归可以走到全部断言，非完整对局死循环；隔离纯远端开启stdout缓冲后2567断言在60秒内通过。Godot调试默认逐条刷新stdout，大量输出可能拖慢运行，见[官方设置说明](https://docs.godotengine.org/en/stable/classes/class_projectsettings.html#class-projectsettings-property-application-run-flush-stdout-on-print)。测试配置只在隔离副本生效，保留stderr和所有正常退出日志；强制终止可能丢失stdout尾部，所以超时一律失败。
+
+新增`Test/run_headless.ps1`、测试配置及使用说明，复制当前源文件并记录哈希/基线/工作区状态；Windows原生日志重定向，固定导入120秒和每组60秒。当前工作区完整验证：2579/40/53/103/24/51/36，共2886断言，全部退出0、无错误/失败/超时，核心40.161秒。日志、results.json及源文件manifest在`.git/local-ci/20261003-161038-5ff33e31/`。七组含原草稿新增12断言，未跳过完整对局回放或降低预期。`git diff --check`通过。
+
+远端再次fetch无新增，仍`b5b4e3a`；本地新提交不推送、无新远端CI，未合main。用户PDF/9月16日报告、原stash和草稿备份保留。边界：无窗口验证不是人工视觉验收；E03其他弹窗和整体初版尚未完成。下一入口DEV-E03e先`_show_nullification_prompt`及轮/链/所有实际锦囊调用者，再舍己/烈火盾；E03-Q1仍待裁决，不据此改觉醒默认。
+
+### QA-T87 / DEV-C00：远端同步与本机草稿合并
+
+基线`8af12e6 → b5b4e3a`共50提交；2026-10-03重新fetch后本机与origin/dev一致，无未解决Git冲突。远端[导入及七组CI成功](https://github.com/i-iillusion/xiaoyuansha/actions/runs/37003680360)，不等于恢复草稿后的本机通过。
+
+依据C-S3/E-04/OPT-01：远端C01只允许武器/防具抢先，已覆盖原普通马三行草稿，生产GameManager保持远端。核心测试挂载保留；equipment_boundary_cases使用真实暗置CardBase，补四种坐骑，标量闭包计数改为共享数组，reset清理原牌指针/坐骑计数，结束恢复阶段。未降低逐点询问/不拼点/不摸牌/不回血的断言；真实用牌及伤害链仍由原C01/C03组覆盖。
+
+原草稿定向运行6断言、2失败，证实凯文/噬血计数夹具错误。修订后定向12断言零失败；本机导入及另外六组通过（40/53/103/24/51/36，共307断言），核心组仍60秒超时；关闭渲染循环未解决，不计七组通过。隔离导出的纯`origin/dev@b5b4e3a`也在核心组完整对局阶段60秒超时，说明该问题不依赖本地草稿；根因尚未定位，不据此称全量兼容验收成功。日志分别为`draft-before-fix`、`draft-after-fix`、`merged-draft`和`clean-remote-baseline`，均位于仓库上级`.merge-verification-20261003/`；首次沙箱导入环境访问失败日志也保留。原草稿stash和独立未跟踪测试备份保留，PDF/审阅报告不动。静态`git diff --check`通过，未合并索引为空。
+
+范围：仅本机冲突/兼容合并，未提交、未推送、未合main，不关闭E03。继续开发前先定位本机核心组超时；功能计划的下一入口仍为E03e的`_show_nullification_prompt`、`_show_sacrifice_prompt`、`_show_liehuo_prompt`及调用者。E03-Q1觉醒取消/超时默认仍待答。详见[同步分析](远端同步分析-2026-10-03.md)。
 
 ### QA-T86 / DEV-E03d：基础响应窗口与失效结果
 
