@@ -4423,10 +4423,11 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			var valid = func():
 				return not _game_over and revision == turn_manager.get_context_revision() \
 					and subject.is_alive() and chain.target_player == subject
-			var substitute = await _maybe_sacrifice(source, subject, data["value"], chain.damage_element, valid)
-			if not valid.call():
+			var reply = await _maybe_sacrifice_result(source, subject, data["value"], chain.damage_element, valid)
+			if reply.invalidated or not valid.call():
 				chain.is_cancelled = true
 				return true
+			var substitute: Player = reply.player
 			if substitute != null:
 				record.transfer_target = substitute
 				record.transfer_amount = data["value"]
@@ -7419,9 +7420,18 @@ func _show_soul_blade_discard_prompt(victim_name: String, need: int) -> bool:
 # 返回打出者（null = 无人打出）
 # 规则：受伤者本人不能使用；AI 暂不主动打出（与无懈一致）；玩家0有手牌时弹窗询问
 func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Player:
+	var reply = await _maybe_sacrifice_result(_source, target, amount, _element, allowed)
+	return null if reply.invalidated else reply.player
+
+# 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
+func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Dictionary:
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and target.is_alive() and (not allowed.is_valid() or allowed.call())
 	for i in range(player_count):
-		if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
-			return null
+		if not valid.call():
+			return {"invalidated": true, "player": null}
 		var p = players[i]
 		if p == target or not p.is_alive():
 			continue
@@ -7434,23 +7444,23 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 		if _sacrifice_actor_override.is_valid():
 			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
 		elif p.seat_index == 0:
-			play = await _show_sacrifice_prompt(target, amount)
+			play = await _show_sacrifice_prompt(target, amount, valid)
 		else:
 			var options: Array = [CardData.CardSubType.SACRIFICE] if HandPayment.has_card(p, CardData.CardSubType.SACRIFICE) else []
 			if await _choose_ai_response(p, "sacrifice", options, {"target": target.seat_index, "amount": amount}) == CardData.CardSubType.SACRIFICE:
 				play = "card"
 
+		if play == "invalidated" or not valid.call():
+			return {"invalidated": true, "player": null}
 		if play != "skip":
-			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
-				return null
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE))
-			if _game_over or not target.is_alive() or (allowed.is_valid() and not allowed.call()):
-				return null
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE), true)
+			if yes_ah == "invalidated" or not valid.call():
+				return {"invalidated": true, "player": null}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			if yes_ah == "cancel":
@@ -7459,7 +7469,10 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 				continue
 			var action_card: CardBase
 			if yes_ah == "skill":
-				if not await _pay_yes_ah_cost(p):
+				var paid = await _pay_yes_ah_cost(p)
+				if not valid.call():
+					return {"invalidated": true, "player": null}
+				if not paid:
 					_sync_all_ui()
 					continue
 				action_card = CardBase.create(CardData.CardSubType.SACRIFICE)
@@ -7470,14 +7483,16 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 				deck.discard(used_card)
 				action_card = used_card
 			_sync_all_ui()
-			if _game_over or not target.is_alive() or not p.is_alive() or (allowed.is_valid() and not allowed.call()):
-				return null # 已支付的费用不回滚。
+			if not valid.call() or not p.is_alive():
+				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
 			_record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
-			return p
-	return null
+			if not valid.call():
+				return {"invalidated": true, "player": null}
+			return {"invalidated": false, "player": p}
+	return {"invalidated": false, "player": null}
 
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
-func _show_sacrifice_prompt(target: Player, amount: int) -> String:
+func _show_sacrifice_prompt(target: Player, amount: int, allowed: Callable = Callable()) -> String:
 	var p = players[0]
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.SACRIFICE)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
@@ -7530,22 +7545,13 @@ func _show_sacrifice_prompt(target: Player, amount: int) -> String:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = ["skip"]
-	sacrifice_btn.pressed.connect(func():
-		result[0] = "card" if has_hand else "skill"
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = "skip"
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	var answer = ChoicePromptAnswer.new()
+	sacrifice_btn.pressed.connect(answer.submit.bind(1))
+	skip_btn.pressed.connect(answer.submit.bind(0))
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	if result == CHOICE_INVALID:
+		return "invalidated"
+	return ("card" if has_hand else "skill") if result == 1 else "skip"
 
 # ============================
 #  濒死结算
