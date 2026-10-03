@@ -787,6 +787,8 @@ func _run():
 	await sacrifice_prompt_cases.run(self)
 	var liehuo_prompt_cases = load("res://Test/liehuo_prompt_cases.gd").new()
 	await liehuo_prompt_cases.run(self)
+	var zhangba_prompt_cases = load("res://Test/zhangba_prompt_cases.gd").new()
+	await zhangba_prompt_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

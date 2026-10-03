@@ -3209,16 +3209,17 @@ func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: 
 	return result
 
 # 丈八蛇矛：杀命中后、扣血前询问流失体力数（X≤3），合并伤害。
-# 返回流失的体力数（0 = 放弃）；AI 不主动流失
-func _ask_zhangba_extra(p: Player) -> int:
+# 返回流失的体力数（0 = 放弃，CHOICE_INVALID = 等待失效）；AI 不主动流失。
+func _ask_zhangba_extra(p: Player, allowed: Callable = Callable()) -> int:
 	# 测试钩子
 	if _zhangba_override.is_valid():
-		return _zhangba_override.call()
+		return await _zhangba_override.call()
 
 	# AI 不主动流失
 	if p.seat_index != 0:
 		return 0
 
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3253,15 +3254,11 @@ func _ask_zhangba_extra(p: Player) -> int:
 		else:
 			btn.text = "流失 %d 点" % x
 		btn.custom_minimum_size = Vector2(120, 44)
-		btn.pressed.connect(_emit_zhangba_pick.bind(overlay, x), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(x))
 		hbox.add_child(btn)
 
-	var result = await _zhangba_result
-	return result
-
-func _emit_zhangba_pick(overlay: ColorRect, x: int):
-	overlay.queue_free()
-	_zhangba_result.emit(x)
+	# 原丈八窗口没有计时；生命周期迁移不添加默认选项。
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # ============================
 #  雌雄双股剑
@@ -4373,13 +4370,39 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					_sync_all_ui()
 					return true
 			if weapon == CardData.CardSubType.ZHANGBA_SPEAR:
-				var extra = clampi(await _ask_zhangba_extra(subject), 0, 3)
+				var original_weapon = subject.get_equipment_card("weapon")
+				var revision = turn_manager.get_context_revision()
+				var hit_valid = func():
+					return not _game_over and not chain.is_cancelled \
+						and revision == turn_manager.get_context_revision() \
+						and players.has(actual) and actual.is_alive() and chain.target_player == actual
+				var choice_valid = func():
+					return hit_valid.call() and players.has(subject) and subject.is_alive() \
+						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ZHANGBA_SPEAR \
+						and subject.get_equipment_card("weapon") == original_weapon \
+						and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+				var chosen = await _ask_zhangba_extra(subject, choice_valid)
+				if not hit_valid.call():
+					chain.is_cancelled = true
+					return true
+				# TIME-04：等待中来源最终死亡，不能发动/支付丈八，原杀余伤无源继续。
+				if subject.is_dead():
+					record.refresh_source()
+					return false
+				if chosen < 0 or not choice_valid.call():
+					chain.is_cancelled = true
+					return true
+				var extra = clampi(chosen, 0, 3)
 				if extra > 0:
 					var rage_before = _rage_bonus(subject)
 					subject.hp -= extra
 					_update_debug("%s 流失 %d 点体力（发动【丈八蛇矛】，尚未造成伤害）" % [subject.player_name, extra])
 					if subject.is_dying():
 						await _resolve_dying(subject, null, "zhangba", chain)
+					# 已付费用不回滚；救援后来源死亡/武器离区不撤销已付加伤。
+					if not hit_valid.call():
+						chain.is_cancelled = true
+						return true
 					# 原始基础值已经含暴怒；只更新差额，不能重复加整个已损失体力。
 					var rage_delta = _rage_bonus(subject) - rage_before if not subject.is_dead() else 0
 					data["value"] += extra + rage_delta
