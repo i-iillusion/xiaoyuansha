@@ -12,8 +12,8 @@ func reset():
 	game.turn_manager.current_phase = TurnManager.Phase.PLAY
 	game._chixiong_activate_override = Callable()
 	game._chixiong_target_override = func(): return false
-	game.players[0].gender = "男"
-	game.players[1].gender = "女"
+	game.players[0].gender = "male"
+	game.players[1].gender = "female"
 
 func drive(action: String, actor: Player, target: Player):
 	var pending = game._choice_prompt_stack.back()
@@ -94,8 +94,111 @@ func run(host):
 	next.call_deferred()
 	suite.check(await game._ask_chixiong_activate("B") == 0, "E03e-5a：下一合法拒绝仍可完成")
 	await suite.process_frame
+	await run_target_choices()
 	reset()
 	for i in game.players.size(): game.players[i].gender = genders[i]
 	game._chixiong_target_override = Callable()
 	suite = null
 	game = null
+
+func run_target_choices():
+	for result in [true, false, -2]:
+		reset()
+		game._chixiong_activate_override = func(): return result
+		game._chixiong_target_override = func(): return result
+		var expected = -2 if typeof(result) == TYPE_INT else (1 if result else 0)
+		suite.check(await game._ask_chixiong_activate("B") == expected, "E03e-5b：发动者旧bool钩子与整数失效值兼容")
+		suite.check(await game._show_chixiong_target_prompt("B") == expected, "E03e-5b：目标旧bool钩子与整数失效值兼容")
+	for concrete in [false, true]:
+		windows.clear()
+		for action in ["yes", "no", "close", "phase", "actor", "weapon", "gender", "target_dead", "source_dead", "ended"]:
+			reset()
+			game._chixiong_target_override = Callable()
+			game.turn_manager.play_actor_idx = 1
+			var actor = game.players[1]
+			var target = game.players[0]
+			actor.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.CHIXIONG_SHUANGGU))
+			var original = CardBase.create(CardData.CardSubType.STRIKE) if concrete else null
+			var payment = CardBase.create(CardData.CardSubType.PEACH) if concrete else null
+			if concrete:
+				actor.determined_cards.append(original)
+				target.determined_cards.append(payment)
+			else:
+				actor.hand.append(null)
+				target.hand.append(null)
+			# 主动改变实际操作者后恢复同值，以验证代次而不是只比索引。
+			var click = func():
+				if action == "actor":
+					game.turn_manager.play_actor_idx = 0
+					game.turn_manager.play_actor_idx = 1
+					var pending = game._choice_prompt_stack.back()
+					windows.append(pending.overlay)
+					pending.overlay.find_children("*", "Button", true, false)[0].pressed.emit()
+				else: drive(action, actor, target)
+			click.call_deferred()
+			await game.execute_card_on_target(target, CardData.CardSubType.STRIKE)
+			var continued = action in ["yes", "no", "source_dead"]
+			suite.check(target.hp == (0 if action == "target_dead" else (9 if continued else 10)),
+				"E03e-5b：目标关闭/过期停旧杀，有效选择/源死亡仍结算：" + action)
+			suite.check(target.hand_size() == (0 if action == "yes" else 1)
+				and actor.hand_size() == (1 if action in ["no", "weapon"] else 0),
+				"E03e-5b：失效不是免费摸牌，有效选择只执行其分支：" + action)
+			suite.check(game.deck._discard.size() == (2 if concrete and action == "yes" else 1)
+				and game.deck._discard[0].sub_type == CardData.CardSubType.STRIKE
+				and (not concrete or game.deck._discard[0] == original)
+				and (not concrete or action != "yes" or game.deck._discard[1] == payment),
+				"E03e-5b：真实杀和所选原手牌各弃一次，任意弃牌不伪造实体")
+			suite.check(game._choice_prompt_stack.is_empty(), "E03e-5b：目标选择完成等待")
+		await suite.process_frame
+		suite.check(windows.all(func(window): return not is_instance_valid(window)), "E03e-5b：全部目标窗口已释放")
+	# 已选弃牌后的外层，保留强制重选并传播失效；复用已有选牌helper。
+	for action in ["retry", "phase", "weapon", "source_dead", "ended"]:
+		reset()
+		game._chixiong_activate_override = func(): return true
+		game._chixiong_target_override = func(): return true
+		var actor = game.players[0]
+		var target = game.players[1]
+		actor.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.CHIXIONG_SHUANGGU))
+		actor.hand.append(null)
+		var payment = CardBase.create(CardData.CardSubType.PEACH)
+		target.determined_cards.append(payment)
+		var attempts: Array = []
+		game._hand_discard_override = func(_snapshot, _count, mandatory):
+			suite.check(mandatory, "E03e-5b：选择弃牌后不能取消支付")
+			attempts.append(true)
+			if action == "retry" and attempts.size() == 1: return []
+			match action:
+				"phase":
+					game.turn_manager.current_phase = TurnManager.Phase.END
+					game.turn_manager.current_phase = TurnManager.Phase.PLAY
+				"weapon": actor.determined_cards.append(actor.remove_equipment("weapon"))
+				"source_dead":
+					actor.hp = 0
+					actor.mark_dead()
+				"ended": game._finish_game("平局", "E03e-5b弃牌回归")
+			return [0]
+		await game.execute_card_on_target(target, CardData.CardSubType.STRIKE)
+		suite.check(target.hp == (9 if action in ["retry", "source_dead"] else 10)
+			and target.hand_size() == (0 if action == "retry" else 1), "E03e-5b：强制弃牌失效传播到真实杀，不误付/误伤：" + action)
+		suite.check(game.deck._discard.count(payment) == (1 if action == "retry" else 0)
+			and attempts.size() == (2 if action == "retry" else 1), "E03e-5b：只重问无效强制选择，不重问失效动作")
+	# 旧目标按钮与旧共享信号不能令下一窗口免费选择。
+	reset()
+	var old: Array = []
+	var close = func():
+		var pending = game._choice_prompt_stack.back()
+		old.append(pending.overlay.find_children("*", "Button", true, false)[1].get_signal_connection_list("pressed")[0].callable)
+		pending.overlay.queue_free()
+	close.call_deferred()
+	game._chixiong_target_override = Callable()
+	suite.check(await game._show_chixiong_target_prompt("A") == game.CHOICE_INVALID, "E03e-5b：目标关闭显式失效")
+	await suite.process_frame
+	var next = func():
+		var pending = game._choice_prompt_stack.back()
+		old[0].call()
+		game._chixiong_target_result.emit(false)
+		suite.check(not pending.answer.settled, "E03e-5b：旧目标按钮/信号隔离")
+		pending.overlay.find_children("*", "Button", true, false)[0].pressed.emit()
+	next.call_deferred()
+	suite.check(await game._show_chixiong_target_prompt("A") == 1, "E03e-5b：下一合法目标选择正常")
+	await suite.process_frame

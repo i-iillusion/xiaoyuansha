@@ -1830,7 +1830,13 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 		if activate == CHOICE_INVALID or not choice_valid.call():
 			return false
 		if activate == 1:
-			await _resolve_chixiong(p, target)
+			var resolved = await _resolve_chixiong(p, target, choice_valid)
+			if not hit_valid.call():
+				return false
+			if p.is_dead():
+				return true # TIME-04：目标选择期间来源死亡，不吞掉剩余无源伤害。
+			if not resolved or not choice_valid.call():
+				return false
 
 	return true
 
@@ -3288,7 +3294,7 @@ func _ask_chixiong_activate(target_name: String, allowed: Callable = Callable())
 	# 测试钩子
 	if _chixiong_activate_override.is_valid():
 		var result = await _chixiong_activate_override.call()
-		return CHOICE_INVALID if result == CHOICE_INVALID else (1 if result else 0)
+		return CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
 	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
@@ -3335,48 +3341,61 @@ func _ask_chixiong_activate(target_name: String, allowed: Callable = Callable())
 
 # 结算雌雄双股剑：目标选择「弃置一张手牌」或「令使用者摸一张牌」
 # 目标没有手牌时只能选择令使用者摸一张牌（原版规则）
-func _resolve_chixiong(p: Player, target: Player):
+func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()) -> bool:
 	if _game_over or p == null or target == null or not p.is_alive() or not target.is_alive():
-		return
-	var phase = turn_manager.current_phase
-	var actor = turn_manager.get_play_actor_idx()
+		return false
+	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and p.is_alive() and target.is_alive() and turn_manager.current_phase == phase and turn_manager.get_play_actor_idx() == actor
+		return not _game_over and players.has(p) and players.has(target) and p.is_alive() and target.is_alive() \
+			and turn_manager.get_context_revision() == revision and (not allowed.is_valid() or allowed.call())
+	if not valid.call():
+		return false
 	_update_debug("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
 
 	if target.hand_size() <= 0:
 		_draw_blank_cards(p, 1)
 		_update_debug("%s 没有手牌，只能选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
 		_sync_all_ui()
-		return
+		return valid.call()
 
-	var discard = false
+	var choice = 0
 	if _chixiong_target_override.is_valid():
-		discard = _chixiong_target_override.call()
+		var result = await _chixiong_target_override.call()
+		choice = CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
 	elif target.seat_index == 0:
-		discard = await _show_chixiong_target_prompt(p.player_name)
+		choice = await _show_chixiong_target_prompt(p.player_name, valid)
 	else:
 		# AI 目标：50% 概率弃一张手牌
-		discard = randi() % 2 == 0
+		choice = 1 if randi() % 2 == 0 else 0
 
-	if not valid.call():
-		return
-	if discard:
+	if choice == CHOICE_INVALID or not valid.call():
+		return false
+	if choice == 1:
 		# 已选择弃牌分支；烈火盾不替代雌雄失牌，快照失效重新选择。
 		while valid.call() and target.hand_size() > 0:
-			if await _select_hand_discard(target, 1, true, valid):
+			var outcome = await _select_hand_discard_result(target, 1, true, valid)
+			if not valid.call():
+				return false
+			if outcome == HandDiscardOutcome.PAID:
 				_update_debug("%s 选择弃置一张手牌（剩余 %d 张）" % [target.player_name, target.hand_size()])
 				break
+			if outcome in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED]:
+				return false
+			if outcome == HandDiscardOutcome.INSUFFICIENT_CARDS:
+				break # 沿用已选弃牌期间手牌耗尽的处理，不改成摸牌分支。
 	else:
 		_draw_blank_cards(p, 1)
 		_update_debug("%s 选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
 	_sync_all_ui()
+	return valid.call()
 
-# 目标（玩家0）选择：弃一张手牌 / 令使用者摸牌；返回 true = 弃牌
-func _show_chixiong_target_prompt(attacker_name: String) -> bool:
+# 目标（玩家0）：1弃牌、0令使用者摸牌、CHOICE_INVALID失效；无倒计时。
+func _show_chixiong_target_prompt(attacker_name: String, allowed: Callable = Callable()) -> int:
 	# 测试钩子
 	if _chixiong_target_override.is_valid():
-		return _chixiong_target_override.call()
+		var result = await _chixiong_target_override.call()
+		return CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3408,23 +3427,16 @@ func _show_chixiong_target_prompt(attacker_name: String) -> bool:
 	var discard_btn = Button.new()
 	discard_btn.text = "弃置一张手牌"
 	discard_btn.custom_minimum_size = Vector2(220, 44)
-	discard_btn.pressed.connect(func():
-		overlay.queue_free()
-		_chixiong_target_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	discard_btn.pressed.connect(func(): answer.submit(1))
 	hbox.add_child(discard_btn)
 
 	var draw_btn = Button.new()
 	draw_btn.text = "令 %s 摸一张牌" % attacker_name
 	draw_btn.custom_minimum_size = Vector2(220, 44)
-	draw_btn.pressed.connect(func():
-		overlay.queue_free()
-		_chixiong_target_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	draw_btn.pressed.connect(func(): answer.submit(0))
 	hbox.add_child(draw_btn)
 
-	var result = await _chixiong_target_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # ============================
 #  寒冰剑
