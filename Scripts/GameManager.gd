@@ -1810,10 +1810,26 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 	# 时机在目标响应（出闪）之前，先于伤害结算（与方天画戟互斥武器，正常不会同时触发）
 	if target.is_alive() and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU and target.gender != p.gender \
 			and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-		var activate = true
+		var original_weapon = p.get_equipment_card("weapon")
+		var revision = turn_manager.get_context_revision()
+		var hit_valid = func():
+			return not _game_over and revision == turn_manager.get_context_revision() \
+				and players.has(target) and target.is_alive()
+		var choice_valid = func():
+			return hit_valid.call() and players.has(p) and p.is_alive() \
+				and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU \
+				and p.get_equipment_card("weapon") == original_weapon and p.gender != target.gender \
+				and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+		var activate = 1
 		if p.seat_index == 0:
-			activate = await _ask_chixiong_activate(target.player_name)
-		if activate:
+			activate = await _ask_chixiong_activate(target.player_name, choice_valid)
+		if not hit_valid.call():
+			return false
+		if p.is_dead():
+			return true # TIME-04：已用杀余伤继续无源，不继续雌雄选择。
+		if activate == CHOICE_INVALID or not choice_valid.call():
+			return false
+		if activate == 1:
 			await _resolve_chixiong(p, target)
 
 	return true
@@ -3267,11 +3283,13 @@ func _ask_zhangba_extra(p: Player, allowed: Callable = Callable()) -> int:
 signal _chixiong_activate_result(result: bool)
 signal _chixiong_target_result(discard: bool)
 
-# 使用者（玩家0）确认是否发动雌雄双股剑；返回 true = 发动
-func _ask_chixiong_activate(target_name: String) -> bool:
+# 使用者（玩家0）：1发动、0不发动、CHOICE_INVALID窗口失效；保留无倒计时。
+func _ask_chixiong_activate(target_name: String, allowed: Callable = Callable()) -> int:
 	# 测试钩子
 	if _chixiong_activate_override.is_valid():
-		return _chixiong_activate_override.call()
+		var result = await _chixiong_activate_override.call()
+		return CHOICE_INVALID if result == CHOICE_INVALID else (1 if result else 0)
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3303,24 +3321,17 @@ func _ask_chixiong_activate(target_name: String) -> bool:
 	var yes_btn = Button.new()
 	yes_btn.text = "发动"
 	yes_btn.custom_minimum_size = Vector2(160, 44)
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_chixiong_activate_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	yes_btn.pressed.connect(func(): answer.submit(1))
 	hbox.add_child(yes_btn)
 
 	var no_btn = Button.new()
 	no_btn.text = "不发动"
 	no_btn.custom_minimum_size = Vector2(160, 44)
 	no_btn.modulate = Color(0.7, 0.7, 0.7)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_chixiong_activate_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0))
 	hbox.add_child(no_btn)
 
-	var result = await _chixiong_activate_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 结算雌雄双股剑：目标选择「弃置一张手牌」或「令使用者摸一张牌」
 # 目标没有手牌时只能选择令使用者摸一张牌（原版规则）
