@@ -781,6 +781,8 @@ func _run():
 	await awaken_lifecycle_cases.run(self)
 	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
 	await basic_prompt_cases.run(self)
+	var nullification_prompt_cases = load("res://Test/nullification_prompt_cases.gd").new()
+	await nullification_prompt_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

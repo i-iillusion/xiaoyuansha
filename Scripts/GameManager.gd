@@ -816,7 +816,8 @@ func _do_judge(pid: int):
 		var target = players[turn_manager.granted_judge_target_idx]
 		turn_manager.granted_judge_target_idx = -1
 		if target.is_alive():
-			await _run_judgment(target, true)
+			if not await _run_judgment(target, true):
+				return
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
@@ -831,25 +832,37 @@ func _do_judge(pid: int):
 		turn_manager.advance_phase()
 		return
 
-	await _run_judgment(p, false)
+	if not await _run_judgment(p, false):
+		return
 	_sync_all_ui()
 	turn_manager.advance_phase()
 
 # 判定结算循环（抽取公用）：结算角色 p 判定区的全部延时锦囊（后放置的先判定）
 # granted=true = 【烂忠厚】授予的判定阶段：乐不思蜀/兵粮寸断失效（不触发效果）；闪电/火烧连营正常生效
-func _run_judgment(p: Player, granted: bool):
+func _run_judgment(p: Player, granted: bool) -> bool:
+	var revision = turn_manager.get_context_revision()
 	if granted:
 		_update_debug("%s 进行（授予的）判定阶段：判定区 %d 张牌（乐不思蜀/兵粮寸断失效）" % [p.player_name, p.judgment_cards.size()])
 	else:
 		_update_debug("%s 判定阶段：判定区 %d 张牌（后放置的先判定）" % [p.player_name, p.judgment_cards.size()])
 
 	while not p.judgment_cards.is_empty() and p.is_alive():
-		var card = p.judgment_cards.pop_back()
+		if _game_over or revision != turn_manager.get_context_revision():
+			return false
+		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
+		var card = p.judgment_cards.back()
+		var nullified = NullificationOutcome.PASSED
+		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
+			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
+		if needs_nullification:
+			var valid = func(): return players.has(p) and p.is_alive() and not p.judgment_cards.is_empty() and p.judgment_cards.back() == card
+			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
+			if nullified == NullificationOutcome.INVALIDATED:
+				return false
+		p.judgment_cards.pop_back()
 		match card.sub_type:
 			CardData.CardSubType.LIGHTNING:
-				# 无懈可击：判定生效前询问
-				var lt_nullified = await _ask_nullification_chain("%s的【闪电】即将生效，是否打出一张【无懈可击】？" % p.player_name)
-				if lt_nullified:
+				if nullified == NullificationOutcome.NULLIFIED:
 					_update_debug("【闪电】的效果被【无懈可击】抵消")
 				else:
 					_update_debug("【闪电】判定：必定命中！即将对 %s 造成 3 点雷电伤害" % p.player_name)
@@ -860,8 +873,7 @@ func _run_judgment(p: Player, granted: bool):
 					# 【烂忠厚】授予的判定阶段：乐不思蜀失效（不触发效果）
 					_update_debug("【乐不思蜀】在授予的判定阶段失效，不触发效果")
 				else:
-					var ig_nullified = await _ask_nullification_chain("%s的【乐不思蜀】即将生效，是否打出一张【无懈可击】？" % p.player_name)
-					if ig_nullified:
+					if nullified == NullificationOutcome.NULLIFIED:
 						_update_debug("【乐不思蜀】的效果被【无懈可击】抵消")
 					else:
 						_update_debug("【乐不思蜀】判定：必定生效！%s 本回合跳过出牌阶段" % p.player_name)
@@ -871,16 +883,13 @@ func _run_judgment(p: Player, granted: bool):
 					# 【烂忠厚】授予的判定阶段：兵粮寸断失效（不触发效果）
 					_update_debug("【兵粮寸断】在授予的判定阶段失效，不触发效果")
 				else:
-					var ss_nullified = await _ask_nullification_chain("%s的【兵粮寸断】即将生效，是否打出一张【无懈可击】？" % p.player_name)
-					if ss_nullified:
+					if nullified == NullificationOutcome.NULLIFIED:
 						_update_debug("【兵粮寸断】的效果被【无懈可击】抵消")
 					else:
 						_update_debug("【兵粮寸断】判定：必定生效！%s 本回合摸牌阶段少摸一张" % p.player_name)
 						turn_manager.supply_shortage_active = true
 			CardData.CardSubType.BURNING_CAMP:
-				# 无懈可击：判定生效前询问
-				var bc_nullified = await _ask_nullification_chain("%s的【火烧连营】即将生效，是否打出一张【无懈可击】？" % p.player_name)
-				if bc_nullified:
+				if nullified == NullificationOutcome.NULLIFIED:
 					_update_debug("【火烧连营】的效果被【无懈可击】抵消")
 				else:
 					_update_debug("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
@@ -900,6 +909,7 @@ func _run_judgment(p: Player, granted: bool):
 		for c in p.judgment_cards:
 			deck.discard(c)
 		p.judgment_cards.clear()
+	return not _game_over and revision == turn_manager.get_context_revision()
 
 func _do_draw(pid: int):
 	var p = players[pid]
@@ -2359,8 +2369,10 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			continue
 
 		# 无懈可击：效果即将对目标生效前，询问所有角色
-		var nullified = await _ask_nullification_chain("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name])
-		if nullified:
+		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name])
+		if nullified == NullificationOutcome.INVALIDATED:
+			break
+		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
@@ -2501,10 +2513,12 @@ func _play_peach_garden():
 			_update_debug("%s 处于【下跪】状态，【桃园结义】对其无效" % target.player_name)
 			continue
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if _game_over or revision != turn_manager.get_context_revision():
+		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
 			break
-		if nullified:
+		if not target.is_alive() or _is_kneeling(target):
+			continue
+		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【桃园结义】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 		if target.hp >= target.max_hp:
@@ -2547,10 +2561,12 @@ func _play_harvest():
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if _game_over or revision != turn_manager.get_context_revision():
+		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
 			break
-		if nullified:
+		if not target.is_alive() or _is_kneeling(target):
+			continue
+		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【五谷丰登】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 
@@ -2600,10 +2616,12 @@ func _play_disarm():
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if _game_over or revision != turn_manager.get_context_revision():
+		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
 			break
-		if nullified:
+		if not target.is_alive() or _is_kneeling(target):
+			continue
+		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【卸甲归田】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 
@@ -2678,8 +2696,10 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 		return
 
 	# 无懈可击：效果即将对目标生效前
-	var nullified = await _ask_nullification_chain("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name])
-	if nullified:
+	var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name], valid)
+	if nullified == NullificationOutcome.INVALIDATED:
+		return
+	if nullified == NullificationOutcome.NULLIFIED:
 		_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 		return
 
@@ -3674,8 +3694,12 @@ func _execute_iron_chain(targets: Array[Player]):
 
 	for t in targets:
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
-		if nullified:
+		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
+		if nullified == NullificationOutcome.INVALIDATED:
+			break
+		if not t.is_alive() or _is_kneeling(t):
+			continue
+		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【铁索连环】对 %s 的效果被【无懈可击】抵消" % t.player_name)
 			continue
 		t.chained = not t.chained
@@ -3729,8 +3753,10 @@ func _play_duel(attacker: Player, target: Player):
 	_update_debug("%s 对 %s 发起【决斗】！" % [attacker.player_name, target.player_name])
 
 	# 无懈可击：决斗即将对目标生效前
-	var nullified = await _ask_nullification_chain("%s的【决斗】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, target.player_name])
-	if nullified:
+	var nullified = await _ask_nullification_chain_result("%s的【决斗】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, target.player_name])
+	if nullified == NullificationOutcome.INVALIDATED:
+		return
+	if nullified == NullificationOutcome.NULLIFIED:
 		_update_debug("【决斗】的效果被【无懈可击】抵消")
 		return
 
@@ -3936,23 +3962,40 @@ func _spawn_burning_camp(target: Player, source_seat: int):
 # ============================
 
 # 无懈可击链式询问：任何锦囊/判定生效前调用
-# desc = 第一轮提示文本。返回 true = 效果最终被无懈可击抵消
+# desc = 第一轮提示文本。兼容入口只报告是否抵消；生产链使用显式结果。
 # 规则：有人打出无懈 → 再问所有人是否反无懈 → 交替直到无人响应
+enum NullificationOutcome { PASSED, NULLIFIED, INVALIDATED }
+
 func _ask_nullification_chain(desc: String) -> bool:
+	return await _ask_nullification_chain_result(desc) == NullificationOutcome.NULLIFIED
+
+func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable()) -> NullificationOutcome:
 	var pending: bool = false        # 当前是否有一张生效中的无懈
 	var round_desc: String = desc
+	var revision = turn_manager.get_context_revision()
 	while true:
-		var actor_name = await _ask_nullification_round(round_desc)
-		if actor_name == "":
-			return pending
+		var reply = await _ask_nullification_round_result(round_desc, allowed)
+		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
+			return NullificationOutcome.INVALIDATED
+		if reply.outcome == NullificationOutcome.PASSED:
+			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
 		pending = not pending
-		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % actor_name
-	return false
+		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
+	return NullificationOutcome.INVALIDATED
 
 # 询问一轮：按座位顺序询问所有存活角色，返回打出无懈的玩家名（无人打出返回 ""）
 func _ask_nullification_round(desc: String) -> String:
+	var reply = await _ask_nullification_round_result(desc)
+	return reply.actor_name if reply.outcome == NullificationOutcome.NULLIFIED else ""
+
+func _ask_nullification_round_result(desc: String, allowed: Callable = Callable()) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and (not allowed.is_valid() or allowed.call())
 	for i in range(player_count):
+		if not valid.call():
+			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		var p = players[i]
 		if not p.is_alive():
 			continue
@@ -3962,35 +4005,36 @@ func _ask_nullification_round(desc: String) -> String:
 		var snapshot = HandSelection.new(p)
 		var played = "skip"
 		if p.seat_index == 0:
-			played = await _show_nullification_prompt(desc, p)
+			played = await _show_nullification_prompt(desc, p, valid)
 		else:
 			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else []
 			if await _choose_ai_response(p, "nullification", options, {"description": desc}) == CardData.CardSubType.NULLIFICATION:
 				played = "card"
-		if _game_over or revision != turn_manager.get_context_revision():
-			return ""
+		if played == "invalidated" or not valid.call():
+			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		if played != "skip":
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION))
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION), true)
+			if yes_ah == "invalidated" or not valid.call():
+				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
-			if _game_over or revision != turn_manager.get_context_revision():
-				return ""
 			if yes_ah == "cancel":
 				_update_debug("%s 取消了打出【无懈可击】" % p.player_name)
 				_sync_all_ui()
-				return ""
+				return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 			var action_card: CardBase
 			if yes_ah == "skill":
-				if not await _pay_yes_ah_cost(p):
+				var paid = await _pay_yes_ah_cost(p)
+				if not valid.call():
+					return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
+				if not paid:
 					_sync_all_ui()
-					return ""
-				if _game_over or revision != turn_manager.get_context_revision():
-					return ""
+					return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 				action_card = CardBase.create(CardData.CardSubType.NULLIFICATION)
 			else:
 				var used_card = HandPayment.take_card(p, CardData.CardSubType.NULLIFICATION)
@@ -4003,11 +4047,13 @@ func _ask_nullification_round(desc: String) -> String:
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
 			await _maybe_ask_reveal()
-			return p.player_name
-	return ""
+			if not valid.call():
+				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
+			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name}
+	return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
-func _show_nullification_prompt(desc: String, p: Player) -> String:
+func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Callable()) -> String:
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
@@ -4059,22 +4105,13 @@ func _show_nullification_prompt(desc: String, p: Player) -> String:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = ["skip"]
-	nullify_btn.pressed.connect(func():
-		result[0] = "card" if has_hand else "skill"
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = "skip"
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	var answer = ChoicePromptAnswer.new()
+	nullify_btn.pressed.connect(answer.submit.bind(1))
+	skip_btn.pressed.connect(answer.submit.bind(0))
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	if result == CHOICE_INVALID:
+		return "invalidated"
+	return ("card" if has_hand else "skill") if result == 1 else "skip"
 
 # ---- 效果链回调 ----
 
@@ -4845,7 +4882,7 @@ func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool
 
 # 使用锦囊牌时询问是否发动【是~啊~】：
 # has_hand = 当前是否有手牌可消耗；返回 "skill"（发动，流失体力不消耗手牌）/ "card"（不发动，照常消耗）/ "cancel"（取消，视为没有打出）
-func _ask_yes_ah(p: Player, card_name: String, has_hand: bool) -> String:
+func _ask_yes_ah(p: Player, card_name: String, has_hand: bool, preserve_invalid: bool = false) -> String:
 	# 明确点击了已确定牌时必须使用该原牌，不能改以技能虚拟使用并把原牌留在手中。
 	if _pending_determined_card != null:
 		return "card"
@@ -4855,11 +4892,13 @@ func _ask_yes_ah(p: Player, card_name: String, has_hand: bool) -> String:
 		return _yes_ah_override.call()
 	if p.seat_index != 0:
 		return "card" if has_hand else "cancel"  # AI 暂不发动
-	return await _show_yes_ah_prompt(card_name, has_hand)
+	return await _show_yes_ah_prompt(card_name, has_hand, preserve_invalid)
 
 # 玩家0 的【是~啊~】询问弹窗（复用通用选择弹窗）
-func _show_yes_ah_prompt(card_name: String, has_hand: bool) -> String:
+func _show_yes_ah_prompt(card_name: String, has_hand: bool, preserve_invalid: bool = false) -> String:
 	var idx = await _show_choice_popup("是否发动【是~啊~】？\n（流失 1 点体力，视为使用了一张【%s】，不消耗手牌）" % card_name, ["发动【是~啊~】", "不发动（消耗手牌）" if has_hand else "取消（视为没有打出）"])
+	if preserve_invalid and idx == CHOICE_INVALID:
+		return "invalidated"
 	if idx == 0:
 		return "skill"
 	if idx == 1 and has_hand:
