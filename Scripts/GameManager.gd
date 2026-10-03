@@ -2690,7 +2690,8 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	_update_debug("%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name])
 
 	# 成为目标时先处理烈火盾；无效后不选装备、不移动任何目标牌。
-	if await _try_liehuo_nullify(target, sub, valid):
+	var shield_result = await _try_liehuo_nullify_result(target, sub, valid)
+	if shield_result != LiehuoOutcome.NOT_USED:
 		return
 	if not valid.call():
 		return
@@ -4148,40 +4149,51 @@ func _try_bagua_draw(p: Player):
 
 # C-L1：只在成为拆/顺目标时失去1体力，令该次牌对自己无效。
 # 返回true即本次牌已被防止；求救结果不恢复已被防止的牌效果。
+enum LiehuoOutcome { NOT_USED, PREVENTED, INVALIDATED }
+
 func _try_liehuo_nullify(p: Player, sub: CardData.CardSubType, allowed: Callable = Callable()) -> bool:
+	return await _try_liehuo_nullify_result(p, sub, allowed) == LiehuoOutcome.PREVENTED
+
+func _try_liehuo_nullify_result(p: Player, sub: CardData.CardSubType, allowed: Callable = Callable()) -> LiehuoOutcome:
 	if sub not in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] \
 			or p == null or not p.is_alive() or p.get_armor() != CardData.CardSubType.LIEHUO_SHIELD:
-		return false
+		return LiehuoOutcome.NOT_USED
 	var shield = p.get_equipment_card("armor")
 	var revision = turn_manager.get_context_revision()
-	if allowed.is_valid() and not allowed.call():
-		return false
-	var use = await _ask_liehuo(p)
-	if not use or _game_over or not p.is_alive() or revision != turn_manager.get_context_revision() \
-			or p.get_equipment_card("armor") != shield \
-			or (allowed.is_valid() and not allowed.call()):
-		return false
+	var valid = func():
+		return not _game_over and p.is_alive() and players.has(p) \
+			and revision == turn_manager.get_context_revision() \
+			and (not allowed.is_valid() or allowed.call())
+	if not valid.call():
+		return LiehuoOutcome.INVALIDATED
+	var use = await _ask_liehuo(p, valid)
+	if use == CHOICE_INVALID or not valid.call():
+		return LiehuoOutcome.INVALIDATED
+	# 原盾离区属于未能发动，不是取消整个拆/顺；保留C02既有行为。
+	if use != 1 or p.get_equipment_card("armor") != shield:
+		return LiehuoOutcome.NOT_USED
 	p.hp -= 1
 	_update_debug("%s 发动【烈火盾】：失去1点体力，【%s】对其无效（%d/%d）" % [p.player_name, CardData.get_type_name(sub), p.hp, p.max_hp])
 	_sync_all_ui()
 	if p.is_dying():
 		await _resolve_dying(p, null, "liehuo")
-	return true
+	return LiehuoOutcome.PREVENTED
 
 # 询问是否发动烈火盾：玩家0弹窗，AI 默认不发动
-func _ask_liehuo(p: Player) -> bool:
+func _ask_liehuo(p: Player, allowed: Callable = Callable()) -> int:
 	if _liehuo_override.is_valid():
-		return await _liehuo_override.call()
+		return 1 if await _liehuo_override.call() else 0
 	if p.seat_index == 0:
-		return await _show_liehuo_prompt()
-	return false  # AI 暂不主动发动
+		return await _show_liehuo_prompt(allowed)
+	return 0  # AI 暂不主动发动
 
 # 玩家0的【烈火盾】响应弹窗（锚点居中）
-func _show_liehuo_prompt() -> bool:
+func _show_liehuo_prompt(allowed: Callable = Callable()) -> int:
 	# 测试钩子：跳过 UI 直接返回
 	if _liehuo_override.is_valid():
-		return await _liehuo_override.call()
+		return 1 if await _liehuo_override.call() else 0
 
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -4220,20 +4232,10 @@ func _show_liehuo_prompt() -> bool:
 	lose_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(lose_btn)
 
-	var result = [false]
-	pay_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	lose_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	await _response_ready
-	return result[0]
+	pay_btn.pressed.connect(func(): answer.submit(1))
+	lose_btn.pressed.connect(func(): answer.submit(0))
+	# E03-Q2尚待裁决：保持原盾无倒计时，不套用其他响应的默认放弃。
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
@@ -5228,7 +5230,7 @@ func _show_reveal_opportunity_prompt(owner: Player) -> bool:
 # ============================
 
 # 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
-func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable()) -> int:
+func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable(), timed: bool = true) -> int:
 	var actor: Player = players[0]
 	var actor_ref = weakref(actor)
 	var window_ref = weakref(overlay)
@@ -5256,7 +5258,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		if previous.generation == _countdown_generation:
 			previous.step = _step_remaining
 	var pending = {"overlay": overlay, "answer": answer, "who": actor.player_name,
-		"step": STEP_SECONDS, "generation": -1}
+		"step": STEP_SECONDS, "generation": -1, "timed": timed}
 	_choice_prompt_stack.append(pending)
 	_start_choice_countdown(pending)
 	var result: int = await answer.answered
@@ -5278,6 +5280,9 @@ func _start_choice_countdown(pending: Dictionary):
 	# 超时是有效取消；先答复后由等待者销毁窗口，避免误判为外部关闭。
 	_halt_countdown()
 	_set_status_line("等待 %s 响应" % pending.who)
+	pending.generation = _countdown_generation
+	if not pending.timed:
+		return
 	_step_remaining = pending.step
 	_countdown_active = true
 	var generation = _countdown_generation
