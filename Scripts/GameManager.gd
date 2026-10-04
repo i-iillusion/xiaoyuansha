@@ -4555,7 +4555,14 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 
 	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
 		_trigger_pofeng(subject, data["damage"])
+		var post_revision = turn_manager.get_context_revision()
 		await _try_gou_lian_claw(subject, chain.target_player)
+		if _game_over or post_revision != turn_manager.get_context_revision():
+			chain.is_cancelled = true
+			return true
+		record.refresh_source()
+		if subject.is_dead() or not chain.target_player.is_alive():
+			return false
 		await _try_bloodthirsty(subject, chain.target_player, data["damage"])
 		_update_soul_blade_count(subject, chain.target_player, data["damage"])
 		if record.from_strike and not record.is_chain:
@@ -4824,7 +4831,7 @@ func _show_fate_blade_prompt(victim: Player, allowed: Callable = Callable()) -> 
 # ============================
 
 # 对一名角色造成伤害后，可获得其装备区里的一张坐骑牌（进入自己「已确定的牌」区）
-# 时机与破风枪一致（伤害施加后立即触发，濒死结算前）；目标已濒死（体力≤0）或与自己相同（舍己为人自转移）不触发
+# 在普通伤害后触发；目标仍不能行动或与自己相同（舍己为人自转移）不触发。
 func _try_gou_lian_claw(source: Player, victim: Player):
 	if source == null or victim == null or source == victim:
 		return
@@ -4839,17 +4846,33 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 	var slots = victim.get_mount_slots()
 	if slots.is_empty():
 		return
+	var original_weapon = source.get_equipment_card("weapon")
+	var originals: Dictionary = {}
+	for candidate in slots:
+		originals[candidate] = _equipment_resource_for_pick(victim, candidate)
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
+			and source.get_weapon() == CardData.CardSubType.GOU_LIAN_CLAW \
+			and source.get_equipment_card("weapon") == original_weapon \
+			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 
 	var slot: String
 	if source.seat_index == 0:
-		slot = await _ask_gou_lian_slot(victim, slots)
-		if slot == "" or slot == "cancel":
+		slot = await _ask_gou_lian_slot(victim, slots, valid)
+		if slot == "":
+			return
+		if slot == "cancel":
 			_update_debug("%s 放弃发动【勾镰爪】" % source.player_name)
 			return
 	else:
 		# AI 默认发动，随机选一匹
 		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
+	if not valid.call() or not originals.has(slot) or originals[slot] == null \
+			or _equipment_resource_for_pick(victim, slot) != originals[slot]:
+		return
 	var sub = victim.equipment[slot]
 	var card = victim.remove_equipment(slot)
 	if card == null:
@@ -4860,12 +4883,76 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 	])
 	_sync_all_ui()
 
-# 玩家0选择要获得的坐骑（可取消）：复用装备选择弹窗
-func _ask_gou_lian_slot(victim: Player, slots: Array[String]) -> String:
+# 玩家0选择坐骑：独立答复；cancel是主动放弃，空串是失效，沿用无计时。
+func _ask_gou_lian_slot(victim: Player, slots: Array[String], allowed: Callable = Callable()) -> String:
+	var candidates: Array[String] = []
+	var originals: Dictionary = {}
+	for slot in slots:
+		if Player.MOUNT_SLOTS.has(slot):
+			var card = _equipment_resource_for_pick(victim, slot)
+			if card != null:
+				candidates.append(slot)
+				originals[slot] = card
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(victim) and victim.is_alive() \
+			and (not allowed.is_valid() or allowed.call()) \
+			and candidates.any(func(slot): return _equipment_resource_for_pick(victim, slot) == originals[slot])
+	if not valid.call():
+		return ""
 	# 测试钩子：直接返回槽位或 "cancel"
 	if _gou_lian_slot_override.is_valid():
-		return _gou_lian_slot_override.call()
-	return await _show_equip_picker(victim, slots, "你造成了伤害\n选择要获得的坐骑（可取消）：")
+		var reply = await _gou_lian_slot_override.call()
+		if not valid.call() or not reply is String:
+			return ""
+		return reply if reply == "cancel" or (originals.has(reply) and _equipment_resource_for_pick(victim, reply) == originals[reply]) else ""
+	var answer = ChoicePromptAnswer.new()
+	var overlay = ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.55)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	$UI.add_child(overlay)
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 16)
+	overlay.add_child(vbox)
+	var label = Label.new()
+	label.text = "你造成了伤害\n选择要获得的坐骑（可取消）："
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 22)
+	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size = Vector2(500, 60)
+	vbox.add_child(label)
+	var hbox = HBoxContainer.new()
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.add_theme_constant_override("separation", 20)
+	vbox.add_child(hbox)
+	for index in candidates.size():
+		var slot = candidates[index]
+		var btn = Button.new()
+		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(victim.equipment[slot])]
+		btn.custom_minimum_size = Vector2(160, 44)
+		btn.pressed.connect(func(): answer.submit(index))
+		hbox.add_child(btn)
+	var cancel_btn = Button.new()
+	cancel_btn.text = "取消"
+	cancel_btn.custom_minimum_size = Vector2(160, 44)
+	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
+	cancel_btn.pressed.connect(func(): answer.submit(-1))
+	vbox.add_child(cancel_btn)
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID or not valid.call():
+		return ""
+	if result == -1:
+		return "cancel"
+	if result < 0 or result >= candidates.size():
+		return ""
+	var selected = candidates[result]
+	return selected if _equipment_resource_for_pick(victim, selected) == originals[selected] else ""
 
 # ============================
 #  猜拳拼点（石头/剪刀/布）
