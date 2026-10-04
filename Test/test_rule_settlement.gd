@@ -793,6 +793,8 @@ func _run():
 	await chixiong_prompt_cases.run(self)
 	var ice_sword_prompt_cases = load("res://Test/ice_sword_prompt_cases.gd").new()
 	await ice_sword_prompt_cases.run(self)
+	var ice_short_hand_cases = load("res://Test/ice_short_hand_cases.gd").new()
+	await ice_short_hand_cases.run(self)
 	var guanshi_prompt_cases = load("res://Test/guanshi_prompt_cases.gd").new()
 	await guanshi_prompt_cases.run(self)
 	var guanshi_mount_cases = load("res://Test/guanshi_mount_cases.gd").new()

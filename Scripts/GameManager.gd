@@ -4420,8 +4420,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		var weapon = subject.get_weapon()
 		var weapon_enabled = actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		if record.from_strike and weapon_enabled:
-			if weapon == CardData.CardSubType.ICE_SWORD and actual.hand_size() >= 2:
-				# E03e-6-Q1待答：保留既有至少两张入口，不自定一张手牌规则。
+			if weapon == CardData.CardSubType.ICE_SWORD and actual.hand_size() > 0:
+				# E03e-6-Q1：不足两张时弃置全部现有手牌。
 				var original_weapon = subject.get_equipment_card("weapon")
 				var revision = turn_manager.get_context_revision()
 				var hit_valid = func():
@@ -4443,8 +4443,9 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				if chosen == CHOICE_INVALID or not choice_valid.call():
 					chain.is_cancelled = true
 					return true
-				if chosen == 1 and _discard_hand_cards(actual, 2):
-					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s 两张手牌" % [subject.player_name, actual.player_name])
+				var discard_count = mini(2, actual.hand_size())
+				if chosen == 1 and discard_count > 0 and _discard_hand_cards(actual, discard_count):
+					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s %d张手牌" % [subject.player_name, actual.player_name, discard_count])
 					_sync_all_ui()
 					return true
 			if weapon == CardData.CardSubType.ZHANGBA_SPEAR:
