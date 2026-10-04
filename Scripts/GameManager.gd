@@ -2907,9 +2907,10 @@ func _default_stolen_hidden_sub(card: CardBase, options: Array[int]) -> int:
 				return mules[randi() % mules.size()]
 	return options[randi() % options.size()]
 
-func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player, card: CardBase) -> void:
+func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player, card: CardBase,
+		allowed: Callable = Callable()) -> void:
 	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
-			or not recipient.determined_cards.has(card):
+			or not recipient.determined_cards.has(card) or (allowed.is_valid() and not allowed.call()):
 		return
 	var options = _hidden_declaration_options(card)
 	if options.is_empty():
@@ -2922,12 +2923,16 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 		var names: Array = []
 		for sub in options:
 			names.append(CardData.get_type_name(sub))
-		var idx = await _show_sao_reveal_picker(names)
+		var idx = await _show_sao_reveal_picker(names, allowed)
+		if allowed.is_valid() and idx == CHOICE_INVALID:
+			return
 		if idx >= 0 and idx < options.size():
 			chosen = options[idx]
 	else:
 		# AI 的确定性声明策略；不改变人类玩家的名称选择。
 		chosen = options[0]
+	if allowed.is_valid() and (chosen == CHOICE_INVALID or not allowed.call()):
+		return
 	if chosen < 0:
 		chosen = _default_stolen_hidden_sub(card, options)
 	if _game_over or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
@@ -4878,6 +4883,14 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 	if card == null:
 		return
 	source.determined_cards.append(card)
+	if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
+		# 已完成获得，再由原持有者声明；失效不撤销已经发生的移动。
+		var declaration_valid = func():
+			return not _game_over and revision == turn_manager.get_context_revision() \
+				and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
+				and source.determined_cards.has(card) and card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
+		await _declare_stolen_hidden_equipment(victim, source, card, declaration_valid)
+		sub = card.sub_type
 	_update_debug("%s 发动【勾镰爪】：获得 %s 的坐骑【%s】（已确定的牌 %d 张）" % [
 		source.player_name, victim.player_name, CardData.get_type_name(sub), source.determined_cards.size()
 	])
@@ -5540,7 +5553,7 @@ func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Calla
 	return await _wait_choice_prompt(overlay, answer, allowed)
 
 # 明置具体装备选择弹窗（网格布局，装备多）：返回选中索引，取消返回 -1
-func _show_sao_reveal_picker(texts: Array) -> int:
+func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> int:
 	if _game_over:
 		return CHOICE_INVALID
 	if texts.is_empty():
@@ -5588,7 +5601,7 @@ func _show_sao_reveal_picker(texts: Array) -> int:
 	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	return await _wait_choice_prompt(overlay, answer)
+	return await _wait_choice_prompt(overlay, answer, allowed)
 
 # ============================
 #  【装傻】濒死拼点（安普提·斯丢皮得，锁定技）
