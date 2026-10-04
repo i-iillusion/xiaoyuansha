@@ -16,16 +16,6 @@ class RescueAnswer extends RefCounted:
 		settled = true
 		answered.emit(sub)
 
-class RpsAnswer extends RefCounted:
-	signal answered(choice: int)
-	var settled := false
-
-	func submit(choice: int):
-		if settled:
-			return
-		settled = true
-		answered.emit(choice)
-
 # 通用选择窗口的答复仅属于该窗口；失效不能冒充主动取消。
 const CHOICE_INVALID: int = -2
 var _choice_prompt_stack: Array[Dictionary] = []
@@ -4997,7 +4987,9 @@ func _rps_choice(p: Player, other_name: String, allowed: Callable = Callable()) 
 
 # 玩家0的猜拳弹窗（石头/剪刀/布，锚点居中）
 func _show_rps_prompt(p: Player, other_name: String, allowed: Callable = Callable()) -> int:
-	var answer = RpsAnswer.new()
+	if _game_over or (allowed.is_valid() and not allowed.call()):
+		return RPS_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -5034,23 +5026,13 @@ func _show_rps_prompt(p: Player, other_name: String, allowed: Callable = Callabl
 		var btn = Button.new()
 		btn.text = c[0]
 		btn.custom_minimum_size = Vector2(140, 44)
-		btn.pressed.connect(answer.submit.bind(c[1]), CONNECT_ONE_SHOT)
+		var gesture: int = c[1]
+		btn.pressed.connect(func(): answer.submit(gesture), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
-	var stop = func(_winner): answer.submit(RPS_INVALID)
-	var watch = func():
-		if allowed.is_valid() and not allowed.call():
-			answer.submit(RPS_INVALID)
-	game_over.connect(stop)
-	get_tree().process_frame.connect(watch)
-	_start_response_countdown(overlay, players[0].player_name, answer.submit.bind(RPS_PAPER))
-	var result = await answer.answered
-	game_over.disconnect(stop)
-	get_tree().process_frame.disconnect(watch)
-	_stop_countdown()
-	if not overlay.is_queued_for_deletion():
-		overlay.queue_free()
-	return result
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	# 正常超时沿用布；关闭或上下文失效不能落到该默认。
+	return RPS_PAPER if result == -1 else result
 
 # 进行一次拼点（猜拳一轮）：返回发起者视角结果（RPS_WIN / RPS_DRAW / RPS_LOSE）
 # 结果只在实时日志显示（上一行），不覆盖中间提示句（当前进行）——所有拼点统一行为
