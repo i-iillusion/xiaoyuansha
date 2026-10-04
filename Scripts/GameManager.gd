@@ -3445,10 +3445,12 @@ func _show_chixiong_target_prompt(attacker_name: String, allowed: Callable = Cal
 signal _ice_sword_result(result: bool)
 
 # 寒冰剑：杀将要造成伤害时询问，发动则防止伤害、弃两张手牌。
-func _ask_ice_sword(target_name: String) -> bool:
+func _ask_ice_sword(target_name: String, allowed: Callable = Callable()) -> int:
 	# 测试钩子
 	if _ice_sword_override.is_valid():
-		return _ice_sword_override.call()
+		var result = await _ice_sword_override.call()
+		return CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3464,7 +3466,7 @@ func _ask_ice_sword(target_name: String) -> bool:
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "【寒冰剑】：你的【杀】对 %s 造成了伤害！\n是否防止此伤害，改为依次弃置其两张手牌？" % target_name
+	label.text = "【寒冰剑】：你的【杀】将对 %s 造成伤害！\n是否防止此伤害，改为依次弃置其两张手牌？" % target_name
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -3480,24 +3482,17 @@ func _ask_ice_sword(target_name: String) -> bool:
 	var yes_btn = Button.new()
 	yes_btn.text = "发动"
 	yes_btn.custom_minimum_size = Vector2(160, 44)
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_ice_sword_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	yes_btn.pressed.connect(func(): answer.submit(1))
 	hbox.add_child(yes_btn)
 
 	var no_btn = Button.new()
 	no_btn.text = "不发动"
 	no_btn.custom_minimum_size = Vector2(160, 44)
 	no_btn.modulate = Color(0.7, 0.7, 0.7)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_ice_sword_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0))
 	hbox.add_child(no_btn)
 
-	var result = await _ice_sword_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # ============================
 #  贯石斧
@@ -4387,8 +4382,29 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		var weapon_enabled = actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		if record.from_strike and weapon_enabled:
 			if weapon == CardData.CardSubType.ICE_SWORD and actual.hand_size() >= 2:
-				var use_ice = subject.seat_index != 0 or await _ask_ice_sword(actual.player_name)
-				if use_ice and actual.is_alive() and _discard_hand_cards(actual, 2):
+				# E03e-6-Q1待答：保留既有至少两张入口，不自定一张手牌规则。
+				var original_weapon = subject.get_equipment_card("weapon")
+				var revision = turn_manager.get_context_revision()
+				var hit_valid = func():
+					return not _game_over and not chain.is_cancelled \
+						and revision == turn_manager.get_context_revision() \
+						and players.has(actual) and actual.is_alive() and chain.target_player == actual
+				var choice_valid = func():
+					return hit_valid.call() and players.has(subject) and subject.is_alive() \
+						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ICE_SWORD \
+						and subject.get_equipment_card("weapon") == original_weapon \
+						and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+				var chosen = 1 if subject.seat_index != 0 else await _ask_ice_sword(actual.player_name, choice_valid)
+				if not hit_valid.call():
+					chain.is_cancelled = true
+					return true
+				if subject.is_dead():
+					record.refresh_source() # TIME-04：不发动寒冰，原伤害无源继续。
+					return false
+				if chosen == CHOICE_INVALID or not choice_valid.call():
+					chain.is_cancelled = true
+					return true
+				if chosen == 1 and _discard_hand_cards(actual, 2):
 					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s 两张手牌" % [subject.player_name, actual.player_name])
 					_sync_all_ui()
 					return true
