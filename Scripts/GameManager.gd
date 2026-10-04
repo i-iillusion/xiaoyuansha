@@ -1739,17 +1739,30 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 	var chain = _new_damage_chain(p, target, card, base_damage, element)
 	chain.ignore_target_restrictions = ignore_target_restrictions
 	chain.response_callback = _on_chain_response_check
+	var strike_revision = turn_manager.get_context_revision()
 	var result = await chain.start()
 	if result == EffectChain.ResponseResult.DODGED:
 		var actual = chain.target_player
 		_update_debug("%s → %s 被【闪】避" % [p.player_name, actual.player_name])
 		if p.is_alive() and actual.is_alive() and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE \
 				and p.mount_count() > 0 and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
-			var activate = p.seat_index != 0 or await _ask_guanshi(actual.player_name)
-			if activate:
+			var original_weapon = p.get_equipment_card("weapon")
+			var choice_valid = func():
+				return not _game_over and strike_revision == turn_manager.get_context_revision() \
+					and players.has(p) and p.is_alive() and players.has(actual) and actual.is_alive() \
+					and chain.target_player == actual and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE \
+					and p.get_equipment_card("weapon") == original_weapon and p.mount_count() > 0 \
+					and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
+			if not choice_valid.call():
+				return false
+			var activate = 1 if p.seat_index != 0 else await _ask_guanshi(actual.player_name, choice_valid)
+			# 原杀已被闪抵消；贯石未有效发动时没有可继续的余伤。
+			if activate == CHOICE_INVALID or not choice_valid.call():
+				return false
+			if activate == 1:
 				var slots = p.get_mount_slots()
 				var slot: String = await _show_mount_discard_picker(p) if p.seat_index == 0 else slots.pick_random()
-				if not p.equipment.has(slot):
+				if not choice_valid.call() or not p.equipment.has(slot):
 					return false
 				var discarded_mount = p.remove_equipment(slot)
 				if discarded_mount != null:
@@ -3500,11 +3513,13 @@ func _ask_ice_sword(target_name: String, allowed: Callable = Callable()) -> int:
 
 signal _guanshi_result(result: bool)
 
-# 贯石斧：杀被闪抵消后确认是否发动（玩家0）；返回 true = 发动（弃一张坐骑牌强制命中）
-func _ask_guanshi(target_name: String) -> bool:
+# 贯石斧：1发动、0不发动、CHOICE_INVALID失效；保留原无倒计时。
+func _ask_guanshi(target_name: String, allowed: Callable = Callable()) -> int:
 	# 测试钩子
 	if _guanshi_override.is_valid():
-		return _guanshi_override.call()
+		var result = await _guanshi_override.call()
+		return CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3536,24 +3551,17 @@ func _ask_guanshi(target_name: String) -> bool:
 	var yes_btn = Button.new()
 	yes_btn.text = "发动（弃一张坐骑）"
 	yes_btn.custom_minimum_size = Vector2(200, 44)
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_guanshi_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	yes_btn.pressed.connect(func(): answer.submit(1))
 	hbox.add_child(yes_btn)
 
 	var no_btn = Button.new()
 	no_btn.text = "不发动"
 	no_btn.custom_minimum_size = Vector2(200, 44)
 	no_btn.modulate = Color(0.7, 0.7, 0.7)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_guanshi_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0))
 	hbox.add_child(no_btn)
 
-	var result = await _guanshi_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 贯石斧：选择弃置哪张坐骑牌（锚点居中弹窗；已确认发动，必须弃一匹，无取消）
 func _show_mount_discard_picker(p: Player) -> String:
