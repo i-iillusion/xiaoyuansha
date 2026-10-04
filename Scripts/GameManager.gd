@@ -1775,14 +1775,14 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				hit.skip_targeting = true # 同一张杀不重复目标/出闪，伤害窗口仍允许舍己。
 				await hit.start()
 				await _finish_damage_chain(hit)
-				if hit.is_cancelled and hit.damage.final_damage().committed:
+				if hit.continuation_invalid:
 					return CHOICE_INVALID
-				return hit.damage.final_damage().committed and not hit.is_cancelled
+				return hit.damage.final_damage().committed
 		return false
 	await _finish_damage_chain(chain)
-	if chain.is_cancelled and chain.damage.final_damage().committed:
+	if chain.continuation_invalid:
 		return CHOICE_INVALID
-	return chain.damage.final_damage().committed and not chain.is_cancelled
+	return chain.damage.final_damage().committed
 
 func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
@@ -1945,24 +1945,24 @@ func _resolve_transferred_damage(original: EffectChain) -> void:
 	record.events.append("damage_transferred")
 	await next.start()
 	await _finish_damage_chain(next)
-	if next.is_cancelled:
-		original.is_cancelled = true
+	if next.continuation_invalid:
+		original.continuation_invalid = true
 
 # 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
 func _finish_damage_chain(chain: EffectChain):
-	if _game_over or chain.is_cancelled or not chain.damage.committed:
+	if _game_over or chain.continuation_invalid or not chain.damage.committed:
 		return
 	var revision = turn_manager.get_context_revision()
 	var actual = chain.target_player
 	var source = chain.source_player
 	if not chain.damage.is_chain and actual.chained and chain.damage_element != EffectChain.DamageType.PHYSICAL:
 		if await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike) == CHOICE_INVALID:
-			chain.is_cancelled = true
-	if _game_over or chain.is_cancelled or revision != turn_manager.get_context_revision():
-		chain.is_cancelled = true
+			chain.continuation_invalid = true
+	if _game_over or chain.continuation_invalid or revision != turn_manager.get_context_revision():
+		chain.continuation_invalid = true
 		return
 	if await _try_calamity_robe_transfer(actual) == CHOICE_INVALID:
-		chain.is_cancelled = true
+		chain.continuation_invalid = true
 		return
 	await _try_minus_mule_transfer(actual)
 	await _try_plus_mule_transfer(actual)
@@ -3806,7 +3806,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 		chain.damage.from_strike = from_strike
 		await chain.start()
 		await _finish_damage_chain(chain)
-		if chain.is_cancelled:
+		if chain.continuation_invalid:
 			return CHOICE_INVALID
 	_sync_all_ui()
 
@@ -4750,7 +4750,7 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 	chain.skip_response = true
 	await chain.start()
 	await _finish_damage_chain(chain)
-	if chain.is_cancelled:
+	if chain.continuation_invalid:
 		return chain.damage.final_damage().target
 	if chain.damage.final_damage().committed:
 		if _game_over or revision != turn_manager.get_context_revision():

@@ -63,6 +63,8 @@ var damage_element: DamageType:
 
 var current_phase: Phase = Phase.RESPONSE
 var is_cancelled: bool = false
+# 交互过期只停止后续动作，不等于规则防止原伤害（例如舍己）。
+var continuation_invalid: bool = false
 var response_result: ResponseResult = ResponseResult.NONE
 # true → 跳过目标响应阶段（【贯石斧】强制命中用：杀被闪抵消后重新结算伤害）
 var skip_response: bool = false
