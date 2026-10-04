@@ -823,6 +823,8 @@ func _run():
 	await mule_prompt_cases.run(self)
 	var mule_combination_cases = load("res://Test/mule_combination_cases.gd").new()
 	await mule_combination_cases.run(self)
+	var mule_full_slot_cases = load("res://Test/mule_full_slot_cases.gd").new()
+	await mule_full_slot_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

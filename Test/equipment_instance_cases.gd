@@ -144,7 +144,7 @@ func run(host):
 	check(game.deck._discard.count(replaced_mount) == 1 and source.get_mount_slots().is_empty(), "满槽目标被顶坐骑原实例弃置一次")
 	await check_mule_transfer_ownership()
 
-	# DEV-B01a：只验证现有暗置占位兼容路径的所有权，不裁定暗置牌离区明置规则。
+	# DEV-B01a：暗置槽有物理原牌；满槽AI选首槽，原马唯一且暗置被弃仍暗置。
 	for mule_sub in [CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS]:
 		suite.reset_players()
 		game.deck._discard.clear()
@@ -157,8 +157,9 @@ func run(host):
 		mule = CardBase.create(mule_sub)
 		mule.source_seat = 9
 		source.equip_mount_card(mule)
-		target.equipment["mount_1"] = CardData.CardSubType.HIDDEN_EQUIPMENT
-		target.hidden_equip_slot = "mount_1"
+		var hidden_mount = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
+		hidden_mount.hidden_category = "mount"
+		target.equip_hidden_card_to_slot("mount_1", hidden_mount)
 		for i in range(3):
 			target.equip_mount_card(CardBase.create(CardData.CardSubType.MOUNT_MINUS))
 		game._minus_mule_target_override = func(): return target
@@ -173,7 +174,7 @@ func run(host):
 			for stored in player.equipment_cards.values():
 				if stored == mule:
 					owners += 1
-		check(owners == 1 and game.deck._discard.is_empty(), "转移坐骑恰好一个装备所有者且不伪造旧牌弃置")
+		check(owners == 1 and game.deck._discard == [hidden_mount] and hidden_mount.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT, "转移坐骑恰好一个装备所有者，仅弃原暗置牌并保持暗置")
 		check(target.hidden_equip_slot == "" and target.mount_count() == 4 and target.mount_minus == 3, "成功替换清暗置状态并保留其他三匹坐骑")
 
 	# 无旧牌的成功与非法输入失败不能继续共享 null 这一种结果。

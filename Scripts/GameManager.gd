@@ -7334,7 +7334,7 @@ func _try_minus_mule_transfer(source: Player) -> int:
 func _try_plus_mule_transfer(source: Player) -> int:
 	return await _try_mule_transfer(source, CardData.CardSubType.MULE_PLUS, false)
 
-# 劣马转移核心：持有者可选把一匹劣马移至其他角色的坐骑槽（空槽自动装；满槽顶替第一匹）
+# 劣马转移核心：空槽直接装；满槽由转移者必须选择被顶掉的马。
 func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: bool) -> int:
 	if _game_over or p == null or not p.is_alive():
 		return 0
@@ -7359,11 +7359,24 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 		return 0
 	if not target is Player or not players.has(target) or target == p or not target.is_alive():
 		return CHOICE_INVALID
+	var replace_slot := ""
+	if target.mount_count() == Player.MOUNT_SLOTS.size():
+		var originals: Dictionary = {}
+		for slot in Player.MOUNT_SLOTS:
+			originals[slot] = _equipment_resource_for_pick(target, slot)
+		var replacement_valid = func():
+			return allowed.call() and players.has(target) and target.is_alive() \
+				and target.mount_count() == Player.MOUNT_SLOTS.size() \
+				and Player.MOUNT_SLOTS.all(func(slot): return originals[slot] != null and _equipment_resource_for_pick(target, slot) == originals[slot])
+		# 最新Q1：选择权属于转移者；AI沿用第一槽策略，非固定规则。
+		replace_slot = await _show_mule_replace_picker(target, replacement_valid) if p.seat_index == 0 else target.get_mount_slots()[0]
+		if not replacement_valid.call() or not originals.has(replace_slot):
+			return CHOICE_INVALID
 	var mule_card = p.remove_equipment(source_slot)
 	if mule_card == null:
 		return CHOICE_INVALID
 	# 目标放入坐骑槽
-	if not _place_mount_for(target, mule_card):
+	if not _place_mount_for(target, mule_card, replace_slot):
 		# 落位失败时原槽仍为空；恢复同一对象而非另造一匹劣马。
 		p.equip_card_to_slot(source_slot, mule_card)
 		return CHOICE_INVALID
@@ -7455,14 +7468,45 @@ func _emit_plus_mule_target(overlay: ColorRect, target: Player):
 	overlay.queue_free()
 	_plus_mule_target_result.emit(target)
 
-# 将指定坐骑放入目标坐骑槽（空槽自动装；满槽顶替第一匹）
-func _place_mount_for(target: Player, card: CardBase) -> bool:
+# 满四槽时由转移者强制选择：无倒计时、无取消，不发明超时默认。
+func _show_mule_replace_picker(target: Player, allowed: Callable) -> String:
+	if not allowed.call():
+		return ""
+	var answer = ChoicePromptAnswer.new()
+	var slots = target.get_mount_slots()
+	var overlay = ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.55)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	$UI.add_child(overlay)
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 16)
+	overlay.add_child(vbox)
+	var label = Label.new()
+	label.text = "转移劣马：%s 的坐骑槽已满，请选择顶掉其哪匹坐骑（必须选择）" % target.player_name
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 22)
+	vbox.add_child(label)
+	for index in slots.size():
+		var slot = slots[index]
+		var button = Button.new()
+		button.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(target.equipment[slot])]
+		button.custom_minimum_size = Vector2(220, 44)
+		button.pressed.connect(func(): answer.submit(index), CONNECT_ONE_SHOT)
+		vbox.add_child(button)
+	var selected = await _wait_choice_prompt(overlay, answer, allowed, false)
+	return slots[selected] if selected >= 0 and selected < slots.size() and allowed.call() else ""
+
+# 放入空槽或已由转移者选定的原槽；不在资源层自行决定顶掉哪匹。
+func _place_mount_for(target: Player, card: CardBase, replace_slot: String = "") -> bool:
 	if target.equip_mount_card(card):
 		return true
-	var slots = target.get_mount_slots()
-	if slots.is_empty():
+	if not Player.MOUNT_SLOTS.has(replace_slot) or not target.equipment.has(replace_slot):
 		return false
-	var result = target.replace_mount_card_result(slots[0], card)
+	var result = target.replace_mount_card_result(replace_slot, card)
 	if result.success and result.replaced_card != null:
 		deck.discard(result.replaced_card)
 	return result.success
