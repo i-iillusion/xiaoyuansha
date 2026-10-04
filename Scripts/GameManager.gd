@@ -4514,9 +4514,19 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				data["value"] = mini(data["value"], 1)
 			if armor == CardData.CardSubType.CALAMITY_ROBE and chain.damage_element == EffectChain.DamageType.FIRE:
 				data["value"] += 1
-		if await _try_fate_blade_save(subject, data["value"]):
+		var fate_revision = turn_manager.get_context_revision()
+		var fate_valid = func():
+			return not _game_over and fate_revision == turn_manager.get_context_revision() \
+				and players.has(subject) and subject.is_alive() and chain.target_player == subject
+		var fate_reply = await _try_fate_blade_save(subject, data["value"], fate_valid)
+		if fate_reply == CHOICE_INVALID:
+			chain.is_cancelled = true
+			return true
+		if fate_reply == 1:
 			data["value"] = 0
 			return true
+		record.refresh_source()
+		source = record.source
 		if data["value"] > 0 and not record.sacrifice_offered:
 			record.sacrifice_offered = true
 			var revision = turn_manager.get_context_revision()
@@ -4721,38 +4731,51 @@ func _trigger_pofeng(source: Player, amount: int):
 # ============================
 
 # 目标将要受到致命伤害（伤害 ≥ 当前体力）且装备【命运之刃】时，可弃置此武器防止本次伤害
-# 返回 true = 已弃置命运之刃并防止本次伤害（调用方应跳过伤害施加）
-func _try_fate_blade_save(victim: Player, amount: int) -> bool:
+# 1=已付费用防止，0=未触发/自愿拒绝，CHOICE_INVALID=等待失效。
+func _try_fate_blade_save(victim: Player, amount: int, allowed: Callable = Callable()) -> int:
 	if victim == null or not victim.is_alive():
-		return false
+		return 0
 	if victim.get_weapon() != CardData.CardSubType.FATE_BLADE:
-		return false
-	if amount < victim.hp:
-		return false  # 非致命伤害，不触发
+		return 0
+	if amount <= 0 or amount < victim.hp:
+		return 0  # 非致命伤害，不触发
+	var original_weapon = victim.get_equipment_card("weapon")
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(victim) and victim.is_alive() and amount >= victim.hp \
+			and victim.get_weapon() == CardData.CardSubType.FATE_BLADE \
+			and original_weapon != null and victim.get_equipment_card("weapon") == original_weapon \
+			and (not allowed.is_valid() or allowed.call())
+	if not valid.call():
+		return CHOICE_INVALID
 
-	var use = await _ask_fate_blade(victim)
-	if not use:
-		return false
+	var use = await _ask_fate_blade(victim, valid)
+	if use == CHOICE_INVALID or not valid.call():
+		return CHOICE_INVALID
+	if use != 1:
+		return 0
 
 	# 弃置命运之刃（进入弃牌堆）；装备占用永久保留（唯一性规则）
 	var fate_blade = victim.remove_equipment("weapon")
-	if fate_blade != null:
-		deck.discard(fate_blade)
+	deck.discard(fate_blade)
 	_update_debug("%s 弃置【命运之刃】，防止了 %d 点致命伤害！" % [victim.player_name, amount])
 	_sync_all_ui()
-	return true
+	return 1
 
 # 询问是否发动命运之刃：玩家0弹窗，AI 默认发动（保命）
-func _ask_fate_blade(victim: Player) -> bool:
+func _ask_fate_blade(victim: Player, allowed: Callable = Callable()) -> int:
 	if victim.seat_index == 0:
-		return await _show_fate_blade_prompt(victim)
-	return true  # AI 默认发动
+		return await _show_fate_blade_prompt(victim, allowed)
+	return 1  # AI 默认发动
 
 # 玩家0的【命运之刃】响应弹窗（锚点居中）
-func _show_fate_blade_prompt(victim: Player) -> bool:
+func _show_fate_blade_prompt(victim: Player, allowed: Callable = Callable()) -> int:
 	# 测试钩子：只决定「是否弃置」，没装备照样弃不了
 	if _fate_blade_override.is_valid():
-		return _fate_blade_override.call()
+		var reply = await _fate_blade_override.call()
+		return CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -4792,20 +4815,9 @@ func _show_fate_blade_prompt(victim: Player) -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	await _response_ready
-	return result[0]
+	use_btn.pressed.connect(func(): answer.submit(1))
+	skip_btn.pressed.connect(func(): answer.submit(0))
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # ============================
 #  【勾镰爪】获得坐骑
