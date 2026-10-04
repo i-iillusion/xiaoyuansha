@@ -11,6 +11,9 @@ func reset():
 	game._clear_pending_determined_card()
 	game._calamity_target_override = Callable()
 	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	for p in game.players:
+		p.hidden_equip_slot = ""
+		p.hidden_equip_card = null
 
 func drive(action: String, source: Player, target: Player):
 	var pending = game._choice_prompt_stack.back()
