@@ -4568,7 +4568,13 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		record.refresh_source()
 		if subject.is_dead() or not chain.target_player.is_alive():
 			return false
-		await _try_bloodthirsty(subject, chain.target_player, data["damage"])
+		var blood_result = await _try_bloodthirsty(subject, chain.target_player, data["damage"])
+		if _game_over or post_revision != turn_manager.get_context_revision():
+			chain.is_cancelled = true
+			return true
+		record.refresh_source()
+		if blood_result == CHOICE_INVALID or subject.is_dead() or not chain.target_player.is_alive():
+			return false
 		_update_soul_blade_count(subject, chain.target_player, data["damage"])
 		if record.from_strike and not record.is_chain:
 			await _try_soul_blade(subject, chain.target_player)
@@ -6950,51 +6956,59 @@ func _show_meiyong_option_prompt() -> int:
 # 每当你造成一点伤害后，你可以与受到伤害的角色进行一次拼点，若你赢则回复 1 点体力
 # 按伤害点数逐点触发（酒杀 2 点 = 拼点 2 次）；每一伤害点独立询问是否发动
 # 实际受伤者可能被舍己为人改写；目标已濒死（体力≤0）不拼点；舍己为人自转移（source==victim）不拼点；铁索传导不触发
-func _try_bloodthirsty(source: Player, victim: Player, amount: int):
+func _try_bloodthirsty(source: Player, victim: Player, amount: int) -> int:
 	if source == null or victim == null or source == victim:
-		return
+		return 0
 	if not source.is_alive() or not victim.is_alive():
-		return
+		return 0
 	if source.get_weapon() != CardData.CardSubType.BLOODTHIRSTY_BLADE:
-		return
+		return 0
 	# 【青釭盾】：目标无视使用效果者的武器
 	if victim.get_armor() == CardData.CardSubType.QINGGANG_SHIELD:
 		_update_debug("%s 的【青釭盾】无视了 %s 的【噬血之刃】！" % [victim.player_name, source.player_name])
-		return
+		return 0
 	var original = source.get_equipment_card("weapon")
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and source.is_alive() and victim.is_alive() \
+			and players.has(source) and players.has(victim) \
+			and source.is_alive() and victim.is_alive() and original != null \
 			and source.get_equipment_card("weapon") == original \
 			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 	for i in amount:
 		if not valid.call():
-			break
+			return CHOICE_INVALID
 		# 可选择是否发动（每一点伤害独立询问）
-		var use = await _ask_bloodthirsty(source, victim)
-		if not valid.call():
-			break
-		if not use:
+		var use = await _ask_bloodthirsty(source, victim, valid)
+		if use == CHOICE_INVALID or not valid.call():
+			return CHOICE_INVALID
+		if use == 0:
 			continue
 		var r = await _do_ping_dian(source, victim, valid)
 		if r == RPS_INVALID or not valid.call():
-			break
+			return CHOICE_INVALID
 		if r == RPS_WIN:
 			source.heal(1)
 			_update_debug("%s 赢得拼点，回复 1 点体力（%d/%d）" % [source.player_name, source.hp, source.max_hp])
 	_sync_all_ui()
+	return 0
 
 # 是否发动噬血之刃：玩家0弹窗，AI 不满血才发动
-func _ask_bloodthirsty(source: Player, victim: Player) -> bool:
+func _ask_bloodthirsty(source: Player, victim: Player, allowed: Callable = Callable()) -> int:
 	if _bloodthirsty_override.is_valid():
-		return _bloodthirsty_override.call()
+		var reply = await _bloodthirsty_override.call()
+		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID:
+			return CHOICE_INVALID
+		return 1 if reply else 0
 	if source.seat_index == 0:
-		return await _show_bloodthirsty_prompt(source, victim)
-	return source.hp < source.max_hp
+		return await _show_bloodthirsty_prompt(source, victim, allowed)
+	return 1 if source.hp < source.max_hp else 0
 
 # 玩家0的噬血之刃发动确认弹窗（锚点居中）
-func _show_bloodthirsty_prompt(source: Player, victim: Player) -> bool:
+func _show_bloodthirsty_prompt(source: Player, victim: Player, allowed: Callable = Callable()) -> int:
+	if _game_over or (allowed.is_valid() and not allowed.call()):
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -7033,20 +7047,9 @@ func _show_bloodthirsty_prompt(source: Player, victim: Player) -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	await _response_ready
-	return result[0]
+	use_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # ============================
 #  【灾厄剑】伤害-1 + 转移

@@ -803,6 +803,8 @@ func _run():
 	await gou_lian_prompt_cases.run(self)
 	var gou_lian_hidden_cases = load("res://Test/gou_lian_hidden_cases.gd").new()
 	await gou_lian_hidden_cases.run(self)
+	var bloodthirsty_prompt_cases = load("res://Test/bloodthirsty_prompt_cases.gd").new()
+	await bloodthirsty_prompt_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
