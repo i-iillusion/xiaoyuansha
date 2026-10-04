@@ -5717,7 +5717,7 @@ func _resolve_awaken_choice(p: Player, generation: int):
 	if choice == CHOICE_INVALID:
 		return
 	if choice not in [1, 2, 3]:
-		choice = 1 # 自动策略无效选项仍沿用既有必选兜底；人类取消默认另待裁决。
+		choice = 1 # E03-Q1：默认不能成为杀目标。
 	p.awake_choice = choice
 	var desc = "1.不能成为【杀】的目标" if choice == 1 else ("2.不能成为【决斗】的目标" if choice == 2 else "3.不能成为【南蛮入侵】和【万箭齐发】的目标")
 	_update_debug("%s 选择觉醒效果：%s" % [p.player_name, desc])
@@ -5729,7 +5729,7 @@ func _show_awaken_pick(allowed: Callable = Callable()) -> int:
 	if idx == CHOICE_INVALID:
 		return CHOICE_INVALID
 	if idx < 0:
-		idx = 1  # 取消默认选 1
+		idx = 0  # 取消/超时默认第1项：不能成为杀目标。
 	return idx + 1
 
 # ============================
