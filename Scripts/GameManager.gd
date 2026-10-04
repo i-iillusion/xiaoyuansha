@@ -1964,8 +1964,12 @@ func _finish_damage_chain(chain: EffectChain):
 	if await _try_calamity_robe_transfer(actual) == CHOICE_INVALID:
 		chain.continuation_invalid = true
 		return
-	await _try_minus_mule_transfer(actual)
-	await _try_plus_mule_transfer(actual)
+	if await _try_minus_mule_transfer(actual) == CHOICE_INVALID:
+		chain.continuation_invalid = true
+		return
+	if await _try_plus_mule_transfer(actual) == CHOICE_INVALID:
+		chain.continuation_invalid = true
+		return
 	_sync_all_ui()
 
 func play_card(sub: CardData.CardSubType):
@@ -7323,17 +7327,17 @@ func _emit_calamity_robe_target(overlay: ColorRect, target: Player):
 # ============================
 
 # -1劣马：你受到伤害后，可移动一匹 -1劣马至一名其他角色的装备区（灾厄袍式时机；甩掉让自己更容易被打的劣马）
-func _try_minus_mule_transfer(source: Player):
-	await _try_mule_transfer(source, CardData.CardSubType.MULE_MINUS, true)
+func _try_minus_mule_transfer(source: Player) -> int:
+	return await _try_mule_transfer(source, CardData.CardSubType.MULE_MINUS, true)
 
 # +1劣马：与 -1 劣马一致，受到伤害后可转移。
-func _try_plus_mule_transfer(source: Player):
-	await _try_mule_transfer(source, CardData.CardSubType.MULE_PLUS, false)
+func _try_plus_mule_transfer(source: Player) -> int:
+	return await _try_mule_transfer(source, CardData.CardSubType.MULE_PLUS, false)
 
 # 劣马转移核心：持有者可选把一匹劣马移至其他角色的坐骑槽（空槽自动装；满槽顶替第一匹）
-func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: bool):
+func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: bool) -> int:
 	if _game_over or p == null or not p.is_alive():
-		return
+		return 0
 	var source_slot := ""
 	var original_card: CardBase = null
 	for s in Player.MOUNT_SLOTS:
@@ -7342,28 +7346,34 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 			original_card = p.get_equipment_card(s)
 			break
 	if original_card == null:
-		return
-	var target = await _ask_mule_target(p, is_minus)
-	if _game_over or not p.is_alive() or target == null or target == p or not target.is_alive():
-		return
-	# 等待期间同槽即使换上同名劣马，旧目标答复也不能转移后来者。
-	if p.equipment.get(source_slot, -1) != mule_sub \
-			or p.equipment_cards.get(source_slot, null) != original_card:
-		return
+		return 0
+	var revision = turn_manager.get_context_revision()
+	var allowed = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(p) and p.is_alive() and p.equipment.get(source_slot, -1) == mule_sub \
+			and p.get_equipment_card(source_slot) == original_card
+	var target = await _ask_mule_target(p, is_minus, allowed)
+	if target is int or not allowed.call():
+		return CHOICE_INVALID
+	if target == null:
+		return 0
+	if not target is Player or not players.has(target) or target == p or not target.is_alive():
+		return CHOICE_INVALID
 	var mule_card = p.remove_equipment(source_slot)
 	if mule_card == null:
-		return
+		return CHOICE_INVALID
 	# 目标放入坐骑槽
 	if not _place_mount_for(target, mule_card):
 		# 落位失败时原槽仍为空；恢复同一对象而非另造一匹劣马。
 		p.equip_card_to_slot(source_slot, mule_card)
-		return
+		return CHOICE_INVALID
 	var mule_name = "-1劣马" if is_minus else "+1劣马"
 	_update_debug("%s 将一匹【%s】移至 %s 的装备区" % [p.player_name, mule_name, target.player_name])
 	_sync_all_ui()
+	return 0
 
 # 选择劣马转移目标：玩家0弹窗，AI 默认发动随机选一名其他存活角色
-func _ask_mule_target(p: Player, is_minus: bool) -> Player:
+func _ask_mule_target(p: Player, is_minus: bool, allowed: Callable = Callable()) -> Variant:
 	var override_var = _minus_mule_target_override if is_minus else _plus_mule_target_override
 	if override_var.is_valid():
 		var r = override_var.call()
@@ -7371,7 +7381,7 @@ func _ask_mule_target(p: Player, is_minus: bool) -> Player:
 			return null
 		return r
 	if p.seat_index == 0:
-		return await _show_mule_target_picker(p, is_minus)
+		return await _show_mule_target_picker(p, is_minus, allowed)
 	var alive_others: Array[Player] = []
 	for pl in players:
 		if pl != p and pl.is_alive():
@@ -7381,7 +7391,9 @@ func _ask_mule_target(p: Player, is_minus: bool) -> Player:
 	return alive_others[randi() % alive_others.size()]
 
 # 玩家0的劣马转移目标弹窗（其他存活角色按钮 + 取消，锚点居中）
-func _show_mule_target_picker(p: Player, is_minus: bool) -> Player:
+func _show_mule_target_picker(p: Player, is_minus: bool, allowed: Callable = Callable()) -> Variant:
+	var answer = ChoicePromptAnswer.new()
+	var candidates: Array[Player] = []
 	var mule_name = "-1劣马" if is_minus else "+1劣马"
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -7414,36 +7426,26 @@ func _show_mule_target_picker(p: Player, is_minus: bool) -> Player:
 		if pl == p or not pl.is_alive():
 			continue
 		var btn = Button.new()
+		var index = candidates.size()
+		candidates.append(pl)
 		btn.text = pl.player_name
 		btn.custom_minimum_size = Vector2(140, 44)
-		if is_minus:
-			btn.pressed.connect(_emit_minus_mule_target.bind(overlay, pl), CONNECT_ONE_SHOT)
-		else:
-			btn.pressed.connect(_emit_plus_mule_target.bind(overlay, pl), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(index), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(140, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	if is_minus:
-		cancel_btn.pressed.connect(func():
-			overlay.queue_free()
-			_minus_mule_target_result.emit(null)
-		, CONNECT_ONE_SHOT)
-	else:
-		cancel_btn.pressed.connect(func():
-			overlay.queue_free()
-			_plus_mule_target_result.emit(null)
-		, CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(func(): answer.submit(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var result: Player
-	if is_minus:
-		result = await _minus_mule_target_result
-	else:
-		result = await _plus_mule_target_result
-	return result
+	var result = await _wait_choice_prompt(overlay, answer, allowed, false)
+	if result == CHOICE_INVALID:
+		return CHOICE_INVALID
+	if result < 0:
+		return null
+	return candidates[result] if result < candidates.size() else CHOICE_INVALID
 
 func _emit_minus_mule_target(overlay: ColorRect, target: Player):
 	overlay.queue_free()
