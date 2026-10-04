@@ -1683,6 +1683,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 					element = EffectChain.DamageType.THUNDER
 
 			var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
+			if dealt is int and dealt == CHOICE_INVALID:
+				return
 
 			# 【灾厄剑】转移：本次杀的全部伤害处理完成后，可选择将灾厄剑移至其他角色
 			if dealt:
@@ -1723,7 +1725,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 # 单个目标的杀结算（防具 → 雌雄 → 响应 → 伤害）：单目标杀与【方天画戟】多目标杀共用
 # 杀次数/手牌/酒 buff 已在调用方消耗
 # 返回 true = 本次结算对目标造成了伤害（供【灾厄剑】转移判定：全部处理完成后再转移）
-func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> bool:
+# 已提交伤害后的选择失效须通知多目标调用者；普通命中/闪仍为bool。
+func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> Variant:
 	if target == null or not target.is_alive():
 		return false
 	# “无论是否合法”只越过选目标限制，不跳过响应和伤害防止。
@@ -1772,10 +1775,14 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				hit.skip_targeting = true # 同一张杀不重复目标/出闪，伤害窗口仍允许舍己。
 				await hit.start()
 				await _finish_damage_chain(hit)
-				return hit.damage.final_damage().committed
+				if hit.is_cancelled and hit.damage.final_damage().committed:
+					return CHOICE_INVALID
+				return hit.damage.final_damage().committed and not hit.is_cancelled
 		return false
 	await _finish_damage_chain(chain)
-	return chain.damage.final_damage().committed
+	if chain.is_cancelled and chain.damage.final_damage().committed:
+		return CHOICE_INVALID
+	return chain.damage.final_damage().committed and not chain.is_cancelled
 
 func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
@@ -1897,7 +1904,10 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		# 胜负已分：不再结算后续目标
 		if _game_over:
 			break
-		if await _execute_single_strike(p, target, card, sub, element, base_damage):
+		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
+		if dealt is int and dealt == CHOICE_INVALID:
+			return
+		if dealt:
 			dealt_any = true
 
 	# 【灾厄剑】转移：全部目标的伤害都处理完成后，再选择是否转移（双武器假想下语义正确）
@@ -1935,18 +1945,25 @@ func _resolve_transferred_damage(original: EffectChain) -> void:
 	record.events.append("damage_transferred")
 	await next.start()
 	await _finish_damage_chain(next)
+	if next.is_cancelled:
+		original.is_cancelled = true
 
 # 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
 func _finish_damage_chain(chain: EffectChain):
-	if _game_over or not chain.damage.committed:
+	if _game_over or chain.is_cancelled or not chain.damage.committed:
 		return
+	var revision = turn_manager.get_context_revision()
 	var actual = chain.target_player
 	var source = chain.source_player
 	if not chain.damage.is_chain and actual.chained and chain.damage_element != EffectChain.DamageType.PHYSICAL:
-		await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike)
-	if _game_over:
+		if await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike) == CHOICE_INVALID:
+			chain.is_cancelled = true
+	if _game_over or chain.is_cancelled or revision != turn_manager.get_context_revision():
+		chain.is_cancelled = true
 		return
-	await _try_calamity_robe_transfer(actual)
+	if await _try_calamity_robe_transfer(actual) == CHOICE_INVALID:
+		chain.is_cancelled = true
+		return
 	await _try_minus_mule_transfer(actual)
 	await _try_plus_mule_transfer(actual)
 	_sync_all_ui()
@@ -3789,6 +3806,8 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 		chain.damage.from_strike = from_strike
 		await chain.start()
 		await _finish_damage_chain(chain)
+		if chain.is_cancelled:
+			return CHOICE_INVALID
 	_sync_all_ui()
 
 func _play_duel(attacker: Player, target: Player):
@@ -4731,6 +4750,8 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 	chain.skip_response = true
 	await chain.start()
 	await _finish_damage_chain(chain)
+	if chain.is_cancelled:
+		return chain.damage.final_damage().target
 	if chain.damage.final_damage().committed:
 		if _game_over or revision != turn_manager.get_context_revision():
 			return chain.damage.final_damage().target
@@ -7185,24 +7206,28 @@ func _emit_calamity_target(overlay: ColorRect, target: Player):
 
 # 灾厄袍：当你受到一次伤害后，可将本装备移至一名其他角色的装备区
 # 目标已有防具则替换（旧防具进弃牌堆）；EquipmentPool 占用永久保留（不解除）
-func _try_calamity_robe_transfer(victim: Player):
+func _try_calamity_robe_transfer(victim: Player) -> int:
 	if victim == null or not victim.is_alive():
-		return
+		return 0
 	if victim.get_armor() != CardData.CardSubType.CALAMITY_ROBE:
-		return
+		return 0
 	var original_card = victim.get_equipment_card("armor")
 	if original_card == null:
-		return
-	var target = await _ask_calamity_robe_target(victim)
+		return 0
+	var revision = turn_manager.get_context_revision()
+	var allowed = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(victim) and victim.is_alive() \
+			and victim.get_armor() == CardData.CardSubType.CALAMITY_ROBE \
+			and victim.get_equipment_card("armor") == original_card
+	var target = await _ask_calamity_robe_target(victim, allowed)
+	if target is int or not allowed.call():
+		return CHOICE_INVALID
 	if target == null:
 		_update_debug("%s 放弃转移【灾厄袍】" % victim.player_name)
-		return
-	if _game_over or not victim.is_alive() or target == victim or not target.is_alive():
-		return
-	# 同一原袍仍在来源装备区，才允许替换目标现有防具。
-	if victim.equipment.get("armor", -1) != CardData.CardSubType.CALAMITY_ROBE \
-			or victim.equipment_cards.get("armor", null) != original_card:
-		return
+		return 0
+	if not target is Player or not players.has(target) or target == victim or not target.is_alive():
+		return CHOICE_INVALID
 	# 目标防具槽：已有防具则替换（旧防具进弃牌堆）
 	if target.equipment.has("armor"):
 		var old_card = target.remove_equipment("armor")
@@ -7210,20 +7235,21 @@ func _try_calamity_robe_transfer(victim: Player):
 			deck.discard(old_card)
 	var calamity_robe = victim.remove_equipment("armor")
 	if calamity_robe == null:
-		return
+		return CHOICE_INVALID
 	target.equip_card_to_slot("armor", calamity_robe)
 	_update_debug("%s 将【灾厄袍】移至 %s 的装备区（%s 受到的火焰伤害+1）" % [victim.player_name, target.player_name, target.player_name])
 	_sync_all_ui()
+	return 0
 
 # 选择灾厄袍转移目标：玩家0弹窗，AI 默认发动随机选一名其他存活角色
-func _ask_calamity_robe_target(victim: Player) -> Player:
+func _ask_calamity_robe_target(victim: Player, allowed: Callable = Callable()) -> Variant:
 	if _calamity_robe_target_override.is_valid():
 		var r = _calamity_robe_target_override.call()
 		if r is String and r == "cancel":
 			return null
 		return r
 	if victim.seat_index == 0:
-		return await _show_calamity_robe_target_picker(victim)
+		return await _show_calamity_robe_target_picker(victim, allowed)
 	var alive_others: Array[Player] = []
 	for p in players:
 		if p != victim and p.is_alive():
@@ -7233,7 +7259,9 @@ func _ask_calamity_robe_target(victim: Player) -> Player:
 	return alive_others[randi() % alive_others.size()]
 
 # 玩家0的灾厄袍转移目标弹窗（其他存活角色按钮 + 取消，锚点居中）
-func _show_calamity_robe_target_picker(victim: Player) -> Player:
+func _show_calamity_robe_target_picker(victim: Player, allowed: Callable = Callable()) -> Variant:
+	var answer = ChoicePromptAnswer.new()
+	var candidates: Array[Player] = []
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -7265,23 +7293,26 @@ func _show_calamity_robe_target_picker(victim: Player) -> Player:
 		if p == victim or not p.is_alive():
 			continue
 		var btn = Button.new()
+		var index = candidates.size()
+		candidates.append(p)
 		btn.text = p.player_name
 		btn.custom_minimum_size = Vector2(140, 44)
-		btn.pressed.connect(_emit_calamity_robe_target.bind(overlay, p), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(index), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(140, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_calamity_robe_target_result.emit(null)
-	, CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(func(): answer.submit(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var result = await _calamity_robe_target_result
-	return result
+	var result = await _wait_choice_prompt(overlay, answer, allowed, false)
+	if result == CHOICE_INVALID:
+		return CHOICE_INVALID
+	if result < 0:
+		return null
+	return candidates[result] if result < candidates.size() else CHOICE_INVALID
 
 func _emit_calamity_robe_target(overlay: ColorRect, target: Player):
 	overlay.queue_free()
