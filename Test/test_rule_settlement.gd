@@ -795,6 +795,8 @@ func _run():
 	await ice_sword_prompt_cases.run(self)
 	var guanshi_prompt_cases = load("res://Test/guanshi_prompt_cases.gd").new()
 	await guanshi_prompt_cases.run(self)
+	var guanshi_mount_cases = load("res://Test/guanshi_mount_cases.gd").new()
+	await guanshi_mount_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

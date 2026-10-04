@@ -1761,8 +1761,12 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				return false
 			if activate == 1:
 				var slots = p.get_mount_slots()
-				var slot: String = await _show_mount_discard_picker(p) if p.seat_index == 0 else slots.pick_random()
-				if not choice_valid.call() or not p.equipment.has(slot):
+				var originals: Dictionary = {}
+				for candidate in slots:
+					originals[candidate] = _guanshi_mount_card(p, candidate)
+				var slot: String = await _show_mount_discard_picker(p, choice_valid) if p.seat_index == 0 else slots.pick_random()
+				if not choice_valid.call() or not originals.has(slot) or originals[slot] == null \
+						or _guanshi_mount_card(p, slot) != originals[slot]:
 					return false
 				var discarded_mount = p.remove_equipment(slot)
 				if discarded_mount != null:
@@ -3564,10 +3568,30 @@ func _ask_guanshi(target_name: String, allowed: Callable = Callable()) -> int:
 	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 贯石斧：选择弃置哪张坐骑牌（锚点居中弹窗；已确认发动，必须弃一匹，无取消）
-func _show_mount_discard_picker(p: Player) -> String:
+func _guanshi_mount_card(p: Player, slot: String) -> CardBase:
+	if not Player.MOUNT_SLOTS.has(slot):
+		return null
+	return p.get_hidden_equipment_card(slot) if p.equipment.get(slot, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT else p.get_equipment_card(slot)
+
+func _show_mount_discard_picker(p: Player, allowed: Callable = Callable()) -> String:
+	var slots = p.get_mount_slots()
+	var originals: Dictionary = {}
+	for slot in slots:
+		originals[slot] = _guanshi_mount_card(p, slot)
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and players.has(p) and p.is_alive() \
+			and revision == turn_manager.get_context_revision() \
+			and (not allowed.is_valid() or allowed.call()) \
+			and slots.any(func(slot): return originals[slot] != null and _guanshi_mount_card(p, slot) == originals[slot])
+	if not valid.call():
+		return ""
 	# 测试钩子：返回要弃置的坐骑槽位
 	if _guanshi_mount_override.is_valid():
-		return _guanshi_mount_override.call()
+		var selected = await _guanshi_mount_override.call()
+		return selected if selected is String and valid.call() and originals.has(selected) \
+			and originals[selected] != null and _guanshi_mount_card(p, selected) == originals[selected] else ""
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3596,15 +3620,19 @@ func _show_mount_discard_picker(p: Player) -> String:
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	for slot in p.get_mount_slots():
+	for index in slots.size():
+		var slot = slots[index]
 		var btn = Button.new()
 		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(p.equipment[slot])]
 		btn.custom_minimum_size = Vector2(160, 44)
-		btn.pressed.connect(_emit_mount_replace.bind(overlay, slot), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(index))
 		hbox.add_child(btn)
 
-	var result = await _mount_replace_result
-	return result
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result < 0 or result >= slots.size() or not valid.call():
+		return ""
+	var selected = slots[result]
+	return selected if originals[selected] != null and _guanshi_mount_card(p, selected) == originals[selected] else ""
 
 # ============================
 #  铁索连环
