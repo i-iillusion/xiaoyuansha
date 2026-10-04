@@ -19,6 +19,16 @@ Git 元数据目录的 `local-ci/<唯一运行号>/project`；保留源文件哈
 被强制终止时 stdout 尾部可能未刷新，因此超时始终判失败，即使已经出现成功 RESULT。
 不改正式 `project.godot`、生产逻辑或 Linux CI。
 
+Windows 本地捕获通过 `ProcessStartInfo` 启动无窗口进程，并行将 stdout/stderr
+原字节流异步复制到缓冲日志文件，退出后等待两条流写完，再检查退出码与日志。
+不经过 PowerShell 逐行管道，也不直接将引擎输出句柄指向磁盘文件。
+[WindowsTerminalLogger 源码](https://github.com/godotengine/godot/blob/master/platform/windows/windows_terminal_logger.cpp)
+显示调试输出逐条调用 `FlushFileBuffers`；仅关闭上面的普通 stdout 刷新设置仍不足以
+避免直接文件句柄的磁盘刷新成本。2026-10-04 同机诊断中，200次独立print从约1.4秒
+降至约1.9毫秒，标签更新约9毫秒；完整七组核心从超时恢复为19.240秒、3399断言通过。
+日志内容、七组、错误规则和120/60秒限制保持，退出及流写完的耗时均计入原限额。
+历史超时日志保留；此测量不承诺任意主机的固定耗时。
+
 验收门槛不变：导入 120 秒，每组 60 秒；退出码为 0、每组唯一且正断言数的
 `RESULT: N asserts, 0 failures`、无脚本错误/ERROR/Parse Error/FAIL、没有超时。
 导入失败不启动测试；某组失败仍记录后续各组，整体退出 1。脚本保留所有隔离副本

@@ -44,18 +44,32 @@ try {
     function Invoke-CheckedGodot([string]$Name, [string[]]$ExtraArgs, [int]$LimitSeconds) {
         $stdout = Join-Path $logDir "$Name.stdout.log"
         $stderr = Join-Path $logDir "$Name.stderr.log"
-        # Native file handles avoid PowerShell's per-line output forwarding overhead.
-        # Reject cmd expansion characters, keep delayed expansion disabled and quote paths.
+        # Godot's Windows logger flushes every print when stdout is a disk handle.
+        # Drain both anonymous pipes as bytes, asynchronously, into buffered log files.
+        # Do not use PowerShell's per-line pipeline or filter any engine output.
         foreach ($value in @($godotExecutable, $snapshot, $stdout, $stderr)) {
             if ($value -match '[%"\r\n]') { throw "Unsupported command path: $value" }
         }
         $arguments = @('--headless', '--path', ('"' + $snapshot + '"')) + $ExtraArgs
-        $commandLine = '""' + $godotExecutable + '" ' + ($arguments -join ' ') + ' 1>"' + $stdout + '" 2>"' + $stderr + '""'
+        $startInfo = New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $godotExecutable
+        $startInfo.Arguments = $arguments -join ' '
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $startInfo
+        $stdoutFile = [IO.File]::Create($stdout)
+        $stderrFile = [IO.File]::Create($stderr)
         $timer = [Diagnostics.Stopwatch]::StartNew()
-        $process = Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/v:off', '/s', '/c', $commandLine) -PassThru -WindowStyle Hidden
-        $null = $process.Handle # Retain the handle so ExitCode remains available after exit.
+        $started = $false
         $timedOut = $false
         try {
+            $started = $process.Start()
+            $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile)
+            $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrFile)
             if (-not $process.WaitForExit($LimitSeconds * 1000)) {
                 $timedOut = $true
                 if (-not $process.HasExited) {
@@ -64,7 +78,14 @@ try {
                 $process.WaitForExit()
             }
             $process.WaitForExit()
+            if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdoutCopy, $stderrCopy), 5000)) {
+                throw "Output capture did not finish for $Name."
+            }
+            $stdoutFile.Dispose()
+            $stderrFile.Dispose()
             $timer.Stop()
+            # Capture/drain time is part of the same fixed budget.
+            $timedOut = $timedOut -or $timer.Elapsed.TotalSeconds -gt $LimitSeconds
             $lines = @((@(Get-Content -LiteralPath $stdout -Encoding UTF8) + @(Get-Content -LiteralPath $stderr -Encoding UTF8)) | ForEach-Object { $_.ToString() })
             $errors = @($lines | Where-Object { $_ -match 'SCRIPT ERROR|ERROR:|Parse Error|\bFAIL\b' })
             $resultLines = @($lines | Where-Object { $_ -match '^RESULT:' })
@@ -78,7 +99,9 @@ try {
             Write-Host "$Name exit=$($outcome.exit_code) timeout=$timedOut passed=$passed seconds=$($outcome.elapsed_seconds) $resultLines"
             return $outcome
         } finally {
-            if (-not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }
+            if ($started -and -not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }
+            $stdoutFile.Dispose()
+            $stderrFile.Dispose()
             $process.Dispose()
         }
     }
