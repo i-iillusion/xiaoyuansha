@@ -17,13 +17,14 @@ func reset():
 func drive(action: String):
 	var pending = game._choice_prompt_stack.back()
 	var buttons = pending.overlay.find_children("*", "Button", true, false)
-	suite.check(not game._countdown_active and not game._countdown_on_timeout.is_valid(),
-		"E03e-3a：盾窗口没有新增倒计时或超时默认")
+	suite.check(game._countdown_active and game._countdown_on_timeout.is_valid(),
+		"E03-R01c：盾响应按裁决有计时，超时不发动")
 	match action:
 		"accept":
 			buttons[0].pressed.emit()
 			pending.answer.submit(1)
 		"decline": buttons[1].pressed.emit()
+		"timeout": game._countdown_on_timeout.call()
 		"close": pending.overlay.queue_free()
 		"phase":
 			game.turn_manager.current_phase = TurnManager.Phase.END
@@ -36,9 +37,9 @@ func drive(action: String):
 
 func launch(timed: bool):
 	if timed:
-		await game._show_choice_popup("E03e-3a嵌套", ["确认"])
-	else:
 		await game._show_liehuo_prompt()
+	else:
+		await game._show_bloodthirsty_prompt(game.players[0], game.players[1])
 
 func run(host):
 	suite = host
@@ -49,7 +50,7 @@ func run(host):
 	game.card_action_committed.connect(collect)
 	for snatch in [false, true]:
 		for concrete in [false, true]:
-			for action in ["accept", "decline", "close", "phase", "shield_moved", "ended"]:
+			for action in ["accept", "decline", "timeout", "close", "phase", "shield_moved", "ended"]:
 				reset()
 				events.clear()
 				var target = game.players[0]
@@ -65,7 +66,7 @@ func run(host):
 				await game._play_steal_card(actor, target, snatch)
 				suite.check(target.hp == (2 if action == "accept" else 3),
 					"E03e-3a：盾仅接受时失去一次体力：" + action)
-				if action == "decline":
+				if action in ["decline", "timeout"]:
 					suite.check(target.get_equipment_card("armor") == null
 						and (actor.determined_cards == [shield] if snatch else game.deck._discard.count(shield) == 1),
 						"E03e-3a：拒绝盾继续真实拆/顺原牌")
@@ -75,7 +76,7 @@ func run(host):
 				else:
 					suite.check(target.get_equipment_card("armor") == shield and actor.hand_size() == 0
 						and not game.deck._discard.has(shield), "E03e-3a：防止/失效停止旧拆顺效果")
-				suite.check(events.size() == 1 and game.deck._discard.size() == (2 if action == "decline" and not snatch else 1)
+				suite.check(events.size() == 1 and game.deck._discard.size() == (2 if action in ["decline", "timeout"] and not snatch else 1)
 					and (not concrete or game.deck._discard.count(original) == 1),
 					"E03e-3a：已用锦囊费用/事件保留一次，不退款不重付")
 				await suite.process_frame
@@ -90,6 +91,7 @@ func run(host):
 		var pending = game._choice_prompt_stack.back()
 		var button = pending.overlay.find_children("*", "Button", true, false)[0]
 		old_click.append(button.get_signal_connection_list("pressed")[0].callable)
+		old_click.append(game._countdown_on_timeout)
 		drive("close")
 	close_first.call_deferred()
 	var first = await game._try_liehuo_nullify_result(target, CardData.CardSubType.SNATCH)
@@ -99,8 +101,9 @@ func run(host):
 	var next = func():
 		var pending = game._choice_prompt_stack.back()
 		old_click[0].call()
+		old_click[1].call()
 		game._response_ready.emit()
-		suite.check(not pending.answer.settled, "E03e-3a：旧按钮/共享信号不回答新盾窗口")
+		suite.check(not pending.answer.settled, "E03-R01c：旧按钮/旧超时/共享信号不回答新盾窗口")
 		drive("accept")
 	next.call_deferred()
 	var second = await game._try_liehuo_nullify_result(target, CardData.CardSubType.SNATCH)

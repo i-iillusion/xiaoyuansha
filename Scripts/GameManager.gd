@@ -4288,8 +4288,9 @@ func _show_liehuo_prompt(allowed: Callable = Callable()) -> int:
 
 	pay_btn.pressed.connect(func(): answer.submit(1))
 	lose_btn.pressed.connect(func(): answer.submit(0))
-	# E03-Q2尚待裁决：保持原盾无倒计时，不套用其他响应的默认放弃。
-	return await _wait_choice_prompt(overlay, answer, allowed, false)
+	# E03-Q2：响应超时不发动；关闭/过期仍明确失效。
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	return 0 if result == -1 else result
 
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
