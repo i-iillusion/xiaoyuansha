@@ -274,6 +274,8 @@ var _is_campus_targeting: bool = false
 var _is_shensu_targeting: bool = false
 # 【Gay】（比尔·盖伊）：回复目标选择中
 var _is_gay_targeting: bool = false
+var _gay_execution_generation: int = 0
+var _gay_execution_owner: int = -1
 # 【Gay】按实际操作者与规则阶段登记，响应返回不刷新。
 var _gay_used: bool:
 	get: return turn_manager.phase_skill_used("gay")
@@ -6453,6 +6455,16 @@ func _on_gay_target_click(target: Player):
 
 # 执行【Gay】：弃 X 张手牌，双方各回复 X 点体力（X ≤ 双方体力上限最小值，且 ≤ 手牌数）
 func _execute_gay(p: Player, target: Player) -> void:
+	if _gay_execution_owner != -1:
+		return
+	_gay_execution_generation += 1
+	var owner = _gay_execution_generation
+	_gay_execution_owner = owner
+	await _execute_gay_pending(p, target, owner)
+	if _gay_execution_owner == owner:
+		_gay_execution_owner = -1
+
+func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 	if not _can_use_play_skill(p):
 		return
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
@@ -6461,7 +6473,8 @@ func _execute_gay(p: Player, target: Player) -> void:
 		return
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
+		return _gay_execution_owner == owner and _gay_execution_generation == owner \
+			and _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
 			and p.general_name == "比尔·盖伊" and players.has(target) and target != p \
 			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
 			and not _is_kneeling(target) and not _gay_used
@@ -8296,6 +8309,8 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_gay_execution_generation += 1
+	_gay_execution_owner = -1
 	_game_over = false
 	_clear_pending_determined_card()
 	_dead_processed.clear()
