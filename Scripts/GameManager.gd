@@ -94,6 +94,8 @@ var _selector_scene = preload("res://Scenes/CardSelector.tscn")
 # 目标选择模式状态
 var _is_targeting: bool = false
 var _targeting_card_sub: CardData.CardSubType = -1
+var _card_target_generation: int = 0
+var _card_target_confirm_owner: int = -1
 # 从「已确定的牌」点击进入出牌流程时，保留待支付的原资源；只在使用真正成立时移除。
 var _pending_determined_card: CardBase = null
 
@@ -1311,6 +1313,7 @@ func _get_duel_targets(attacker: Player) -> Array[Player]:
 # ============================
 
 func _enter_targeting_mode(sub: CardData.CardSubType):
+	_card_target_generation += 1
 	_is_targeting = true
 	_targeting_card_sub = sub
 
@@ -1322,6 +1325,7 @@ func _enter_targeting_mode(sub: CardData.CardSubType):
 	_update_debug("请点击一名玩家头像，选择【%s】的目标（或点击「取消选择」）" % CardData.get_type_name(sub))
 
 func _exit_targeting_mode():
+	_card_target_generation += 1
 	_is_targeting = false
 	_targeting_card_sub = -1
 	_cancel_target_btn.visible = false
@@ -1331,6 +1335,7 @@ func _exit_targeting_mode():
 
 # 取消按钮统一处理（普通目标模式 / 铁索连环模式 / 方天画戟多目标模式）
 func _on_cancel_target_pressed():
+	_card_target_generation += 1
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
 	_yes_ah_active = false
 	_clear_pending_determined_card()
@@ -3691,6 +3696,7 @@ func _show_mount_discard_picker(p: Player, allowed: Callable = Callable()) -> St
 # ============================
 
 func _enter_iron_chain_mode():
+	_card_target_generation += 1
 	_is_iron_chain_targeting = true
 	_iron_chain_targets.clear()
 
@@ -3702,6 +3708,13 @@ func _enter_iron_chain_mode():
 
 # 点击角色头像（铁索连环模式）
 func _on_iron_chain_target_click(target: Player):
+	if not _is_iron_chain_targeting or _card_target_confirm_owner == _card_target_generation:
+		return
+	var actor = players[0]
+	if not _can_use_play_skill(actor) or not players.has(target): return
+	var generation = _card_target_generation
+	var revision = turn_manager.get_context_revision()
+	var pending_card = _pending_determined_card
 	if not target.is_alive():
 		_update_debug("目标已阵亡")
 		return
@@ -3714,25 +3727,42 @@ func _on_iron_chain_target_click(target: Player):
 		return
 
 	_iron_chain_targets.append(target)
+	var chosen = _iron_chain_targets.duplicate()
+	var valid = func():
+		return _can_use_play_skill(actor) and revision == turn_manager.get_context_revision() \
+			and generation == _card_target_generation and _is_iron_chain_targeting \
+			and _pending_determined_card == pending_card and _iron_chain_targets == chosen \
+			and chosen.all(func(p): return players.has(p) and p.is_alive() and not _is_kneeling(p))
 
 	if _iron_chain_targets.size() == 1:
 		# 问是否继续选第二名
-		var more = await _show_more_target_confirm(target.player_name)
-		if more:
+		_card_target_confirm_owner = generation
+		var more = await _show_more_target_confirm(target.player_name, valid)
+		if _card_target_confirm_owner == generation: _card_target_confirm_owner = -1
+		if more == CHOICE_INVALID or not valid.call():
+			_clear_invalid_card_targeting(generation)
+			return
+		if more == 1:
 			_update_debug("已选择 %s，请再点击第二名角色" % target.player_name)
 			return
 
 	# 单目标（否）或已选满两名 → 执行
-	await _execute_iron_chain(_iron_chain_targets)
+	if not valid.call():
+		_clear_invalid_card_targeting(generation)
+		return
+	_is_iron_chain_targeting = false
+	await _execute_iron_chain(chosen)
+	if generation != _card_target_generation: return
 	_clear_pending_determined_card()
 	_is_iron_chain_targeting = false
 	_iron_chain_targets.clear()
 	_cancel_target_btn.visible = false
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	_restore_play_skill_buttons()
 
 # 是否继续选第二名目标的确认
-func _show_more_target_confirm(target_name: String) -> bool:
+func _show_more_target_confirm(target_name: String, allowed: Callable = Callable()) -> int:
+	if _game_over or (allowed.is_valid() and not allowed.call()): return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3763,23 +3793,16 @@ func _show_more_target_confirm(target_name: String) -> bool:
 	var yes_btn = Button.new()
 	yes_btn.text = "继续选择"
 	yes_btn.custom_minimum_size = Vector2(160, 44)
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_iron_chain_cfm_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	yes_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
 	hbox.add_child(yes_btn)
 
 	var no_btn = Button.new()
 	no_btn.text = "只选 1 名"
 	no_btn.custom_minimum_size = Vector2(160, 44)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_iron_chain_cfm_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
 	hbox.add_child(no_btn)
 
-	var result = await _iron_chain_cfm_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 执行铁索连环：对每个目标切换连环状态
 func _execute_iron_chain(targets: Array[Player]):
@@ -4403,10 +4426,14 @@ func _show_dodge_prompt(attacker_name: String, card_name: String) -> int:
 signal _target_cfm_result(result: bool)
 
 # 选择目标后的确认弹窗
-func _show_target_confirm(attacker_name: String, target_name: String, sub: CardData.CardSubType) -> bool:
+func _show_target_confirm(attacker_name: String, target_name: String, sub: CardData.CardSubType, allowed: Callable = Callable()) -> int:
 	# 测试钩子：跳过 UI 直接返回
 	if _target_confirm_override.is_valid():
-		return _target_confirm_override.call()
+		var reply = await _target_confirm_override.call()
+		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID: return CHOICE_INVALID
+		return 1 if reply else 0
+	if _game_over or (allowed.is_valid() and not allowed.call()): return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -4445,17 +4472,9 @@ func _show_target_confirm(attacker_name: String, target_name: String, sub: CardD
 	no_btn.custom_minimum_size = Vector2(160, 44)
 	hbox.add_child(no_btn)
 
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_target_cfm_result.emit(true)
-	, CONNECT_ONE_SHOT)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_target_cfm_result.emit(false)
-	, CONNECT_ONE_SHOT)
-
-	var result = await _target_cfm_result
-	return result
+	yes_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
 	var record = chain.damage
@@ -8587,7 +8606,10 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 
 # 目标选择模式下的点击处理
 func _on_target_click(target: Player):
+	if not _is_targeting or _card_target_confirm_owner == _card_target_generation: return
+	if turn_manager.get_play_actor_idx() < 0 or turn_manager.get_play_actor_idx() >= players.size(): return
 	var attacker = players[turn_manager.get_play_actor_idx()]
+	if not _can_use_play_skill(attacker) or not players.has(target): return
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -8648,8 +8670,24 @@ func _on_target_click(target: Player):
 	if _targeting_card_sub in TARGET_TRICKS and not get_trick_targets(attacker, _targeting_card_sub).has(target):
 		return
 	# 目标有效 → 确认弹窗
-	var confirmed = await _show_target_confirm(attacker.player_name, target.player_name, _targeting_card_sub)
-	if not confirmed:
+	var generation = _card_target_generation
+	var revision = turn_manager.get_context_revision()
+	var selected_sub = _targeting_card_sub
+	var pending_card = _pending_determined_card
+	var valid = func():
+		return _can_use_play_skill(attacker) and generation == _card_target_generation \
+			and revision == turn_manager.get_context_revision() and _is_targeting \
+			and _targeting_card_sub == selected_sub and _pending_determined_card == pending_card \
+			and players.has(target) and target.is_alive() and not _is_kneeling(target) \
+			and (not is_strike_target or _get_strike_targets(attacker).has(target)) \
+			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target))
+	_card_target_confirm_owner = generation
+	var confirmed = await _show_target_confirm(attacker.player_name, target.player_name, selected_sub, valid)
+	if _card_target_confirm_owner == generation: _card_target_confirm_owner = -1
+	if confirmed == CHOICE_INVALID or not valid.call():
+		_clear_invalid_card_targeting(generation)
+		return
+	if confirmed == 0:
 		_update_debug("取消对 %s 出牌" % target.player_name)
 		return  # 继续目标选择模式
 
@@ -8657,14 +8695,26 @@ func _on_target_click(target: Player):
 	_is_targeting = false
 	_cancel_target_btn.visible = false
 	_reveal_ask_pending = true
-	await execute_card_on_target(target, _targeting_card_sub)
+	await execute_card_on_target(target, selected_sub)
+	if generation != _card_target_generation: return
 	_clear_pending_determined_card()
 	_targeting_card_sub = -1
 	# 【苕】任意玩家行动后询问是否明置
 	await _maybe_ask_reveal()
 	# 恢复出牌按钮
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	_restore_play_skill_buttons()
+
+# 只清理本次失效选择；取消后已重开的新选择不受旧协程影响。
+func _clear_invalid_card_targeting(generation: int):
+	if generation != _card_target_generation: return
+	_card_target_generation += 1
+	_is_targeting = false
+	_is_iron_chain_targeting = false
+	_targeting_card_sub = -1
+	_iron_chain_targets.clear()
+	_clear_pending_determined_card()
+	_cancel_target_btn.visible = false
+	_restore_play_skill_buttons()
 
 # ============================
 #  详情弹窗
