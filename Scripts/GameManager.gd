@@ -255,6 +255,8 @@ var _dying_contexts: Dictionary = {}
 var _dying_lifecycle_generation: int = 0
 var _sage_save_serial: int = 0
 var _sage_save_pending: Dictionary = {}
+var _rescue_choice_serial: int = 0
+var _rescue_choice_pending: Dictionary = {}
 # 跳过阵亡角色回合时的重入保护（next_turn 会同步触发 START 阶段回调）
 var _skipping_dead: bool = false
 
@@ -8519,7 +8521,7 @@ func _check_dying(dying: Player) -> int:
 
 	# 经典基线：从当前回合角色开始轮询，含濒死本人；放弃后本窗口不回头。
 	# 普通求救全部结束后，才进入既有装傻/贤者及死亡前规则。
-	await _run_rescue_round(dying)
+	if await _run_rescue_round(dying) == CHOICE_INVALID: return CHOICE_INVALID
 	if not valid.call(): return CHOICE_INVALID
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢至少一半（向上取整）回复至 1 点体力
@@ -8767,6 +8769,7 @@ func _on_game_over(winner_identity: String):
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
 	_sage_save_pending.clear()
+	_rescue_choice_pending.clear()
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()
@@ -8943,40 +8946,67 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 func _use_dying_card(dying: Player, sub: CardData.CardSubType) -> bool:
 	return _use_rescue_card(dying, dying, sub)
 
-func _run_rescue_round(dying: Player):
+func _run_rescue_round(dying: Player) -> int:
 	if turn_manager == null or turn_manager.current_player_idx < 0 or turn_manager.current_player_idx >= players.size():
-		return
+		return CHOICE_INVALID
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var context = _dying_contexts.get(dying)
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
 	var order: Array[Player] = []
 	for offset in players.size():
 		order.append(players[(turn_manager.current_player_idx + offset) % players.size()])
 	for rescuer in order:
 		while dying.is_dying() and not _game_over:
 			var sub = await _ask_rescue_card(rescuer, dying)
+			if sub == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 			var hp_before = dying.hp
 			if not _use_rescue_card(rescuer, dying, sub) or dying.hp <= hp_before:
 				break # 本人可连续出牌；拒绝/无牌/过期选择则轮到下一人。
 		if not dying.is_dying() or _game_over:
 			break
+	return 0 if valid.call() else CHOICE_INVALID
 
 func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
+	if _rescue_choice_pending.has(dying): return CHOICE_INVALID
 	var options = _rescue_options(rescuer, dying)
 	if options.is_empty():
 		return -1
+	_rescue_choice_serial += 1
+	var owner = _rescue_choice_serial
+	_rescue_choice_pending[dying] = owner
+	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
+	var context = _dying_contexts.get(dying)
 	var snapshot = HandSelection.new(rescuer)
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation \
+			and players.has(rescuer) and players.has(dying) and not rescuer.is_dead() and not dying.is_dead() \
+			and revision == turn_manager.get_context_revision() and _dying_contexts.get(dying) == context \
+			and _rescue_choice_pending.get(dying) == owner \
+			and rescuer.hand == snapshot.hand and rescuer.determined_cards == snapshot.determined
+	var selected = await _ask_rescue_card_pending(rescuer, dying, options, valid)
+	if not valid.call(): selected = CHOICE_INVALID
+	elif dying.is_alive(): selected = -1 # 合法的外部救回不误当死亡流程技术失效。
+	if _rescue_choice_pending.get(dying) == owner: _rescue_choice_pending.erase(dying)
+	if selected == CHOICE_INVALID: return CHOICE_INVALID
+	return selected if _rescue_options(rescuer, dying).has(selected) else -1
+
+func _ask_rescue_card_pending(rescuer: Player, dying: Player, options: Array[int], valid: Callable) -> int:
 	var selected: int
 	if rescuer == dying and rescuer == players[0] and _dying_peach_override.is_valid():
-		selected = CardData.CardSubType.PEACH if _dying_peach_override.call() else -1
+		var reply = await _dying_peach_override.call()
+		selected = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (CardData.CardSubType.PEACH if reply else -1)
 	elif _rescue_choice_override.is_valid():
 		selected = await _rescue_choice_override.call(rescuer, dying, options)
 	elif rescuer != players[0]:
 		selected = await _choose_ai_response(rescuer, "rescue", options, {"target": dying.seat_index})
 	else:
-		selected = await _show_rescue_prompt(rescuer, dying, options)
-	if _game_over or revision != turn_manager.get_context_revision() \
-			or rescuer.hand != snapshot.hand or rescuer.determined_cards != snapshot.determined:
-		return -1
-	return selected if _rescue_options(rescuer, dying).has(selected) else -1
+		var allowed = func(): return valid.call() and dying.is_dying() and not _rescue_options(rescuer, dying).is_empty()
+		selected = await _show_rescue_prompt(rescuer, dying, options, allowed)
+	return selected
 
 # 保守 AI 策略，不是规则限制：自救；救公开同阵营者；不读取他人隐藏身份。
 func _choose_ai_rescue(rescuer: Player, dying: Player, options: Array[int]) -> int:
@@ -8986,10 +9016,11 @@ func _choose_ai_rescue(rescuer: Player, dying: Player, options: Array[int]) -> i
 
 func _show_dying_prompt(dying: Player):
 	var sub = await _ask_rescue_card(dying, dying)
-	_use_rescue_card(dying, dying, sub)
+	if sub != CHOICE_INVALID: _use_rescue_card(dying, dying, sub)
+	return sub
 
-func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int]) -> int:
-	var answer = RescueAnswer.new()
+func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int], allowed: Callable = Callable()) -> int:
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.name = "RescuePrompt"
 	overlay.color = Color(0.3, 0.0, 0.0, 0.6)
@@ -9033,12 +9064,7 @@ func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int]) ->
 	skip_btn.pressed.connect(answer.submit.bind(-1))
 	vbox.add_child(skip_btn)
 
-	_start_response_countdown(overlay, rescuer.player_name, answer.submit.bind(-1))
-	var chosen_sub: int = await answer.answered
-	_stop_countdown()
-	if not overlay.is_queued_for_deletion():
-		overlay.queue_free()
-	return chosen_sub
+	return await _wait_choice_prompt(overlay, answer, allowed)
 
 func end_play_phase():
 	if turn_manager.current_phase == TurnManager.Phase.PLAY:
