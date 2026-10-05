@@ -278,6 +278,12 @@ var _campus_execution_generation: int = 0
 var _campus_execution_owner: int = -1
 # 【神速】（比尔·盖伊）：回合开始选项1 的杀目标选择中
 var _is_shensu_targeting: bool = false
+var _shensu_execution_generation: int = 0
+var _shensu_execution_owner: int = -1
+var _shensu_target_generation: int = 0
+var _shensu_target_answer: ChoicePromptAnswer
+var _start_phase_generation: int = 0
+var _start_phase_owner: int = -1
 # 【Gay】（比尔·盖伊）：回复目标选择中
 var _is_gay_targeting: bool = false
 var _gay_execution_generation: int = 0
@@ -774,7 +780,21 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 		TurnManager.Phase.END:     _do_end(pid)
 
 func _do_start(pid: int):
+	if _start_phase_owner != -1: return
+	_start_phase_generation += 1
+	var generation = _start_phase_generation
+	_start_phase_owner = generation
+	await _do_start_pending(pid, generation)
+	if _start_phase_owner == generation: _start_phase_owner = -1
+
+func _do_start_pending(pid: int, generation: int):
 	var p = players[pid]
+	var revision = turn_manager.get_context_revision()
+	var current = func():
+		return not _game_over and generation == _start_phase_generation and players.has(p) \
+			and turn_manager.current_player_idx == pid and turn_manager.current_phase == TurnManager.Phase.START \
+			and revision == turn_manager.get_context_revision()
+	if not current.call(): return
 	# 武将牌反面：翻回正面并跳过本回合（不摸牌/不出牌/不弃牌）
 	if p.facedown:
 		p.facedown = false
@@ -786,12 +806,16 @@ func _do_start(pid: int):
 	# 【神速】（比尔·盖伊）：回合开始阶段二选一（跳过判定+视为出杀 / 跳出牌弃牌+摸牌减益）
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "比尔·盖伊" and p.is_alive() and not turn_manager.skip_full_turn:
-		await _maybe_shensu(p)
+		if await _maybe_shensu(p) == CHOICE_INVALID: return
+	if not current.call(): return
 	# 【烂忠厚】（麦克斯·欧尼斯特）：回合开始阶段可摸一张牌并选择跳过自己的一个阶段
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "麦克斯·欧尼斯特" and p.is_alive() and not turn_manager.skip_full_turn:
 		await _maybe_meiyong(p)
+	if not current.call(): return
 	_sync_all_ui()
+	# advance_phase可同步走到下一角色START；先释放本轮入口，不能锁住合法轮转。
+	if _start_phase_owner == generation: _start_phase_owner = -1
 	turn_manager.advance_phase()
 
 # 回合开始统一重置（测试可直接调用）：治疗权杖桃计数全清；酒层数——未装备狂暴战斧的玩家清零
@@ -1365,7 +1389,7 @@ func _on_cancel_target_pressed():
 	if _is_shensu_targeting:
 		_is_shensu_targeting = false
 		_cancel_target_btn.visible = false
-		_shensu_pick_result.emit(null)
+		if _shensu_target_answer != null: _shensu_target_answer.submit(-1)
 		_update_debug("取消【神速】杀目标")
 		return
 	if _is_gay_targeting:
@@ -6357,36 +6381,56 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 # ============================
 
 # 回合开始询问：是否发动（玩家0弹窗 / 测试钩子；AI 暂不主动发动）
-func _maybe_shensu(p: Player) -> void:
-	var activate := false
+func _maybe_shensu(p: Player) -> int:
+	if _shensu_execution_owner != -1: return CHOICE_INVALID
+	_shensu_execution_generation += 1
+	var owner = _shensu_execution_generation
+	_shensu_execution_owner = owner
+	var result = await _maybe_shensu_pending(p, owner)
+	if _shensu_execution_owner == owner: _shensu_execution_owner = -1
+	return result
+
+func _maybe_shensu_pending(p: Player, owner: int) -> int:
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and players.has(p) and p.is_alive() and p.general_name == "比尔·盖伊" \
+			and _shensu_execution_owner == owner and _shensu_execution_generation == owner \
+			and revision == turn_manager.get_context_revision() and turn_manager.current_player_idx == p.seat_index \
+			and turn_manager.current_phase == TurnManager.Phase.START and not turn_manager.skip_full_turn
+	if not valid.call(): return CHOICE_INVALID
+	var activate := 0
 	if _shensu_override.is_valid():
-		activate = _shensu_override.call()
+		var reply = await _shensu_override.call()
+		activate = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	elif p.seat_index == 0:
-		activate = await _show_shensu_activate_prompt()
-	if not activate:
-		return
+		activate = await _show_shensu_activate_prompt(valid)
+	if activate == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+	if activate != 1: return 0
 	# 二选一：选项1（判定区有牌才能选）/ 选项2
 	var option := 0
 	if _shensu_option_override.is_valid():
-		option = _shensu_option_override.call()
+		option = await _shensu_option_override.call()
 	elif p.seat_index == 0:
-		option = await _show_shensu_option_prompt(p)
+		option = await _show_shensu_option_prompt(p, valid)
+	if option == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if option == 1:
 		# 选项1 兜底：判定区必须有牌才能发动（无牌时相当于未选）
 		if p.judgment_cards.is_empty():
 			_update_debug("判定区无牌，【神速】选项1 无法发动")
 			_sync_all_ui()
-			return
+			return 0
 		# 选项1：跳过判定阶段 + 视为对一名其他角色打出一张无距离限制的【杀】
-		var target: Player = null
+		var target = null
 		if _shensu_target_override.is_valid():
-			target = _shensu_target_override.call()
+			target = await _shensu_target_override.call()
 		else:
-			target = await _pick_shensu_strike_target(p)
+			target = await _pick_shensu_strike_target(p, valid)
+		if (typeof(target) == TYPE_INT and target == CHOICE_INVALID) or not valid.call(): return CHOICE_INVALID
 		if target == null:
 			_update_debug("未选择【神速】杀目标，取消发动（判定阶段照常）")
 			_sync_all_ui()
-			return
+			return 0
+		if not _shensu_strike_target_valid(p, target) or p.judgment_cards.is_empty(): return CHOICE_INVALID
 		turn_manager.skip_judge_phase = true
 		_update_debug("%s 发动【神速】选项1：跳过判定阶段，对 %s 视为打出一张无距离限制的【杀】！" % [p.player_name, target.player_name])
 		await _execute_shensu_strike(p, target)
@@ -6396,39 +6440,74 @@ func _maybe_shensu(p: Player) -> void:
 		turn_manager.skip_play_discard_phase = true
 		_update_debug("%s 发动【神速】选项2：跳过出牌和弃牌阶段，摸牌减益叠加（累计欠 %d 张）" % [p.player_name, p.shensu_penalty])
 	_sync_all_ui()
+	return 1 if option in [1, 2] else 0
 
 # 神速发动确认弹窗（玩家0）
-func _show_shensu_activate_prompt() -> bool:
-	var idx = await _show_choice_popup("现在是回合开始阶段\n是否发动【神速】技能？", ["发动【神速】", "不发动"])
-	return idx == 0
+func _show_shensu_activate_prompt(allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("现在是回合开始阶段\n是否发动【神速】技能？", ["发动【神速】", "不发动"], allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
+	return 1 if idx == 0 else 0
 
 # 神速选项弹窗：返回 1/2（0=取消）；判定区无牌时选项1 不可选
-func _show_shensu_option_prompt(p: Player) -> int:
+func _show_shensu_option_prompt(p: Player, allowed: Callable = Callable()) -> int:
+	var options: Array[int] = [2]
 	var buttons: Array = ["2.跳过出牌和弃牌阶段（下回合摸牌减益）"]
 	if not p.judgment_cards.is_empty():
+		options.insert(0, 1)
 		buttons.insert(0, "1.跳过判定阶段，视为打出一张无距离限制的【杀】")
 	else:
 		_update_debug("判定区无牌，【神速】选项1 不可用")
-	var idx = await _show_choice_popup("请选择【神速】的一项", buttons)
+	var idx = await _show_choice_popup("请选择【神速】的一项", buttons, allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
 	if idx < 0:
 		return 0
-	if p.judgment_cards.is_empty():
-		return 2
-	return 1 if idx == 0 else 2
+	if idx >= options.size(): return CHOICE_INVALID
+	if options[idx] == 1 and p.judgment_cards.is_empty(): return CHOICE_INVALID
+	return options[idx]
 
 # 神速杀目标选择（单选，点击即执行）：返回目标（null=取消）
-func _pick_shensu_strike_target(p: Player) -> Player:
+func _pick_shensu_strike_target(p: Player, allowed: Callable = Callable()):
+	_shensu_target_generation += 1
+	var generation = _shensu_target_generation
+	var revision = turn_manager.get_context_revision()
+	var answer = ChoicePromptAnswer.new()
+	_shensu_target_answer = answer
+	answer.allowed = func():
+		return not _game_over and players.has(p) and p.is_alive() and generation == _shensu_target_generation \
+			and _shensu_target_answer == answer and revision == turn_manager.get_context_revision() \
+			and (not allowed.is_valid() or allowed.call())
+	if not answer.allowed.call():
+		_shensu_target_answer = null
+		return CHOICE_INVALID
 	_is_shensu_targeting = true
 	_cancel_target_btn.visible = true
 	_update_debug("【神速】：请点击一名其他角色（视为无距离限制的【杀】）")
 	_refresh_status_line()
-	var target: Player = await _shensu_pick_result
-	_is_shensu_targeting = false
-	_cancel_target_btn.visible = false
-	return target
+	var tree = get_tree()
+	var watch = func():
+		if answer.allowed.is_valid() and not answer.allowed.call(): answer.submit(CHOICE_INVALID)
+	var stop = func(_winner): answer.submit(CHOICE_INVALID)
+	tree.process_frame.connect(watch)
+	game_over.connect(stop)
+	var selected: int = await answer.answered
+	tree.process_frame.disconnect(watch)
+	game_over.disconnect(stop)
+	if _shensu_target_answer == answer:
+		_shensu_target_answer = null
+		_is_shensu_targeting = false
+		_cancel_target_btn.visible = false
+	if selected == CHOICE_INVALID: return CHOICE_INVALID
+	if selected < 0: return null
+	if selected >= players.size() or not _shensu_strike_target_valid(p, players[selected]): return CHOICE_INVALID
+	return players[selected]
+
+func _shensu_strike_target_valid(p: Player, target: Player) -> bool:
+	return target != null and players.has(target) and target != p and target.is_alive() and not _is_kneeling(target) \
+		and target.get_armor() != CardData.CardSubType.TENGJIA and not _is_bare_running(target) and not _awake_blocks(target, 1)
 
 # 神速杀目标点击（分发器在 _on_player_panel_click）
 func _on_shensu_target_click(target: Player):
+	if not _is_shensu_targeting: return
 	var p = players[turn_manager.current_player_idx]  # 使用者 = 当前回合玩家
 	if target == p:
 		_update_debug("不能选择自己作为目标")
@@ -6443,9 +6522,7 @@ func _on_shensu_target_click(target: Player):
 	if target.get_armor() == CardData.CardSubType.TENGJIA or _is_bare_running(target) or _awake_blocks(target, 1):
 		_update_debug("%s 不能成为【杀】的目标！" % target.player_name)
 		return
-	_is_shensu_targeting = false
-	_cancel_target_btn.visible = false
-	_shensu_pick_result.emit(target)
+	if _shensu_target_answer != null and players.has(target): _shensu_target_answer.submit(players.find(target))
 
 # 神速杀：视为使用普通【杀】（无距离限制）；不耗手牌、不占杀次数；酒/武器/防具正常结算
 func _execute_shensu_strike(p: Player, target: Player) -> void:
@@ -8468,6 +8545,11 @@ func reset_game_over_state():
 	_lanzhonghou_execution_owner = -1
 	_kneel_execution_generation += 1
 	_kneel_execution_owner = -1
+	_shensu_execution_generation += 1
+	_shensu_execution_owner = -1
+	_shensu_target_generation += 1
+	_start_phase_generation += 1
+	_start_phase_owner = -1
 	_game_over = false
 	_clear_pending_determined_card()
 	_dead_processed.clear()

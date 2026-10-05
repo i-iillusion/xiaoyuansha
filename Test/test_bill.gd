@@ -45,7 +45,7 @@ func _run() -> void:
 	game._nullify_override = func(): return false
 	game._aoe_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
-	game._shensu_override = Callable()
+	game._shensu_override = func(): return false # 真实开局先明确不发动，避免保留初始待答窗口。
 	game._shensu_option_override = Callable()
 	game._shensu_target_override = Callable()
 	game._gay_x_override = Callable()
@@ -82,6 +82,7 @@ func _run() -> void:
 	p0.shensu_used_this_turn = false
 	game._shensu_override = func(): return true
 	game._shensu_option_override = func(): return 2
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_shensu(p0)
 	_check(p0.shensu_penalty == 1, "选2 后欠账 1 层: %d" % p0.shensu_penalty)
 	_check(p0.shensu_used_this_turn, "选2 当回合标记")
@@ -90,12 +91,14 @@ func _run() -> void:
 	p0.shensu_used_this_turn = false
 	p0.hand.clear()
 	game.turn_manager.skip_play_discard_phase = false
+	game.turn_manager.current_phase = TurnManager.Phase.DRAW
 	game._do_draw(0)
 	_check(p0.hand_size() == 2, "减益结算：摸 2 张（3-1）: %d" % p0.hand_size())
 	_check(p0.shensu_penalty == 0, "减益结算后清零: %d" % p0.shensu_penalty)
 	# 连续两回合选2 → 欠账 2 层 → 下回合一次扣 2
 	game._shensu_option_override = func(): return 2
 	p0.shensu_used_this_turn = false
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_shensu(p0)  # 第2次选2
 	_check(p0.shensu_penalty == 1, "再次选2 欠账+1: %d" % p0.shensu_penalty)
 	p0.shensu_used_this_turn = false
@@ -104,12 +107,14 @@ func _run() -> void:
 	p0.shensu_used_this_turn = false
 	p0.hand.clear()
 	game.turn_manager.skip_play_discard_phase = false
+	game.turn_manager.current_phase = TurnManager.Phase.DRAW
 	game._do_draw(0)
 	_check(p0.hand_size() == 1, "欠 2 层一次扣清：摸 1 张（3-2）: %d" % p0.hand_size())
 	_check(p0.shensu_penalty == 0, "扣清后归零")
 	# 最少摸 0：欠 5 层 → 摸 0
 	p0.shensu_penalty = 5
 	p0.hand.clear()
+	game.turn_manager.current_phase = TurnManager.Phase.DRAW
 	game._do_draw(0)
 	_check(p0.hand_size() == 0, "欠 5 层：摸 0 张（下限）: %d" % p0.hand_size())
 	_check(p0.shensu_penalty == 0, "下限结算后清零")
@@ -127,6 +132,7 @@ func _run() -> void:
 	game._shensu_override = func(): return true
 	game._shensu_option_override = func(): return 1
 	game._shensu_target_override = func(): return p1
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_shensu(p0)
 	_check(game.turn_manager.skip_judge_phase, "选项1：跳过判定阶段")
 	_check(p1.hp == p1.max_hp - 1, "神速杀命中：p1 受 1 点伤害: %d" % p1.hp)
@@ -147,6 +153,7 @@ func _run() -> void:
 	game._shensu_override = func(): return true
 	game._shensu_option_override = func(): return 1
 	game._shensu_target_override = func(): return p1
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_shensu(p0)
 	_check(p1.hp == p1.max_hp, "判定区无牌：选项1 不发动（无伤害）: %d" % p1.hp)
 	_check(not game.turn_manager.skip_judge_phase, "判定区无牌：不跳判定")
@@ -161,6 +168,7 @@ func _run() -> void:
 	game._shensu_override = func(): return true
 	game._shensu_option_override = func(): return 1
 	game._shensu_target_override = func(): return p1
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_shensu(p0)
 	_check(p1.hp == p1.max_hp - 2, "神速杀吃酒：伤害 2 点: %d" % p1.hp)
 	_check(p0.wine_stacks == 0, "酒层数被消耗")
