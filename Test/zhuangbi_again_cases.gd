@@ -25,7 +25,7 @@ func drive(action: String, actor: Player):
 	var buttons = pending.overlay.find_children("*", "Button", true, false)
 	suite.check(buttons.size() == 3 and game._countdown_active, "E03e-16c：再发动确认保留通用计时及取消按钮")
 	var labels = pending.overlay.find_children("*", "Label", true, false)
-	suite.check(labels.any(func(label): return label.text.contains("装逼成功")) and not labels.any(func(label): return label.text.contains("一半及以上")), "E03e-16c：成功提示不误称胜负各半可以再发动")
+	suite.check(labels.any(func(label): return label.text.contains("装逼成功")) and not labels.any(func(label): return label.text.contains("一半及以上")), "E03e-16c：再发动窗口以成功结果提示，不另写判胜阈值")
 	match action:
 		"close":
 			pending.overlay.queue_free()

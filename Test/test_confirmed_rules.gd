@@ -47,19 +47,20 @@ func _run():
 		if p == owner: return game.RPS_ROCK
 		return game.RPS_SCISSORS if p.seat_index <= 2 else game.RPS_PAPER
 	await game._execute_zhuangbi(opponents)
-	check(game._zhuangbi_blocked_this_phase, "2胜2负后本阶段禁用装逼")
-	check(game.turn_manager.current_phase == TurnManager.Phase.PLAY, "胜负各半不强制进入弃牌阶段")
+	check(not game._zhuangbi_blocked_this_phase, "2026-10-05：2胜2负成功，不再设置旧各半禁用")
+	check(game.turn_manager.current_phase == TurnManager.Phase.PLAY, "胜负各半成功不结束出牌阶段")
 	check(owner.hand_size() == 2, "本次已支付的费用不退回")
 	for p in opponents:
-		check(p.hp == 10 and p.hand_size() == 0, "目标已付费用但不受到装逼伤害")
+		check(p.hp == (9 if p.seat_index <= 2 else 10) and p.hand_size() == 0, "成功仅给输家1伤，所有目标均付费用")
 		p.hand.append(null)
 	await game._execute_zhuangbi(opponents)
-	check(owner.hand_size() == 2 and opponents[0].hand_size() == 1, "再次调用不执行、不收取费用")
+	check(owner.hand_size() == 1 and opponents[0].hand_size() == 0, "既有再次发动路径独立支付，不复用上次费用")
+	opponents[0].hand.append(null) # 为菜单再选提供合法目标，不把无牌失败误当阶段禁用。
 	await game._on_zhuangbi_skill_clicked(owner)
-	check(not game._is_zhuangbi_targeting, "界面入口也阻止再次选择装逼目标")
+	check(game._is_zhuangbi_targeting, "既有成功后再选入口不再被旧各半禁用阻挡")
 	game.turn_manager.start_waiting("test", 1)
 	game.turn_manager.end_waiting()
-	check(game._zhuangbi_blocked_this_phase, "普通响应返回出牌阶段不清除禁用")
+	check(not game._zhuangbi_blocked_this_phase, "普通响应返回不生成旧各半禁用")
 	game.turn_manager.current_phase = TurnManager.Phase.DRAW
 	game.turn_manager.advance_phase()
 	check(not game._zhuangbi_blocked_this_phase, "新的出牌阶段恢复可用")
@@ -89,6 +90,7 @@ func _run():
 	owner.hand.clear()
 	var burning_card = CardBase.create(CardData.CardSubType.BURNING_CAMP)
 	owner.hand.append(burning_card)
+	for p in game.players: p.hp = 10 # 隔离前例新增成功伤害，保留原延时伤害断言。
 	var center = game.players[1]
 	var discard_before_burning = game.deck.discard_count()
 	await game.execute_card_on_target(center, CardData.CardSubType.BURNING_CAMP)

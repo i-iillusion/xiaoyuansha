@@ -6323,20 +6323,23 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	var n = wins + losses  # 已实际参与拼点的人数，不含跳过的死者
 	if n == 0:
 		return
-	if wins == losses:
-		_zhuangbi_blocked_this_phase = true
-		_update_debug("【装逼】胜负各半：既不成功也不失败，不造成伤害；本出牌阶段不能再发动")
-		_sync_all_ui()
-		return
-	# 输了一半以上 → 立即进入弃牌阶段
+	# 负责人2026-10-05：赢数>=ceil(n/2)成功，偶数各半亦成功。
+	var success = wins >= ceili(n / 2.0)
+	# 失败只结束当前出牌阶段，不额外授予弃牌阶段。
 	if losses * 2 > n:
-		_update_debug("%s 拼点输 %d/%d（一半以上），立即进入弃牌阶段！" % [p.player_name, losses, n])
+		_update_debug("%s 拼点输 %d/%d（一半以上），立刻结束出牌阶段！" % [p.player_name, losses, n])
 		_enter_discard_from_zhuangbi()
 		return
-	# 胜负各半已单独处理；成功才允许再次主动发动。
+	if not success: return
 	_update_debug("%s 拼点赢 %d/%d！输给你的角色受到 1 点伤害！" % [p.player_name, wins, n])
+	# TIME-04/手册3.4：成功已确定，来源最终死亡不取消剩余输家的无源伤害。
+	var sequence_valid = func():
+		return not _game_over and _zhuangbi_execution_owner == owner and _zhuangbi_execution_generation == owner \
+			and selection == _play_skill_selection_generation and revision == turn_manager.get_context_revision() \
+			and players.has(p) and not p.is_dying() and turn_manager.can_play_card() \
+			and turn_manager.get_play_actor_idx() == p.seat_index
 	for t in losers:
-		if not action_valid.call():
+		if not sequence_valid.call():
 			return
 		if not t.is_alive():
 			continue
@@ -6344,9 +6347,8 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 			break
 		var damage = await _deal_damage_result(p, t, 1, EffectChain.DamageType.PHYSICAL)
 		if damage.invalidated: return
-		if not action_valid.call():
-			break  # 自己已死（如荆棘反伤），不再继续
-	# 严格超过一半且成功结算后，才允许再次主动发动。
+		if not sequence_valid.call(): break
+	# 再发动流程保留既有窗口；新文是否删除该能力另待负责人核对。
 	var can_repeat = func():
 		return action_valid.call() and players.has(p) \
 			and p.general_name == "史蒂芬·彼特先斯" and not _zhuangbi_blocked_this_phase
@@ -6360,16 +6362,9 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		if again == 1 and can_repeat.call():
 			_start_zhuangbi_mode(owner)  # 同一有效执行成功后重新选择，不被自己的执行锁阻止。
 
-# 装逼输局：立即进入弃牌阶段（清理选择状态）
+# 失败结束当前PLAY；普通回合自然往后，获赠PLAY恢复源START。
 func _enter_discard_from_zhuangbi():
-	_is_zhuangbi_targeting = false
-	_zhuangbi_targets.clear()
-	_is_campus_targeting = false
-	_play_btn.visible = false
-	_end_play_btn.visible = false
-	_cancel_target_btn.visible = false
-	_confirm_target_btn.visible = false
-	turn_manager.advance_phase()  # PLAY → DISCARD
+	end_play_phase()
 
 # 赢局后询问是否再次使用装逼（玩家0弹窗）
 func _show_zhuangbi_again_prompt(allowed: Callable = Callable()) -> int:
