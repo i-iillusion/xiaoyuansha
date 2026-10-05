@@ -896,6 +896,8 @@ func _run():
 	await reset_scheduler_ai_cases.run(self)
 	var reveal_inner_lifecycle_cases = load("res://Test/reveal_inner_lifecycle_cases.gd").new()
 	await reveal_inner_lifecycle_cases.run(self)
+	var response_target_reset_cases = load("res://Test/response_target_reset_cases.gd").new()
+	await response_target_reset_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

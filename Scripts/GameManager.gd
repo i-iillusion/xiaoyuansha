@@ -2554,15 +2554,19 @@ func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt:
 	return await _ask_basic_card_response_result(p, expected, prompt, decision) == BasicResponseOutcome.PAID
 
 func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> BasicResponseOutcome:
-	if _game_over or not p.is_alive() or _is_kneeling(p):
+	if _game_over or not players.has(p) or not p.is_alive() or _is_kneeling(p):
 		return BasicResponseOutcome.INVALIDATED
 	if not HandPayment.has_response(p, expected):
 		return BasicResponseOutcome.DECLINED
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var snapshot = HandSelection.new(p)
 	var accepted: bool
 	if decision.is_valid():
-		accepted = await decision.call()
+		var answer = await decision.call()
+		if typeof(answer) == TYPE_INT and answer == CHOICE_INVALID:
+			return BasicResponseOutcome.INVALIDATED
+		accepted = bool(answer)
 	elif p.seat_index == 0:
 		var answer = await prompt.call()
 		if typeof(answer) == TYPE_INT and answer == CHOICE_INVALID:
@@ -2570,10 +2574,10 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 		accepted = bool(answer)
 	else:
 		accepted = await _choose_ai_response(p, "basic", [expected]) == expected
+	if _game_over or generation != _dying_lifecycle_generation or not players.has(p) or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision():
+		return BasicResponseOutcome.INVALIDATED
 	if not accepted:
 		return BasicResponseOutcome.DECLINED
-	if _game_over or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision():
-		return BasicResponseOutcome.INVALIDATED
 	# 原响应牌失效/无法支付仍是未能响应；不借新接口改变既有伤害结算。
 	if p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 		return BasicResponseOutcome.DECLINED
@@ -8887,6 +8891,8 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
+	_card_target_generation += 1
+	_card_target_confirm_owner = -1
 	if rule_scheduler != null: rule_scheduler.reset()
 	if yudaxi != null: yudaxi.reset()
 	_sage_save_pending.clear()
