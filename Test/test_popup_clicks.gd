@@ -32,8 +32,8 @@ func _run() -> void:
 	await _check_click("duel", "出【杀】", true)
 	# ---- 用例 5：舍己为人弹窗点「打出【舍己为人】」→ "card"（消耗手牌） ----
 	await _check_click("sacrifice", "打出【舍己为人】", "card")
-	# ---- 用例 6：贤者保命弹窗点「发动【贤者的加护】」→ true ----
-	await _check_click("sage", "发动【贤者的加护】", true)
+	# ---- 用例 6：贤者保命独立答复：正向为1（取消0、技术失效-2） ----
+	await _check_click("sage", "发动【贤者的加护】", 1)
 
 	print("RESULT: %d asserts, %d failures" % [asserts, failures])
 	quit(1 if failures > 0 else 0)

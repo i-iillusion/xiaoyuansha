@@ -877,6 +877,8 @@ func _run():
 	await grant_prompt_lifecycle_cases.run(self)
 	var standalone_grant_cases = load("res://Test/standalone_grant_cases.gd").new()
 	await standalone_grant_cases.run(self)
+	var sage_save_lifecycle_cases = load("res://Test/sage_save_lifecycle_cases.gd").new()
+	await sage_save_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

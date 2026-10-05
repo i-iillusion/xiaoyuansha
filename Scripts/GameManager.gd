@@ -252,6 +252,9 @@ var _game_over_overlay: Control = null
 var _dead_processed: Array[Player] = []
 # 尚未完成的濒死窗口：同一角色不重开，嵌套窗口全部结束后才检查终局。
 var _dying_contexts: Dictionary = {}
+var _dying_lifecycle_generation: int = 0
+var _sage_save_serial: int = 0
+var _sage_save_pending: Dictionary = {}
 # 跳过阵亡角色回合时的重入保护（next_turn 会同步触发 START 阶段回调）
 var _skipping_dead: bool = false
 
@@ -8434,15 +8437,24 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 		return
 	var context = DyingContext.new(victim, killer, cause, chain)
 	_dying_contexts[victim] = context
-	await _check_dying(victim)
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(victim) \
+			and turn_manager.get_context_revision() == revision and _dying_contexts.get(victim) == context
+	var rescue = await _check_dying(victim)
+	if rescue == CHOICE_INVALID or not valid.call():
+		return _invalidate_dying_context(victim, context)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.BEFORE_DEATH
 		# 锁定规则先于普通检查点；里奥尚未加入选将表，完整武将仍待开发。
 		if victim.general_name == "里奥·普利威尔":
 			await yudaxi.resolve(victim, _yudaxi_targets, _settle_yudaxi_target,
 				_draw_blank_cards, func(): return _game_over, _on_yudaxi_limit)
+			if not valid.call(): return _invalidate_dying_context(victim, context)
 		if not _game_over and victim.is_dying() and not yudaxi.is_active():
 			await rule_scheduler.checkpoint(context, "before_death")
+			if not valid.call(): return _invalidate_dying_context(victim, context)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.FINAL_DEATH
 		_handle_death(victim, context.killer)
@@ -8450,6 +8462,15 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	_dying_contexts.erase(victim)
 	_sync_all_ui()
 	_check_win_condition(null, null)
+	return 0
+
+func _invalidate_dying_context(victim: Player, context: DyingContext) -> int:
+	if context.effect_chain != null:
+		context.effect_chain.continuation_invalid = true
+		context.effect_chain.is_cancelled = true
+	if _dying_contexts.get(victim) == context: _dying_contexts.erase(victim)
+	context.stage = DyingContext.Stage.FINISHED
+	return CHOICE_INVALID
 
 # 暂行 S3：当前 players 仅为玩家角色，不把未来单位混入此名单。
 # 沿当前空间/行动数组从发动者下家起算；排除正在等待死亡前规则的角色。
@@ -8481,36 +8502,44 @@ func _on_yudaxi_limit():
 # 阵亡管线（阶段划分，按朋友要求顺序）：
 #   濒死结算（本函数）→ 自救【桃/酒】→ 阵亡效果·【装傻】（濒死拼点回血，阻止阵亡）→ 阵亡效果·【贤者的加护】（弃所有牌复原，阻止阵亡）
 #   → 调用方完成死亡前规则后判 is_dying()：仍濒死才进入 _handle_death（确认死亡 → 翻开身份 → 清牌 → 击杀奖惩 → 胜负判定）
-func _check_dying(dying: Player):
+func _check_dying(dying: Player) -> int:
 	if not dying.is_dying():
-		return
+		return 0
 
 	_update_debug("%s 进入濒死状态！" % dying.player_name)
 
 	if not players.has(dying):
-		return
+		return CHOICE_INVALID
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var context = _dying_contexts.get(dying)
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
 
 	# 经典基线：从当前回合角色开始轮询，含濒死本人；放弃后本窗口不回头。
 	# 普通求救全部结束后，才进入既有装傻/贤者及死亡前规则。
 	await _run_rescue_round(dying)
-	if _game_over:
-		return
+	if not valid.call(): return CHOICE_INVALID
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢至少一半（向上取整）回复至 1 点体力
 	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
 		await _try_zhuangsha(dying)
+		if not valid.call(): return CHOICE_INVALID
 		if dying.is_alive():
 			_sync_all_ui()
 
 	# 桃/酒自救/装傻后仍处于濒死 → 阵亡效果·【贤者的加护】（激活后）：即将死亡时可弃置所有牌，复原武将牌至游戏开始时的状态，摸四张牌
 	if dying.is_dying() and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.sage_activated:
 		var use_save = await _ask_sage_save(dying)
-		if use_save:
+		if use_save == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+		if use_save == 1:
 			_do_sage_save(dying)
 	# 普通嵌套救援中，先前的死亡可能因仍有濒死者而未判胜。
 	# 救回后同样需要重查；未救回则由调用者确认死亡后重查。
 	if dying.is_alive():
 		_check_win_condition(null, null)
+	return 0
 
 # ============================
 #  阵亡处理管线（阶段1-5，按朋友要求顺序分开）
@@ -8736,6 +8765,8 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_dying_lifecycle_generation += 1
+	_sage_save_pending.clear()
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()
@@ -8774,16 +8805,40 @@ func reset_game_over_state():
 		_game_over_overlay = null
 
 # 询问是否使用贤者的加护保命：玩家0弹窗，AI 默认使用（保命）
-func _ask_sage_save(dying: Player) -> bool:
+func _ask_sage_save(dying: Player) -> int:
+	if dying == null or _sage_save_pending.has(dying): return CHOICE_INVALID
+	_sage_save_serial += 1
+	var owner = _sage_save_serial
+	_sage_save_pending[dying] = owner
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var context = _dying_contexts.get(dying)
+	var original = dying.get_equipment_card("armor")
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+			and dying.is_dying() and dying.sage_activated and original != null \
+			and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.get_equipment_card("armor") == original \
+			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context \
+			and _sage_save_pending.get(dying) == owner
+	var result = await _ask_sage_save_pending(dying, valid)
+	if not valid.call(): result = CHOICE_INVALID
+	if _sage_save_pending.get(dying) == owner: _sage_save_pending.erase(dying)
+	return result
+
+func _ask_sage_save_pending(dying: Player, valid: Callable) -> int:
+	if not valid.call(): return CHOICE_INVALID
 	if _sage_save_override.is_valid():
-		return _sage_save_override.call()
+		var reply = await _sage_save_override.call()
+		return CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	if dying.seat_index == 0:
-		return await _show_sage_save_prompt()
-	return true  # AI 默认使用
+		return await _show_sage_save_prompt(valid)
+	return 1  # AI 默认使用
 
 # 玩家0的贤者的加护保命弹窗（锚点居中）
-func _show_sage_save_prompt() -> bool:
+func _show_sage_save_prompt(allowed: Callable = Callable()) -> int:
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
+	overlay.name = "SageSavePrompt"
 	overlay.color = Color(0.2, 0.0, 0.3, 0.6)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -8821,22 +8876,10 @@ func _show_sage_save_prompt() -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	use_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	return CHOICE_INVALID if result == CHOICE_INVALID else (1 if result == 1 else 0)
 
 # 执行贤者的加护保命：弃置所有牌（手牌/装备/判定牌）→ 复原武将牌至游戏开始时的状态 → 摸四张牌
 func _do_sage_save(p: Player):
