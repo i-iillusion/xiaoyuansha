@@ -888,6 +888,8 @@ func _run():
 	await judgment_damage_lifecycle_cases.run(self)
 	var thorn_lifecycle_cases = load("res://Test/thorn_lifecycle_cases.gd").new()
 	await thorn_lifecycle_cases.run(self)
+	var yes_ah_discard_lifecycle_cases = load("res://Test/yes_ah_discard_lifecycle_cases.gd").new()
+	await yes_ah_discard_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

@@ -1215,6 +1215,11 @@ func _run_ai_play(actor: Player):
 
 func _do_discard(pid: int):
 	var p = players[pid]
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var current = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive()
 	# 跳过出牌阶段时按钮可能仍可见，统一隐藏
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -1238,12 +1243,13 @@ func _do_discard(pid: int):
 		else:
 			_update_debug("%s 弃牌阶段 — 手牌 %d > 体力 %d，弃 %d 张" % [p.player_name, p.hand_size(), limit, excess])
 		for i in excess:
-			# 牌区在等待中变化则重新选，不擅自改扣另一张，也不能跳过强制弃牌。
-			while not _game_over and p.is_alive() and p.hand_size() > 0:
-				if await _select_hand_discard(p, 1, true):
-					break
+			if not current.call(): return
+			if p.hand_size() <= 0: break
+			# 快照过期在公共强制选择中重选；技术失效不能在这里重开同一旧动作。
+			var outcome = await _select_hand_discard_result(p, 1, true, current)
+			if outcome != HandDiscardOutcome.PAID or not current.call(): return
 		_sync_all_ui()
-	if _game_over:
+	if not current.call():
 		return
 	_refresh_status_line()
 	turn_manager.advance_phase()
@@ -2103,7 +2109,7 @@ func play_card(sub: CardData.CardSubType):
 				_enter_targeting_mode(sub)
 
 		CardData.CardSubType.IRON_CHAIN:
-			_yes_ah_active = (await _ask_yes_ah(p, "铁索连环", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "铁索连环"): return
 			_enter_iron_chain_mode()
 
 		CardData.CardSubType.WINE:
@@ -2158,42 +2164,42 @@ func play_card(sub: CardData.CardSubType):
 			if targets.is_empty():
 				_update_debug("没有可用的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "决斗", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "决斗"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.BARBARIAN_INVASION:
 			if not turn_manager.can_use("aoe"):
 				_update_debug("本回合【南蛮入侵】/【万箭齐发】已使用 2 次")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "南蛮入侵", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "南蛮入侵"): return
 			await _play_aoe(CardData.CardSubType.STRIKE, "南蛮入侵", "杀")
 
 		CardData.CardSubType.VOLLEY_OF_ARROWS:
 			if not turn_manager.can_use("aoe"):
 				_update_debug("本回合【南蛮入侵】/【万箭齐发】已使用 2 次")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "万箭齐发", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "万箭齐发"): return
 			await _play_aoe(CardData.CardSubType.DODGE, "万箭齐发", "闪")
 
 		CardData.CardSubType.PEACH_GARDEN:
 			if not turn_manager.can_use("peach_garden"):
 				_update_debug("本回合已使用【桃园结义】")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "桃园结义", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "桃园结义"): return
 			await _play_peach_garden()
 
 		CardData.CardSubType.HARVEST:
 			if not turn_manager.can_use("harvest"):
 				_update_debug("本回合已使用【五谷丰登】")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "五谷丰登", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "五谷丰登"): return
 			await _play_harvest()
 
 		CardData.CardSubType.DISARM:
 			if not turn_manager.can_use("disarm"):
 				_update_debug("本回合已使用【卸甲归田】")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "卸甲归田", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "卸甲归田"): return
 			await _play_disarm()
 
 		CardData.CardSubType.DISMANTLE:
@@ -2205,7 +2211,7 @@ func play_card(sub: CardData.CardSubType):
 			if dis_targets.is_empty():
 				_update_debug("没有可用的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "过河拆桥", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "过河拆桥"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.SNATCH:
@@ -2217,7 +2223,7 @@ func play_card(sub: CardData.CardSubType):
 			if snatch_targets.is_empty():
 				_update_debug("距离 1 内没有可牵的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "顺手牵羊", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "顺手牵羊"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.LIGHTNING:
@@ -2225,6 +2231,7 @@ func play_card(sub: CardData.CardSubType):
 			if not p.is_alive():
 				_update_debug("你已阵亡，无法使用【闪电】")
 				return
+			if not await _choose_yes_ah_for_play(p, "闪电"): return
 			var virtual_use = _yes_ah_active
 			var card = await _take_trick_card(p, sub)
 			if card == null:
@@ -2242,7 +2249,7 @@ func play_card(sub: CardData.CardSubType):
 			if delay_targets.is_empty():
 				_update_debug("没有可用的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "乐不思蜀", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "乐不思蜀"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.SUPPLY_SHORTAGE:
@@ -2251,7 +2258,7 @@ func play_card(sub: CardData.CardSubType):
 			if ss_targets.is_empty():
 				_update_debug("攻击距离 1 内没有可用的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "兵粮寸断", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "兵粮寸断"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.BURNING_CAMP:
@@ -2260,7 +2267,7 @@ func play_card(sub: CardData.CardSubType):
 			if bc_targets.is_empty():
 				_update_debug("攻击距离 1 内没有可用的目标！")
 				return
-			_yes_ah_active = (await _ask_yes_ah(p, "火烧连营", true)) == "skill"
+			if not await _choose_yes_ah_for_play(p, "火烧连营"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.LIANNU, CardData.CardSubType.ZHUGE_LIANNU, CardData.CardSubType.QINGLONG_BLADE, CardData.CardSubType.ZHANGBA_SPEAR, CardData.CardSubType.CHIXIONG_SHUANGGU, CardData.CardSubType.ICE_SWORD, CardData.CardSubType.QINGGANG_SWORD, CardData.CardSubType.GUDING_BLADE, CardData.CardSubType.GUANSHI_AXE, CardData.CardSubType.QILING_BOW, CardData.CardSubType.POFENG_SPEAR, CardData.CardSubType.FANGTIAN_HALBERD, CardData.CardSubType.FATE_BLADE, CardData.CardSubType.GOU_LIAN_CLAW, CardData.CardSubType.BLOODTHIRSTY_BLADE, CardData.CardSubType.CALAMITY_SWORD, CardData.CardSubType.HEAL_STAFF, CardData.CardSubType.RAGING_AXE, CardData.CardSubType.SOUL_BLADE:
@@ -4182,9 +4189,10 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 	var pending: bool = false        # 当前是否有一张生效中的无懈
 	var round_desc: String = desc
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	while true:
 		var reply = await _ask_nullification_round_result(round_desc, allowed)
-		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
+		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return NullificationOutcome.INVALIDATED
 		if reply.outcome == NullificationOutcome.PASSED:
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
@@ -4199,8 +4207,10 @@ func _ask_nullification_round(desc: String) -> String:
 
 func _ask_nullification_round_result(desc: String, allowed: Callable = Callable()) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
 			and (not allowed.is_valid() or allowed.call())
 	for i in range(player_count):
 		if not valid.call():
@@ -4227,7 +4237,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION), true)
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION), true, valid)
 			if yes_ah == "invalidated" or not valid.call():
 				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
@@ -4238,10 +4248,10 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 				return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 			var action_card: CardBase
 			if yes_ah == "skill":
-				var paid = await _pay_yes_ah_cost(p)
-				if not valid.call():
+				var paid = await _pay_yes_ah_cost_result(p)
+				if paid == CHOICE_INVALID or not valid.call():
 					return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
-				if not paid:
+				if paid == 0:
 					_sync_all_ui()
 					return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 				action_card = CardBase.create(CardData.CardSubType.NULLIFICATION)
@@ -5298,7 +5308,8 @@ func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool
 
 # 使用锦囊牌时询问是否发动【是~啊~】：
 # has_hand = 当前是否有手牌可消耗；返回 "skill"（发动，流失体力不消耗手牌）/ "card"（不发动，照常消耗）/ "cancel"（取消，视为没有打出）
-func _ask_yes_ah(p: Player, card_name: String, has_hand: bool, preserve_invalid: bool = false) -> String:
+func _ask_yes_ah(p: Player, card_name: String, has_hand: bool, preserve_invalid: bool = false, allowed: Callable = Callable()) -> String:
+	if allowed.is_valid() and not allowed.call(): return "invalidated"
 	# 明确点击了已确定牌时必须使用该原牌，不能改以技能虚拟使用并把原牌留在手中。
 	if _pending_determined_card != null:
 		return "card"
@@ -5308,11 +5319,29 @@ func _ask_yes_ah(p: Player, card_name: String, has_hand: bool, preserve_invalid:
 		return _yes_ah_override.call()
 	if p.seat_index != 0:
 		return "card" if has_hand else "cancel"  # AI 暂不发动
-	return await _show_yes_ah_prompt(card_name, has_hand, preserve_invalid)
+	return await _show_yes_ah_prompt(card_name, has_hand, preserve_invalid, allowed)
+
+# 主动出牌入口：取消/失效终止本次选择，不能当作“照常付牌”。
+func _choose_yes_ah_for_play(p: Player, card_name: String) -> bool:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var snapshot = HandSelection.new(p)
+	var original_pending = _pending_determined_card
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation \
+			and players.has(p) and p.is_alive() and turn_manager.can_play_card() \
+			and players[turn_manager.get_play_actor_idx()] == p \
+			and original_pending == _pending_determined_card \
+			and p.hand == snapshot.hand and p.determined_cards == snapshot.determined
+	var reply = await _ask_yes_ah(p, card_name, true, true, valid)
+	if not valid.call(): return false
+	if reply != "skill" and reply != "card": return false
+	_yes_ah_active = reply == "skill"
+	return true
 
 # 玩家0 的【是~啊~】询问弹窗（复用通用选择弹窗）
-func _show_yes_ah_prompt(card_name: String, has_hand: bool, preserve_invalid: bool = false) -> String:
-	var idx = await _show_choice_popup("是否发动【是~啊~】？\n（流失 1 点体力，视为使用了一张【%s】，不消耗手牌）" % card_name, ["发动【是~啊~】", "不发动（消耗手牌）" if has_hand else "取消（视为没有打出）"])
+func _show_yes_ah_prompt(card_name: String, has_hand: bool, preserve_invalid: bool = false, allowed: Callable = Callable()) -> String:
+	var idx = await _show_choice_popup("是否发动【是~啊~】？\n（流失 1 点体力，视为使用了一张【%s】，不消耗手牌）" % card_name, ["发动【是~啊~】", "不发动（消耗手牌）" if has_hand else "取消（视为没有打出）"], allowed)
 	if preserve_invalid and idx == CHOICE_INVALID:
 		return "invalidated"
 	if idx == 0:
@@ -5324,22 +5353,31 @@ func _show_yes_ah_prompt(card_name: String, has_hand: bool, preserve_invalid: bo
 # 支付【是~啊~】代价：流失 1 点体力（直接减，不算受到伤害）；流失致死先走濒死检查
 # 返回 false = 流失后未救回（本次锦囊/响应视为没有打出，调用方应中止）
 func _pay_yes_ah_cost(p: Player) -> bool:
+	# 兼容旧布尔检查；生产调用者使用显式结果，不能隐藏技术失效。
+	return await _pay_yes_ah_cost_result(p) == 1
+
+func _pay_yes_ah_cost_result(p: Player) -> int:
 	if p == null or not p.is_alive():
-		return false
+		return 0
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	p.hp -= 1
 	_update_debug("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 	if p.is_dying():
-		await _resolve_dying(p, null, "yes_ah") # 流失致死无击杀者
-	return p.is_alive()
+		if await _resolve_dying(p, null, "yes_ah") == CHOICE_INVALID: return CHOICE_INVALID
+	if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation \
+			or not players.has(p): return CHOICE_INVALID
+	return 1 if p.is_alive() else 0
 
 # 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
 func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	if _yes_ah_active:
 		_yes_ah_active = false
 		var revision = turn_manager.get_context_revision()
-		if not await _pay_yes_ah_cost(p):
+		var generation = _dying_lifecycle_generation
+		if await _pay_yes_ah_cost_result(p) != 1:
 			return null
-		if _game_over or revision != turn_manager.get_context_revision():
+		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return null
 		return CardBase.create(sub)
 	var card = _take_play_card(p, sub)
@@ -8344,8 +8382,10 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 # 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
 func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
 			and target.is_alive() and (not allowed.is_valid() or allowed.call())
 	for i in range(player_count):
 		if not valid.call():
@@ -8376,7 +8416,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE), true)
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE), true, valid)
 			if yes_ah == "invalidated" or not valid.call():
 				return {"invalidated": true, "player": null}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
@@ -8387,10 +8427,10 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 				continue
 			var action_card: CardBase
 			if yes_ah == "skill":
-				var paid = await _pay_yes_ah_cost(p)
-				if not valid.call():
+				var paid = await _pay_yes_ah_cost_result(p)
+				if paid == CHOICE_INVALID or not valid.call():
 					return {"invalidated": true, "player": null}
-				if not paid:
+				if paid == 0:
 					_sync_all_ui()
 					continue
 				action_card = CardBase.create(CardData.CardSubType.SACRIFICE)
@@ -8705,10 +8745,11 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 	if p == null or count <= 0:
 		return HandDiscardOutcome.ACTION_INVALIDATED
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	while true:
 		if _game_over:
 			return HandDiscardOutcome.GAME_ENDED
-		if not p.is_alive() or revision != turn_manager.get_context_revision():
+		if not players.has(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
 			return HandDiscardOutcome.ACTION_INVALIDATED
@@ -8729,6 +8770,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			var valid = func():
 				return not _game_over and players.has(p) and p.is_alive() \
 					and revision == turn_manager.get_context_revision() \
+					and generation == _dying_lifecycle_generation \
 					and (not allowed.is_valid() or allowed.call())
 			prompt.answered.connect(func(chosen):
 				reply.indices = chosen.duplicate()
@@ -8740,13 +8782,13 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 				indices.assign(snapshot.defaults(count) if mandatory else [])
 			else:
 				indices.assign(reply.indices)
-		_refresh_status_line()
 		if _game_over:
 			return HandDiscardOutcome.GAME_ENDED
-		if not p.is_alive() or revision != turn_manager.get_context_revision():
+		if not players.has(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
 			return HandDiscardOutcome.ACTION_INVALIDATED
+		_refresh_status_line()
 		if p.hand_size() < count:
 			return HandDiscardOutcome.INSUFFICIENT_CARDS
 		if not mandatory and indices.is_empty():
