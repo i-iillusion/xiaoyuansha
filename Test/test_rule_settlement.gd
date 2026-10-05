@@ -14,9 +14,16 @@ var failures := 0
 var checks := 0
 var game: GameManager
 var observations: Array = []
+var _check_log_buffer: Array[String] = []
 
 func _init():
+	process_frame.connect(_flush_check_log)
 	_run()
+
+func _flush_check_log():
+	if _check_log_buffer.is_empty(): return
+	print("\n".join(_check_log_buffer))
+	_check_log_buffer.clear()
 
 func check(ok: bool, message: String):
 	checks += 1
@@ -25,7 +32,8 @@ func check(ok: bool, message: String):
 		# 失败断言同时显示在 Actions 注释中；不改变失败计数或通过条件。
 		var annotation = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 		print("::error file=Test/test_rule_settlement.gd::" + annotation)
-	print(("PASS: " if ok else "FAIL: ") + message)
+	_check_log_buffer.append(("PASS: " if ok else "FAIL: ") + message)
+	if not ok or _check_log_buffer.size() >= 64: _flush_check_log()
 
 func reset_players():
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
@@ -865,9 +873,12 @@ func _run():
 	await kneel_prompt_lifecycle_cases.run(self)
 	var shensu_prompt_lifecycle_cases = load("res://Test/shensu_prompt_lifecycle_cases.gd").new()
 	await shensu_prompt_lifecycle_cases.run(self)
+	var grant_prompt_lifecycle_cases = load("res://Test/grant_prompt_lifecycle_cases.gd").new()
+	await grant_prompt_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
 	await equipment_boundary_cases.run(self)
+	_flush_check_log()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

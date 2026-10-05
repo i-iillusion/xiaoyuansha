@@ -40,6 +40,7 @@ func run(suite):
 	game._meiyong_override = func(): return true
 	game._meiyong_option_override = func(): return 2
 	game._meiyong_target_override = func(): return game.players[1]
+	game.turn_manager.current_phase = TurnManager.Phase.START
 	await game._maybe_meiyong(p)
 	suite.check(game.turn_manager.granted_play_target_idx == 1 and p.hand_size() == 2
 		and not game._is_lanzhonghou_targeting, "E01a：赠送内部入口仍摸一牌并授予出牌阶段")
