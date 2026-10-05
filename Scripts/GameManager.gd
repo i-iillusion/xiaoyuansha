@@ -4600,7 +4600,9 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			return false
 		_update_soul_blade_count(subject, chain.target_player, data["damage"])
 		if record.from_strike and not record.is_chain:
-			await _try_soul_blade(subject, chain.target_player)
+			if await _try_soul_blade(subject, chain.target_player) == CHOICE_INVALID:
+				chain.continuation_invalid = true
+				return true
 		await _try_kaiwen_deal(subject, chain.target_player, data["damage"])
 
 	if event_name == "after_take_damage" and subject != null and subject.is_alive():
@@ -7534,23 +7536,24 @@ func _update_soul_blade_count(source: Player, victim: Player, amount: int):
 
 # 使用杀对目标造成伤害后：与目标进行两次拼点（平局继续模式）
 # 全赢 → 直接翻面；赢一输一 → 可弃 2 张手牌翻面；全输 → 可弃 4 张手牌翻面
-func _try_soul_blade(source: Player, victim: Player):
+func _try_soul_blade(source: Player, victim: Player) -> int:
 	if source == null or victim == null or source == victim:
-		return
+		return 0
 	if not source.is_alive() or not victim.is_alive():
-		return
+		return 0
 	if source.get_weapon() != CardData.CardSubType.SOUL_BLADE:
-		return
+		return 0
 	# 【青釭盾】：目标无视使用效果者的武器
 	if victim.get_armor() == CardData.CardSubType.QINGGANG_SHIELD:
 		_update_debug("%s 的【青釭盾】无视了 %s 的【摄魂刀】！" % [victim.player_name, source.player_name])
-		return
+		return 0
 	if not source.soul_blade_activated:
-		return
+		return 0
 	var original = source.get_equipment_card("weapon")
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(source) and players.has(victim) and original != null \
 			and source.is_alive() and victim.is_alive() \
 			and source.get_equipment_card("weapon") == original \
 			and source.get_weapon() == CardData.CardSubType.SOUL_BLADE \
@@ -7558,16 +7561,19 @@ func _try_soul_blade(source: Player, victim: Player):
 
 	# 是否发动拼点（玩家0弹窗 / AI 默认发动）
 	if source.seat_index == 0:
-		if not await _ask_soul_blade_activate(victim.player_name):
-			return
+		var activate = await _ask_soul_blade_activate(victim.player_name, valid)
+		if activate == CHOICE_INVALID or not valid.call():
+			return CHOICE_INVALID
+		if activate == 0:
+			return 0
 
 	# 进行两次拼点（每次平局继续直到分出胜负）
 	var r1 = await _do_ping_dian(source, victim, valid)
 	if r1 == RPS_INVALID or not valid.call():
-		return
+		return CHOICE_INVALID
 	var r2 = await _do_ping_dian(source, victim, valid)
 	if r2 == RPS_INVALID or not valid.call():
-		return
+		return CHOICE_INVALID
 	var wins = 0
 	if r1 == RPS_WIN:
 		wins += 1
@@ -7577,21 +7583,22 @@ func _try_soul_blade(source: Player, victim: Player):
 	if wins == 2:
 		_update_debug("%s 拼点全赢！" % source.player_name)
 		_flip_character(victim)
-		return
+		return 0
 
 	# 赢一输一弃 2 张；全输弃 4 张（可选；手牌不足无法发动）
 	var need = 2 if wins == 1 else 4
 	if source.hand_size() < need:
 		_update_debug("%s 手牌不足 %d 张，无法弃牌令 %s 翻面" % [source.player_name, need, victim.player_name])
-		return
+		return 0
 	if source.seat_index == 0:
 		if not await _ask_soul_blade_discard(victim.player_name, need):
-			return
+			return 0
 	if not await _select_hand_discard(source, need, false, valid):
-		return
+		return CHOICE_INVALID if not valid.call() else 0
 	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
 	_sync_all_ui()
 	_flip_character(victim)
+	return 0
 
 # 翻面 = 状态切换：正面↔反面；反面角色下个回合开始前自动翻回并跳过回合
 func _flip_character(p: Player):
@@ -7603,12 +7610,18 @@ func _flip_character(p: Player):
 	_sync_all_ui()
 
 # 玩家0是否发动摄魂刀拼点
-func _ask_soul_blade_activate(victim_name: String) -> bool:
+func _ask_soul_blade_activate(victim_name: String, allowed: Callable = Callable()) -> int:
 	if _soul_blade_activate_override.is_valid():
-		return _soul_blade_activate_override.call()
-	return await _show_soul_blade_activate_prompt(victim_name)
+		var reply = await _soul_blade_activate_override.call()
+		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID:
+			return CHOICE_INVALID
+		return 1 if reply else 0
+	return await _show_soul_blade_activate_prompt(victim_name, allowed)
 
-func _show_soul_blade_activate_prompt(victim_name: String) -> bool:
+func _show_soul_blade_activate_prompt(victim_name: String, allowed: Callable = Callable()) -> int:
+	if _game_over or (allowed.is_valid() and not allowed.call()):
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -7647,20 +7660,9 @@ func _show_soul_blade_activate_prompt(victim_name: String) -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	await _response_ready
-	return result[0]
+	use_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 玩家0是否弃 need 张手牌令目标翻面
 func _ask_soul_blade_discard(victim_name: String, need: int) -> bool:
