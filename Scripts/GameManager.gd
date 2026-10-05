@@ -1343,6 +1343,7 @@ func _exit_targeting_mode():
 # 取消按钮统一处理（普通目标模式 / 铁索连环模式 / 方天画戟多目标模式）
 func _on_cancel_target_pressed():
 	_card_target_generation += 1
+	_play_skill_selection_generation += 1
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
 	_yes_ah_active = false
 	_clear_pending_determined_card()
@@ -5936,6 +5937,19 @@ func _show_paixiong_prompt(source_name: String, allowed: Callable = Callable()) 
 # 详情弹窗技能点击：进入目标选择模式（与【下跪】/【苕】一致的发动方式）
 # 出牌阶段技能归实际操作者，获赠阶段不要求其同时是回合主人。
 var _play_skill_target_revision: int = -1
+var _play_skill_selection_generation: int = 0
+
+func _begin_play_skill_selection():
+	_play_skill_selection_generation += 1
+	_play_skill_target_revision = turn_manager.get_context_revision()
+	_is_zhuangbi_targeting = false
+	_zhuangbi_targets.clear()
+	_is_campus_targeting = false
+	_is_gay_targeting = false
+	_is_lanzhonghou_targeting = false
+	_lanzhonghou_selected.clear()
+	_lanzhonghou_pending.clear()
+	_confirm_target_btn.visible = false
 
 func _can_use_play_skill(p: Player) -> bool:
 	return not _game_over and is_instance_valid(p) and players.has(p) and p.is_alive() \
@@ -5945,6 +5959,7 @@ func _can_use_play_skill(p: Player) -> bool:
 func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(players[0]) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
+	_play_skill_selection_generation += 1
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -5992,7 +6007,7 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 func _start_zhuangbi_mode():
 	if not _can_use_play_skill(players[0]):
 		return
-	_play_skill_target_revision = turn_manager.get_context_revision()
+	_begin_play_skill_selection()
 	_is_zhuangbi_targeting = true
 	_zhuangbi_targets.clear()
 	_play_btn.visible = false
@@ -6072,8 +6087,10 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	if p.general_name != "史蒂芬·彼特先斯" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
+	var selection = _play_skill_selection_generation
 	var action_valid = func():
 		return _zhuangbi_execution_owner == owner and _zhuangbi_execution_generation == owner \
+			and selection == _play_skill_selection_generation \
 			and players.has(p) and p.general_name == "史蒂芬·彼特先斯" \
 			and _paid_skill_rps_valid(p, null, revision)
 	var target_valid = func(t):
@@ -6224,7 +6241,7 @@ func _on_campus_skill_clicked(p: Player) -> void:
 func _start_campus_mode():
 	if not _can_use_play_skill(players[0]):
 		return
-	_play_skill_target_revision = turn_manager.get_context_revision()
+	_begin_play_skill_selection()
 	_is_campus_targeting = true
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -6255,7 +6272,10 @@ func _on_campus_target_click(target: Player):
 		return
 	_is_campus_targeting = false
 	_cancel_target_btn.visible = false
+	var selection = _play_skill_selection_generation
 	await _execute_campus_dominator(p, target)
+	if selection != _play_skill_selection_generation:
+		return
 	_restore_play_skill_buttons()
 	_sync_all_ui()
 
@@ -6276,8 +6296,10 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 	if p.general_name != "杰基·斯特朗" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
+	var selection = _play_skill_selection_generation
 	var valid = func():
 		return _campus_execution_owner == owner and _campus_execution_generation == owner \
+			and selection == _play_skill_selection_generation \
 			and players.has(p) and players.has(target) and target != p \
 			and p.general_name == "杰基·斯特朗" and _paid_skill_rps_valid(p, target, revision)
 	if not valid.call():
@@ -6458,7 +6480,7 @@ func _on_gay_skill_clicked(p: Player) -> void:
 	for child in _detail_popup_root.get_children():
 		child.queue_free()
 	_detail_popup_root.visible = false
-	_play_skill_target_revision = turn_manager.get_context_revision()
+	_begin_play_skill_selection()
 	_is_gay_targeting = true
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -6487,7 +6509,10 @@ func _on_gay_target_click(target: Player):
 		return
 	_is_gay_targeting = false
 	_cancel_target_btn.visible = false
+	var selection = _play_skill_selection_generation
 	await _execute_gay(p, target)
+	if selection != _play_skill_selection_generation:
+		return
 	_restore_play_skill_buttons()
 	_sync_all_ui()
 
@@ -6510,8 +6535,10 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 	if _gay_used:
 		return
 	var revision = turn_manager.get_context_revision()
+	var selection = _play_skill_selection_generation
 	var valid = func():
 		return _gay_execution_owner == owner and _gay_execution_generation == owner \
+			and selection == _play_skill_selection_generation \
 			and _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
 			and p.general_name == "比尔·盖伊" and players.has(target) and target != p \
 			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
@@ -6591,7 +6618,7 @@ func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 func _start_lanzhonghou_mode():
 	if not _can_use_play_skill(players[0]):
 		return
-	_play_skill_target_revision = turn_manager.get_context_revision()
+	_begin_play_skill_selection()
 	_is_lanzhonghou_targeting = true
 	_lanzhonghou_selected.clear()
 	_lanzhonghou_pending.clear()
@@ -6629,7 +6656,10 @@ func _on_lanzhonghou_target_click(target: Player):
 		var b = _lanzhonghou_selected[1]
 		_is_lanzhonghou_targeting = false
 		_cancel_target_btn.visible = false
+		var selection = _play_skill_selection_generation
 		await _run_lanzhonghou(a, b)
+		if selection != _play_skill_selection_generation:
+			return
 		_restore_play_skill_buttons()
 		_sync_all_ui()
 
@@ -6641,37 +6671,39 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 	if p.general_name != "麦克斯·欧尼斯特" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
+	var selection = _play_skill_selection_generation
 	if _lanzhonghou_used:
 		return
 	# X = 交换区域对数：武器/防具各最多 1 对，坐骑最多 4 对（每名角色 4 个坐骑槽）→ 上限 6 对，弃 X 张牌
 	var max_pick = mini(6, p.hand_size())
-	_lanzhonghou_pending.clear()
+	var pending: Array = []
+	_lanzhonghou_pending = pending
 	while true:
-		var zone = await _ask_lanzhonghou_zone(a, b, _lanzhonghou_pending, max_pick)
-		if _game_over or revision != turn_manager.get_context_revision():
-			_lanzhonghou_pending.clear()
+		var zone = await _ask_lanzhonghou_zone(a, b, pending, max_pick)
+		if _game_over or revision != turn_manager.get_context_revision() or selection != _play_skill_selection_generation:
+			pending.clear()
 			return
 		if zone == "cancel":
-			_lanzhonghou_pending.clear()
+			pending.clear()
 			_update_debug("取消【没用】，未消耗手牌")
 			return
 		if zone == "done":
 			break
 		match zone:
 			"weapon", "armor":
-				if _lanzhonghou_zone_picked(_lanzhonghou_pending, zone) or (not a.equipment.has(zone) and not b.equipment.has(zone)):
+				if _lanzhonghou_zone_picked(pending, zone) or (not a.equipment.has(zone) and not b.equipment.has(zone)):
 					continue
-				_lanzhonghou_pending.append({"zone": zone, "a": a, "slot_a": zone, "b": b, "slot_b": zone,
+				pending.append({"zone": zone, "a": a, "slot_a": zone, "b": b, "slot_b": zone,
 					"card_a": _equipment_resource_for_pick(a, zone), "card_b": _equipment_resource_for_pick(b, zone), "ok": true})
 			"mount":
 				# 坐骑最多 4 对（防御：UI 已禁用，直调时也拦）
-				if _lanzhonghou_count(_lanzhonghou_pending, "mount") >= 4:
+				if _lanzhonghou_count(pending, "mount") >= 4:
 					_update_debug("坐骑区域最多选择 4 对")
 					continue
 				# 坐骑可移入空槽；双方选中的槽位不能同时为空。
 				var used_a := {}
 				var used_b := {}
-				for entry in _lanzhonghou_pending:
+				for entry in pending:
 					if entry.zone == "mount":
 						used_a[entry.slot_a] = true
 						used_b[entry.slot_b] = true
@@ -6683,10 +6715,13 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 				for s in Player.MOUNT_SLOTS:
 					if not used_b.has(s):
 						slots_b.append(s)
-				if slots_a.is_empty() or slots_b.is_empty() or not _lanzhonghou_has_swappable_mount(a, _lanzhonghou_pending, true) and not _lanzhonghou_has_swappable_mount(b, _lanzhonghou_pending, false):
+				if slots_a.is_empty() or slots_b.is_empty() or not _lanzhonghou_has_swappable_mount(a, pending, true) and not _lanzhonghou_has_swappable_mount(b, pending, false):
 					continue
-				var pair_no = _lanzhonghou_count(_lanzhonghou_pending, "mount") + 1
+				var pair_no = _lanzhonghou_count(pending, "mount") + 1
 				var slot_a = await _ask_lanzhonghou_mount_slot(a, slots_a, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [a.player_name, pair_no])
+				if selection != _play_skill_selection_generation:
+					pending.clear()
+					return
 				if slot_a == "cancel" or not slots_a.has(slot_a):
 					continue
 				if not a.equipment.has(slot_a):
@@ -6696,18 +6731,21 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 				if slots_b.is_empty():
 					continue
 				var slot_b = await _ask_lanzhonghou_mount_slot(b, slots_b, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [b.player_name, pair_no])
+				if selection != _play_skill_selection_generation:
+					pending.clear()
+					return
 				if slot_b == "cancel" or not slots_b.has(slot_b):
 					continue
-				_lanzhonghou_pending.append({"zone": "mount", "a": a, "slot_a": slot_a, "b": b, "slot_b": slot_b,
+				pending.append({"zone": "mount", "a": a, "slot_a": slot_a, "b": b, "slot_b": slot_b,
 					"card_a": _equipment_resource_for_pick(a, slot_a), "card_b": _equipment_resource_for_pick(b, slot_b), "ok": true})
-	var x = _lanzhonghou_pending.size()
+	var x = pending.size()
 	if x <= 0:
 		_update_debug("没有选择任何区域，取消【没用】")
 		return
-	for entry in _lanzhonghou_pending:
+	for entry in pending:
 		if entry.has("card_a") and (_equipment_resource_for_pick(entry.a, entry.slot_a) != entry.card_a \
 				or _equipment_resource_for_pick(entry.b, entry.slot_b) != entry.card_b):
-			_lanzhonghou_pending.clear()
+			pending.clear()
 			return
 		var hidden_a = entry.a.equipment.get(entry.slot_a, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
 		var hidden_b = entry.b.equipment.get(entry.slot_b, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT
@@ -6715,19 +6753,22 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 				or (hidden_a and entry.card_a == null) \
 				or (hidden_b and entry.card_b == null)):
 			_update_debug("所选暗置交换组合尚未支持，未支付费用")
-			_lanzhonghou_pending.clear()
+			pending.clear()
 			return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
 	var valid = func():
-		return revision == turn_manager.get_context_revision() and a.is_alive() and b.is_alive() \
+		return selection == _play_skill_selection_generation and revision == turn_manager.get_context_revision() and a.is_alive() and b.is_alive() \
 			and not _is_kneeling(a) and not _is_kneeling(b) and not _lanzhonghou_used
 	if not await _select_hand_discard(p, x, false, valid):
-		_lanzhonghou_pending.clear()
+		pending.clear()
 		return
 	_lanzhonghou_used = true # 支付后立即记入当前阶段；后续暗置声明等待不能写进另一个阶段。
 	# 统一执行交换
 	var swapped = 0
-	for entry in _lanzhonghou_pending:
+	for entry in pending:
+		if selection != _play_skill_selection_generation:
+			pending.clear()
+			return
 		if not entry.ok:
 			var zone_name = "武器" if entry.zone == "weapon" else ("护甲" if entry.zone == "armor" else "坐骑")
 			_update_debug("%s 区域：一方没有装备（或为暗置装备），装备直接归还，不交换" % zone_name)
@@ -6748,8 +6789,11 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 					declarations.reverse()
 			for declaration in declarations:
 				await _declare_exchanged_hidden_equipment(declaration[0], declaration[1], declaration[2], declaration[3])
+				if selection != _play_skill_selection_generation:
+					pending.clear()
+					return
 	_update_debug("%s 发动【没用】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
-	_lanzhonghou_pending.clear()
+	pending.clear()
 	_sync_all_ui()
 
 # 已选择的某区域类别数量（weapon/armor 最多 1，mount 最多 4）
@@ -6778,7 +6822,7 @@ func _lanzhonghou_has_swappable_mount(p: Player, picked: Array = [], is_a: bool 
 # 区域选择弹窗：武器/防具/坐骑（各最多一次）+ 完成交换 + 取消（锚点居中）
 func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -> String:
 	if _lanzhonghou_zone_override.is_valid():
-		return _lanzhonghou_zone_override.call()
+		return await _lanzhonghou_zone_override.call()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -8347,6 +8391,7 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_play_skill_selection_generation += 1
 	_zhuangbi_execution_generation += 1
 	_zhuangbi_execution_owner = -1
 	_campus_execution_generation += 1
