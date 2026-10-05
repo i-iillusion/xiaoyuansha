@@ -243,6 +243,8 @@ func _phase_resolution():
 	# 1. "造成伤害后" — 发起者
 	if effect_type == EffectType.DAMAGE:
 		await _trigger("after_deal_damage", source_player, null, { "damage": effect_value })
+		if continuation_invalid:
+			return # 已提交的伤害保留，但不能继续受伤后技能窗口。
 
 	# 2. "受到伤害后" — 目标
 	if effect_type == EffectType.DAMAGE and target_player:

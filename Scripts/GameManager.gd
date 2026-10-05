@@ -4646,11 +4646,21 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		record.refresh_source()
 		if blood_result == CHOICE_INVALID or subject.is_dead() or not chain.target_player.is_alive():
 			return false
+		# EQ-06：首次达到阈值的整次伤害只激活，从下一次伤害才按点发动。
+		var soul_original = subject.get_equipment_card("weapon")
+		var soul_was_active = subject.get_weapon() == CardData.CardSubType.SOUL_BLADE and subject.soul_blade_activated
 		_update_soul_blade_count(subject, chain.target_player, data["damage"])
-		if record.from_strike and not record.is_chain:
-			if await _try_soul_blade(subject, chain.target_player) == CHOICE_INVALID:
-				chain.continuation_invalid = true
-				return true
+		if soul_was_active and record.from_strike and not record.is_chain:
+			for point in data["damage"]:
+				if _game_over or post_revision != turn_manager.get_context_revision() \
+						or not players.has(subject) or not players.has(chain.target_player) \
+						or not subject.is_alive() or not chain.target_player.is_alive() \
+						or subject.get_equipment_card("weapon") != soul_original:
+					chain.continuation_invalid = true
+					return true
+				if await _try_soul_blade(subject, chain.target_player) == CHOICE_INVALID:
+					chain.continuation_invalid = true
+					return true
 		if await _try_kaiwen_deal(subject, chain.target_player, data["damage"]) == CHOICE_INVALID:
 			chain.continuation_invalid = true
 			return true

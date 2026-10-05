@@ -831,6 +831,8 @@ func _run():
 	await soul_blade_discard_cases.run(self)
 	var soul_blade_rps_cases = load("res://Test/soul_blade_rps_cases.gd").new()
 	await soul_blade_rps_cases.run(self)
+	var soul_blade_activation_cases = load("res://Test/soul_blade_activation_cases.gd").new()
+	await soul_blade_activation_cases.run(self)
 	var steal_picker_cases = load("res://Test/steal_picker_cases.gd").new()
 	await steal_picker_cases.run(self)
 	var active_equip_picker_cases = load("res://Test/active_equip_picker_cases.gd").new()
