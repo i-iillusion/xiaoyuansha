@@ -91,5 +91,35 @@ func run(suite):
 	await game._steal_hand(actor, game.players[1], true, "顺手牵羊")
 	suite.check(events.is_empty(), "E02d1：技能弃牌和单独原牌转移不冒充用牌事件")
 	game.card_action_committed.disconnect(collect)
+	# F01a：消费者不能从响应种类或当前阶段猜测“本人的回合”。
+	game.card_action_committed.connect(collect)
+	for owner in [0, 1]:
+		for concrete in [false, true]:
+			suite.reset_players()
+			tm.current_player_idx = owner
+			tm.current_phase = TurnManager.Phase.PLAY
+			events.clear()
+			var responder: Player = game.players[0]
+			var original: CardBase = CardBase.create(CardData.CardSubType.DODGE) if concrete else null
+			if concrete:
+				responder.determined_cards.append(original)
+			else:
+				responder.hand.append(null)
+			var declined = await game._ask_basic_card_response(responder, CardData.CardSubType.DODGE,
+				Callable(), func(): return false)
+			suite.check(not declined and events.is_empty() and responder.hand_size() == 1,
+				"F01a：本人/他人回合拒绝响应不形成用牌事实")
+			var paid = await game._ask_basic_card_response(responder, CardData.CardSubType.DODGE,
+				Callable(), func(): return true)
+			suite.check(paid and events.size() == 1 and events[0].actor_seat == 0
+				and events[0].turn_owner_seat == owner and events[0].from_hand
+				and not events[0].is_virtual and events[0].kind == CardActionEvent.Kind.RESPONSE
+				and (not concrete or events[0].card == original),
+				"F01a：任意/具体闪响应按事实记录原回合主人而非PLAY阶段操作者")
+			var phase_id = tm.phase_id
+			tm.current_phase = TurnManager.Phase.END
+			suite.check(events.size() == 1 and events[0].phase_id == phase_id
+				and events[0].turn_owner_seat == owner, "F01a：历史事件不随阶段推进改写")
+	game.card_action_committed.disconnect(collect)
 	suite.reset_players()
 	tm.current_phase = old_phase
