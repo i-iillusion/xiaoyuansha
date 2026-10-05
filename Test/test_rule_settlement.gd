@@ -900,6 +900,8 @@ func _run():
 	await response_target_reset_cases.run(self)
 	var awaken_reset_cases = load("res://Test/awaken_reset_cases.gd").new()
 	await awaken_reset_cases.run(self)
+	var ui_tail_reset_cases = load("res://Test/ui_tail_reset_cases.gd").new()
+	await ui_tail_reset_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

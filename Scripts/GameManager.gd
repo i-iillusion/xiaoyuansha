@@ -1555,7 +1555,11 @@ func _on_confirm_multi_target():
 	var targets = _multi_targets.duplicate()
 	var sub = _targeting_card_sub
 	_exit_multi_target_mode()
+	var generation = _card_target_generation
+	var lifecycle = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
 	await execute_multi_strike(targets, sub)
+	if generation != _card_target_generation or lifecycle != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
 	_clear_pending_determined_card()
 
 # ============================
@@ -1586,6 +1590,7 @@ func _start_sage_ping_mode(p: Player):
 	if p.hand_size() <= 0:
 		_update_debug("没有手牌可弃置")
 		return
+	_card_target_generation += 1
 	_is_sage_targeting = true
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -1595,14 +1600,17 @@ func _start_sage_ping_mode(p: Player):
 # 拼点目标点击（任意其他存活角色，无距离限制）
 func _on_sage_target_click(target: Player):
 	var p = players[turn_manager.get_play_actor_idx()]
-	if target == p or not target.is_alive():
+	if not _is_sage_targeting or not _can_use_play_skill(p) or not players.has(target) or target == p or not target.is_alive():
 		_update_debug("目标无效")
 		return
 	_is_sage_targeting = false
 	_cancel_target_btn.visible = false
+	var generation = _card_target_generation
+	var lifecycle = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
 	await _sage_ping(p, target)
-	_play_btn.visible = true
-	_end_play_btn.visible = true
+	if generation != _card_target_generation or lifecycle != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
+	_restore_play_skill_buttons()
 	_sync_all_ui()
 
 # 核心拼点：弃一张手牌 → 与目标拼点（平局继续直到分出胜负）→ 赢则 +1 贤者标记；3 标记激活
@@ -1615,8 +1623,10 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	var original = wearer.get_equipment_card("armor")
 	var revision = turn_manager.get_context_revision()
+	var lifecycle = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and lifecycle == _dying_lifecycle_generation and players.has(wearer) and players.has(target) \
 			and wearer.is_alive() and target != wearer and target.is_alive() \
 			and wearer.get_equipment_card("armor") == original \
 			and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
