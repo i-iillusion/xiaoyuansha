@@ -95,6 +95,8 @@ var skip_full_turn: bool = false
 # 【烂忠厚】麦克斯·欧尼斯特：回合开始阶段跳过自己的阶段，并指定其他角色立刻获得对应阶段（-1 = 无）
 var granted_judge_target_idx: int = -1   # 跳过自己的判定阶段 → 目标立刻进行判定阶段（乐不思蜀/兵粮寸断失效）
 var granted_draw_target_idx: int = -1    # 跳过自己的摸牌阶段 → 目标立刻获得一个摸牌阶段
+var granted_judge_completed: bool = false
+var granted_draw_completed: bool = false
 var granted_play_target_idx: int = -1    # 跳过自己的出牌阶段 → 目标立刻获得一个出牌阶段
 
 # ---- WAITING 状态上下文 ----
@@ -168,6 +170,8 @@ func _begin_turn():
 	skip_full_turn = false
 	granted_judge_target_idx = -1
 	granted_draw_target_idx = -1
+	granted_judge_completed = false
+	granted_draw_completed = false
 	granted_play_target_idx = -1
 	waiting_responder_idx = -1
 	waiting_response_type = ""

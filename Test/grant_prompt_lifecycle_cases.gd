@@ -5,8 +5,13 @@ func prepare(stage: String, option: int = 1):
 	game.turn_manager.current_player_idx = 0
 	game.turn_manager.current_phase = TurnManager.Phase.START
 	game.turn_manager.skip_full_turn = false
+	game.turn_manager.skip_judge_phase = false
+	game.turn_manager.skip_play_phase = false
+	game.turn_manager.supply_shortage_active = false
 	game.turn_manager.granted_judge_target_idx = -1
 	game.turn_manager.granted_draw_target_idx = -1
+	game.turn_manager.granted_judge_completed = false
+	game.turn_manager.granted_draw_completed = false
 	game.turn_manager.granted_play_target_idx = -1
 	game.players[1].judgment_cards.assign([CardBase.create(CardData.CardSubType.INDULGENCE)])
 	game._meiyong_override = Callable() if stage == "activate" else func(): return true
@@ -129,6 +134,7 @@ func run(host):
 	while not done[0]: await suite.process_frame
 	suite.check(game.players[0].hand_size() == 4 and game.turn_manager.granted_draw_target_idx == 1 and game._meiyong_execution_owner == -1 and not game._is_meiyong_targeting, "E03e-20c-1：重开旧选择不摸牌，仅新有效阶段点击摸一次")
 	await suite.process_frame
+	await check_immediate_judge_draw()
 	reset("稻草人")
 	game.turn_manager.granted_judge_target_idx = -1
 	game.turn_manager.granted_draw_target_idx = -1
@@ -139,3 +145,61 @@ func run(host):
 	game._rps_override = Callable()
 	suite = null
 	game = null
+
+func check_immediate_judge_draw():
+	for option in [0, 1]:
+		prepare("activate", option)
+		game._meiyong_override = func(): return true
+		game._meiyong_option_override = func(): return option
+		game._meiyong_target_override = func(): return game.players[1]
+		var source = game.players[0]
+		var target = game.players[1]
+		var own_judgment = CardBase.create(CardData.CardSubType.INDULGENCE)
+		source.judgment_cards.assign([own_judgment])
+		var target_card = target.judgment_cards[0]
+		var source_hand = source.hand_size()
+		var target_hand = target.hand_size()
+		var turn_id = game.turn_manager.turn_id
+		var reply = await game._maybe_meiyong(source)
+		suite.check(reply == 1 and game.turn_manager.current_phase == TurnManager.Phase.START and game.turn_manager.current_player_idx == 0 and game.turn_manager.turn_id == turn_id and source.hand_size() == source_hand + 1, "E03e-20c-2a：获赠判定/摸牌在源START完成，不新增回合且源只摸1")
+		if option == 0:
+			suite.check(target.judgment_cards.is_empty() and game.deck._discard.has(target_card) and source.judgment_cards == [own_judgment] and not game.turn_manager.skip_play_phase, "E03e-20c-2a：目标立即判定乐不失效，源判定牌保留")
+			game.turn_manager.current_phase = TurnManager.Phase.JUDGE
+			await game._do_judge(0)
+			suite.check(source.judgment_cards == [own_judgment] and target.judgment_cards.is_empty() and game.turn_manager.granted_judge_target_idx == -1 and not game.turn_manager.granted_judge_completed, "E03e-20c-2a：源判定阶段仅跳过，不重复赠送或结算自己")
+		else:
+			suite.check(target.hand_size() == target_hand + 2 and game.turn_manager.granted_draw_completed, "E03e-20c-2a：普通目标当场摸2张任意牌")
+			game.turn_manager.current_phase = TurnManager.Phase.DRAW
+			game._do_draw(0)
+			suite.check(source.hand_size() == source_hand + 1 and target.hand_size() == target_hand + 2 and game.turn_manager.granted_draw_target_idx == -1 and not game.turn_manager.granted_draw_completed, "E03e-20c-2a：源摸牌阶段只跳过，双方不重复摸牌")
+		await suite.process_frame
+	prepare("activate", 1)
+	game._meiyong_override = func(): return true
+	game._meiyong_option_override = func(): return 1
+	game._meiyong_target_override = func(): return game.players[1]
+	game.players[1].general_name = "比尔·盖伊"
+	game.players[1].shensu_penalty = 1
+	game.players[1].shensu_used_this_turn = false
+	game.turn_manager.supply_shortage_active = true
+	await game._maybe_meiyong(game.players[0])
+	suite.check(game.players[1].hand_size() == 3 and game.players[1].shensu_penalty == 0 and game.turn_manager.supply_shortage_active, "E03e-20c-2a：获赠摸牌执行目标英姿及下个摸牌减益，不消耗源兵粮")
+	game.turn_manager._begin_turn()
+	suite.check(not game.turn_manager.granted_draw_completed and not game.turn_manager.granted_judge_completed, "E03e-20c-2a：下一回合清理已完成赠送标记")
+	await suite.process_frame
+	prepare("activate", 0)
+	game._meiyong_override = func(): return true
+	game._meiyong_option_override = func(): return 0
+	game._meiyong_target_override = func(): return game.players[1]
+	var old_nullification = game._nullify_override
+	game._nullify_override = Callable()
+	var lightning = CardBase.create(CardData.CardSubType.LIGHTNING)
+	game.players[1].judgment_cards.assign([lightning])
+	var close_judge = func():
+		game._choice_prompt_stack.back().overlay.queue_free()
+	close_judge.call_deferred()
+	var reply = await game._maybe_meiyong(game.players[0])
+	suite.check(reply == GameManager.CHOICE_INVALID and game.players[0].hand_size() == 4 and game.players[1].judgment_cards == [lightning] and not game.deck._discard.has(lightning) and game.players[1].hp == 1, "E03e-20c-2a：已提交赠送的真实无懈窗口关闭保留源摸牌，不误判定闪电或丢原牌")
+	suite.check(game.turn_manager.current_phase == TurnManager.Phase.START and game._meiyong_execution_owner == -1 and game.turn_manager.granted_judge_completed, "E03e-20c-2a：判定技术失效停旧执行，不在源阶段重新赠送")
+	game._nullify_override = old_nullification
+	game.turn_manager._begin_turn()
+	await suite.process_frame

@@ -847,7 +847,9 @@ func _do_judge(pid: int):
 	if turn_manager.granted_judge_target_idx >= 0:
 		var target = players[turn_manager.granted_judge_target_idx]
 		turn_manager.granted_judge_target_idx = -1
-		if target.is_alive():
+		var completed = turn_manager.granted_judge_completed
+		turn_manager.granted_judge_completed = false
+		if not completed and target.is_alive():
 			if not await _run_judgment(target, true):
 				return
 		_sync_all_ui()
@@ -949,18 +951,25 @@ func _do_draw(pid: int):
 	if turn_manager.granted_draw_target_idx >= 0:
 		var target = players[turn_manager.granted_draw_target_idx]
 		turn_manager.granted_draw_target_idx = -1
-		if target.is_alive():
-			_draw_blank_cards(target, 2)
-			_update_debug("【烂忠厚】：%s 立刻获得一个摸牌阶段，摸了 2 张牌（手牌 %d 张）" % [target.player_name, target.hand_size()])
+		var completed = turn_manager.granted_draw_completed
+		turn_manager.granted_draw_completed = false
+		if not completed and target.is_alive():
+			_draw_phase_cards(target, false)
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
+	_draw_phase_cards(p)
+	_sync_all_ui()
+	turn_manager.advance_phase()
+
+# 获赠摸牌同样执行目标自己的锁定技/已有减益，但不消费源角色的兵粮状态。
+func _draw_phase_cards(p: Player, apply_supply: bool = true):
 	var draw_count = 2
 	# 【英姿】（比尔·盖伊）锁定技：摸牌阶段多摸一张
 	if p.general_name == "比尔·盖伊" and p.is_alive():
 		draw_count += 1
 		_update_debug("%s 发动【英姿】：摸牌阶段多摸一张" % p.player_name)
-	if turn_manager.supply_shortage_active:
+	if apply_supply and turn_manager.supply_shortage_active:
 		turn_manager.supply_shortage_active = false
 		draw_count -= 1
 		_update_debug("【兵粮寸断】生效，摸牌阶段少摸一张")
@@ -973,8 +982,6 @@ func _do_draw(pid: int):
 		_update_debug("%s 的【神速】摸牌减益结算：少摸 %d 张（实际摸 %d 张）" % [p.player_name, owed, draw_count])
 	_draw_blank_cards(p, draw_count)
 	_update_debug("%s 摸了 %d 张牌（手牌 %d 张）" % [p.player_name, draw_count, p.hand_size()])
-	_sync_all_ui()
-	turn_manager.advance_phase()
 
 func _do_play(pid: int):
 	var p = players[pid]
@@ -7257,8 +7264,14 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 	if not _meiyong_target_valid(p, chosen_target, chosen_option): return CHOICE_INVALID
 	_draw_blank_cards(p, 1)
 	match chosen_option:
-		0: turn_manager.granted_judge_target_idx = chosen_target.seat_index
-		1: turn_manager.granted_draw_target_idx = chosen_target.seat_index
+		0:
+			turn_manager.granted_judge_target_idx = chosen_target.seat_index
+			turn_manager.granted_judge_completed = true
+			if not await _run_judgment(chosen_target, true) or not valid.call(): return CHOICE_INVALID
+		1:
+			turn_manager.granted_draw_target_idx = chosen_target.seat_index
+			turn_manager.granted_draw_completed = true
+			_draw_phase_cards(chosen_target, false)
 		2: turn_manager.granted_play_target_idx = chosen_target.seat_index
 	_update_debug("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
 	_sync_all_ui()
