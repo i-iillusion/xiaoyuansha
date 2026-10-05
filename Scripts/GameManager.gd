@@ -794,11 +794,11 @@ func _do_start(pid: int):
 
 func _do_start_pending(pid: int, generation: int):
 	var p = players[pid]
-	var revision = turn_manager.get_context_revision()
+	var revision: Array = [turn_manager.get_context_revision()]
 	var current = func():
 		return not _game_over and generation == _start_phase_generation and players.has(p) \
 			and turn_manager.current_player_idx == pid and turn_manager.current_phase == TurnManager.Phase.START \
-			and revision == turn_manager.get_context_revision()
+			and revision[0] == turn_manager.get_context_revision()
 	if not current.call(): return
 	# 武将牌反面：翻回正面并跳过本回合（不摸牌/不出牌/不弃牌）
 	if p.facedown:
@@ -816,7 +816,10 @@ func _do_start_pending(pid: int, generation: int):
 	# 【烂忠厚】（麦克斯·欧尼斯特）：回合开始阶段可摸一张牌并选择跳过自己的一个阶段
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "麦克斯·欧尼斯特" and p.is_alive() and not turn_manager.skip_full_turn:
-		if await _maybe_meiyong(p) == CHOICE_INVALID: return
+		var granted = await _maybe_meiyong(p)
+		if granted == CHOICE_INVALID: return
+		# 仅正常完成的赠送允许接受暂停START后的新上下文；失效不刷新授权。
+		if granted == 1: revision[0] = turn_manager.get_context_revision()
 	if not current.call(): return
 	_sync_all_ui()
 	# advance_phase可同步走到下一角色START；先释放本轮入口，不能锁住合法轮转。
@@ -985,6 +988,12 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true):
 
 func _do_play(pid: int):
 	var p = players[pid]
+	if turn_manager.granted_play_completed and turn_manager._standalone_play_frame.is_empty():
+		turn_manager.granted_play_completed = false
+		turn_manager.granted_play_target_idx = -1
+		turn_manager.skip_play_phase = false
+		turn_manager.advance_phase()
+		return
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的出牌阶段：跳过自己的出牌，目标角色立刻获得一个出牌阶段
 	if turn_manager.granted_play_target_idx >= 0:
 		var target = players[turn_manager.granted_play_target_idx]
@@ -7272,9 +7281,58 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 			turn_manager.granted_draw_target_idx = chosen_target.seat_index
 			turn_manager.granted_draw_completed = true
 			_draw_phase_cards(chosen_target, false)
-		2: turn_manager.granted_play_target_idx = chosen_target.seat_index
+		2:
+			turn_manager.granted_play_target_idx = chosen_target.seat_index
+			turn_manager.granted_play_completed = true
+			if await _run_meiyong_granted_play(p, chosen_target, owner) == CHOICE_INVALID: return CHOICE_INVALID
 	_update_debug("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
 	_sync_all_ui()
+	return 1
+
+func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> int:
+	var frame = turn_manager.begin_standalone_play(target.seat_index)
+	if frame.is_empty(): return CHOICE_INVALID
+	var play_revision: int = frame.revision
+	frame.allowed = func():
+		return not _game_over and _meiyong_execution_owner == owner and _meiyong_execution_generation == owner \
+			and players.has(source) and players.has(target) and source.general_name == "麦克斯·欧尼斯特" \
+			and turn_manager.get_context_revision() == play_revision
+	var answer = ChoicePromptAnswer.new()
+	var result: Array = [CHOICE_INVALID]
+	var finished = func(done):
+		if is_same(done, frame):
+			result[0] = 1
+			answer.submit(1)
+	var watch = func():
+		if frame.completed: return
+		if _game_over or _meiyong_execution_owner != owner or _meiyong_execution_generation != owner \
+			or not players.has(source) or not players.has(target) or source.general_name != "麦克斯·欧尼斯特" \
+			or not is_same(turn_manager._standalone_play_frame, frame) \
+			or turn_manager.get_context_revision() != frame.revision:
+			answer.submit(CHOICE_INVALID)
+	var tree = get_tree()
+	turn_manager.standalone_play_finished.connect(finished)
+	tree.process_frame.connect(watch)
+	# AI与玩家0都沿真实出牌入口；先连接完成监听，空阶段也不丢答复。
+	_do_play(source.seat_index)
+	if not answer.settled: result[0] = await answer.answered
+	turn_manager.standalone_play_finished.disconnect(finished)
+	tree.process_frame.disconnect(watch)
+	if result[0] != 1:
+		turn_manager.cancel_standalone_play(frame)
+		if _meiyong_execution_owner == owner and _meiyong_execution_generation == owner:
+			_play_btn.visible = false
+			_end_play_btn.visible = false
+			_halt_countdown()
+			_set_status_line("获赠出牌阶段已失效")
+		return CHOICE_INVALID
+	if _game_over or _meiyong_execution_owner != owner or _meiyong_execution_generation != owner \
+		or not players.has(source) or turn_manager.current_player_idx != source.seat_index \
+		or turn_manager.current_phase != TurnManager.Phase.START:
+		return CHOICE_INVALID
+	turn_manager.granted_play_target_idx = target.seat_index
+	_sync_all_ui()
+	_refresh_status_line()
 	return 1
 
 func _choose_meiyong_phase_target(p: Player, allowed: Callable, remaining: float):
@@ -8659,6 +8717,14 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	if not turn_manager._standalone_play_frame.is_empty():
+		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
+		_halt_countdown()
+		_play_btn.visible = false
+		_end_play_btn.visible = false
+	turn_manager.granted_judge_completed = false
+	turn_manager.granted_draw_completed = false
+	turn_manager.granted_play_completed = false
 	_play_skill_selection_generation += 1
 	_zhuangbi_execution_generation += 1
 	_zhuangbi_execution_owner = -1
@@ -9421,7 +9487,9 @@ func _start_play_countdown():
 	_set_status_line("%s 出牌阶段" % players[0].player_name)
 	_step_remaining = STEP_SECONDS
 	_countdown_active = true
-	_countdown_on_timeout = func(): end_play_phase()
+	var generation = _countdown_generation
+	_countdown_on_timeout = func():
+		if generation == _countdown_generation: end_play_phase()
 	_update_countdown_label()
 
 # 响应弹窗倒计时：超时自动放弃（关闭弹窗并发出对应信号）

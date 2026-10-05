@@ -17,6 +17,7 @@ enum Phase {
 
 signal phase_changed(old_phase: Phase, new_phase: Phase, player_idx: int)
 signal turn_ended(player_idx: int)
+signal standalone_play_finished(frame: Dictionary)
 
 @export var player_count: int = 4
 @export var debug_log: bool = true
@@ -98,6 +99,25 @@ var granted_draw_target_idx: int = -1    # 跳过自己的摸牌阶段 → 目�
 var granted_judge_completed: bool = false
 var granted_draw_completed: bool = false
 var granted_play_target_idx: int = -1    # 跳过自己的出牌阶段 → 目标立刻获得一个出牌阶段
+var granted_play_completed: bool = false
+var _standalone_play_frame: Dictionary = {}
+
+# 烂忠厚在START插入单独出牌阶段；不发回合开始/弃牌/结束事件。
+func begin_standalone_play(actor: int) -> Dictionary:
+	if current_phase != Phase.START or not _standalone_play_frame.is_empty() or actor < 0 or actor >= player_count or actor == current_player_idx: return {}
+	var frame = {"source": current_player_idx, "turn": turn_id, "actor": actor, "completed": false}
+	_standalone_play_frame = frame
+	current_phase = Phase.PLAY
+	phase_id += 1
+	play_actor_idx = actor
+	frame.revision = _context_revision
+	return frame
+
+func cancel_standalone_play(frame: Dictionary):
+	if is_same(_standalone_play_frame, frame):
+		frame["allowed"] = Callable()
+		_standalone_play_frame = {}
+		_context_revision += 1
 
 # ---- WAITING 状态上下文 ----
 var waiting_responder_idx: int = -1
@@ -128,6 +148,18 @@ func _change_phase(new_phase: Phase):
 
 # 推进到下一阶段（阶段内逻辑由 GameManager 处理）
 func advance_phase():
+	if current_phase == Phase.PLAY and not _standalone_play_frame.is_empty():
+		var frame = _standalone_play_frame
+		if current_player_idx != frame.source or turn_id != frame.turn or play_actor_idx != frame.actor or _context_revision != frame.revision:
+			return
+		var allowed: Callable = frame.get("allowed", Callable())
+		if allowed.is_valid() and not allowed.call(): return
+		frame["allowed"] = Callable()
+		_standalone_play_frame = {}
+		current_phase = Phase.START
+		frame.completed = true
+		standalone_play_finished.emit(frame)
+		return
 	match current_phase:
 		Phase.START:
 			if skip_full_turn:
@@ -173,6 +205,8 @@ func _begin_turn():
 	granted_judge_completed = false
 	granted_draw_completed = false
 	granted_play_target_idx = -1
+	granted_play_completed = false
+	_standalone_play_frame = {}
 	waiting_responder_idx = -1
 	waiting_response_type = ""
 

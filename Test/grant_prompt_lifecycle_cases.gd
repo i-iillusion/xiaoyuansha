@@ -13,6 +13,7 @@ func prepare(stage: String, option: int = 1):
 	game.turn_manager.granted_judge_completed = false
 	game.turn_manager.granted_draw_completed = false
 	game.turn_manager.granted_play_target_idx = -1
+	game.turn_manager.granted_play_completed = false
 	game.players[1].judgment_cards.assign([CardBase.create(CardData.CardSubType.INDULGENCE)])
 	game._meiyong_override = Callable() if stage == "activate" else func(): return true
 	game._meiyong_option_override = Callable() if stage == "option" else func(): return option
@@ -102,11 +103,14 @@ func run(host):
 	await suite.process_frame
 	for option in [0, 1, 2]:
 		prepare("target", option)
+		var old_chooser = game.ai_driver.chooser
+		game.ai_driver.chooser = func(_view, _choices): return -1
 		var choose = func():
 			game._on_meiyong_target_click(game.players[1])
 			game._meiyong_combined_state.buttons[option].pressed.emit()
 		choose.call_deferred()
 		await game._maybe_meiyong(game.players[0])
+		game.ai_driver.chooser = old_chooser
 		suite.check([game.turn_manager.granted_judge_target_idx, game.turn_manager.granted_draw_target_idx, game.turn_manager.granted_play_target_idx][option] == 1 and game.players[0].hand_size() == 4, "E03e-20b：三种正常赠送实际选人各写对应目标并摸一次")
 		await suite.process_frame
 	prepare("activate")
