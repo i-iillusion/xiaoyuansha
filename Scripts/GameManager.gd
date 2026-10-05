@@ -7591,10 +7591,16 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 		_update_debug("%s 手牌不足 %d 张，无法弃牌令 %s 翻面" % [source.player_name, need, victim.player_name])
 		return 0
 	if source.seat_index == 0:
-		if not await _ask_soul_blade_discard(victim.player_name, need):
+		var discard_reply = await _ask_soul_blade_discard(victim.player_name, need, valid)
+		if discard_reply == CHOICE_INVALID or not valid.call():
+			return CHOICE_INVALID
+		if discard_reply == 0:
 			return 0
-	if not await _select_hand_discard(source, need, false, valid):
-		return CHOICE_INVALID if not valid.call() else 0
+	var payment = await _select_hand_discard_result(source, need, false, valid)
+	if payment != HandDiscardOutcome.PAID:
+		if payment in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED, HandDiscardOutcome.STALE_SELECTION] or not valid.call():
+			return CHOICE_INVALID
+		return 0
 	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
 	_sync_all_ui()
 	_flip_character(victim)
@@ -7665,12 +7671,18 @@ func _show_soul_blade_activate_prompt(victim_name: String, allowed: Callable = C
 	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 玩家0是否弃 need 张手牌令目标翻面
-func _ask_soul_blade_discard(victim_name: String, need: int) -> bool:
+func _ask_soul_blade_discard(victim_name: String, need: int, allowed: Callable = Callable()) -> int:
 	if _soul_blade_discard_override.is_valid():
-		return _soul_blade_discard_override.call()
-	return await _show_soul_blade_discard_prompt(victim_name, need)
+		var reply = await _soul_blade_discard_override.call()
+		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID:
+			return CHOICE_INVALID
+		return 1 if reply else 0
+	return await _show_soul_blade_discard_prompt(victim_name, need, allowed)
 
-func _show_soul_blade_discard_prompt(victim_name: String, need: int) -> bool:
+func _show_soul_blade_discard_prompt(victim_name: String, need: int, allowed: Callable = Callable()) -> int:
+	if _game_over or (allowed.is_valid() and not allowed.call()):
+		return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -7709,20 +7721,9 @@ func _show_soul_blade_discard_prompt(victim_name: String, need: int) -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
-	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
-	, CONNECT_ONE_SHOT)
-
-	await _response_ready
-	return result[0]
+	use_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
+	skip_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 询问所有存活角色是否打出【舍己为人】代替 target 承受即将到来的伤害
 # 返回打出者（null = 无人打出）
@@ -8082,15 +8083,22 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			var prompt = HandDiscardPrompt.new()
 			$UI.add_child(prompt)
 			prompt.setup(snapshot, count, mandatory)
-			var stop = func(_winner): prompt.submit([])
-			game_over.connect(stop)
-			_start_response_countdown(prompt, p.player_name, prompt.timeout)
-			indices = await prompt.answered
-			game_over.disconnect(stop)
-			# 旧窗口的计时及信号先清理；重选不重开出牌阶段计时。
-			_halt_countdown()
-			if not prompt.is_queued_for_deletion():
-				prompt.queue_free()
+			var answer = ChoicePromptAnswer.new()
+			var reply = {"indices": []}
+			var valid = func():
+				return not _game_over and players.has(p) and p.is_alive() \
+					and revision == turn_manager.get_context_revision() \
+					and (not allowed.is_valid() or allowed.call())
+			prompt.answered.connect(func(chosen):
+				reply.indices = chosen.duplicate()
+				answer.submit(1), CONNECT_ONE_SHOT)
+			var result = await _wait_choice_prompt(prompt, answer, valid)
+			if result == CHOICE_INVALID:
+				return HandDiscardOutcome.GAME_ENDED if _game_over else HandDiscardOutcome.ACTION_INVALIDATED
+			if result == -1:
+				indices.assign(snapshot.defaults(count) if mandatory else [])
+			else:
+				indices.assign(reply.indices)
 		_refresh_status_line()
 		if _game_over:
 			return HandDiscardOutcome.GAME_ENDED
