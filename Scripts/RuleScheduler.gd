@@ -5,6 +5,12 @@ extends RefCounted
 
 var _pending: Array[Dictionary] = []
 var _frames: Array[Dictionary] = []
+var _generation: int = 0
+
+func reset():
+	_generation += 1
+	_pending.clear()
+	_frames.clear()
 
 func enqueue(rule_name: String, action: Callable, priority: int = 0):
 	assert(action.is_valid())
@@ -13,7 +19,8 @@ func enqueue(rule_name: String, action: Callable, priority: int = 0):
 func is_paused() -> bool:
 	return not _frames.is_empty()
 
-func checkpoint(context: RefCounted, stage: String):
+func checkpoint(context: RefCounted, stage: String) -> bool:
+	var generation = _generation
 	while not _pending.is_empty():
 		# 相同优先级按入队顺序处理；这是调度默认值，不是技能争议的裁定。
 		var next_index = 0
@@ -21,6 +28,16 @@ func checkpoint(context: RefCounted, stage: String):
 			if _pending[i]["priority"] > _pending[next_index]["priority"]:
 				next_index = i
 		var entry: Dictionary = _pending.pop_at(next_index)
-		_frames.append({"context": context, "stage": stage, "rule": entry["name"]})
+		var frame = {"context": context, "stage": stage, "rule": entry["name"]}
+		_frames.append(frame)
 		await entry["action"].call(context, stage)
-		_frames.pop_back()
+		if generation != _generation: return false
+		# 仅移除本次所属帧，不pop重开或嵌套产生的新帧。
+		var owned_index = -1
+		for i in _frames.size():
+			if is_same(_frames[i], frame):
+				owned_index = i
+				break
+		if owned_index < 0: return false
+		_frames.remove_at(owned_index)
+	return generation == _generation

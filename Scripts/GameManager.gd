@@ -1193,19 +1193,22 @@ func _execute_ai_action(action: Dictionary):
 
 func _run_ai_play(actor: Player):
 	var revision = turn_manager.get_context_revision()
-	if _ai_running_revisions.has(revision):
+	var generation = _dying_lifecycle_generation
+	if _ai_running_revisions.get(revision, -1) == generation:
 		return
-	_ai_running_revisions[revision] = true
+	_ai_running_revisions[revision] = generation
 	var valid = func():
-		return not _game_over and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(actor) \
+			and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
 			and turn_manager.get_play_actor_idx() == actor.seat_index \
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
 	var result = await ai_driver.run(func(): return _ai_observation(actor),
 		_ai_play_candidates, _execute_ai_action, valid)
-	_ai_running_revisions.erase(revision)
-	if not _game_over and actor.is_dead() and turn_manager.get_context_revision() == revision \
+	if _ai_running_revisions.get(revision, -1) == generation: _ai_running_revisions.erase(revision)
+	if not _game_over and generation == _dying_lifecycle_generation and players.has(actor) \
+			and actor.is_dead() and turn_manager.get_context_revision() == revision \
 			and turn_manager.current_phase == TurnManager.Phase.PLAY and turn_manager.get_play_actor_idx() == actor.seat_index:
 		turn_manager.advance_phase()
 		return
@@ -2004,6 +2007,8 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 # 杀、普通伤害与传导共用同一条伤害链。
 func _new_damage_chain(source: Player, target: Player, card: CardBase, amount: int, element: EffectChain.DamageType) -> EffectChain:
 	var chain = EffectChain.new(source, target, card, EffectChain.EffectType.DAMAGE, amount)
+	var generation = _dying_lifecycle_generation
+	chain.continuation_allowed = func(): return generation == _dying_lifecycle_generation
 	chain.damage_element = element
 	chain.scheduler = rule_scheduler
 	chain.trigger_callback = _on_chain_trigger
@@ -5704,6 +5709,7 @@ func _show_reveal_opportunity_prompt(owner: Player, allowed: Callable = Callable
 
 # 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
 func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable(), timed: bool = true, initial_step: float = STEP_SECONDS, remaining_out: Array = []) -> int:
+	var lifecycle_generation = _dying_lifecycle_generation
 	var actor: Player = players[0]
 	var actor_ref = weakref(actor)
 	var window_ref = weakref(overlay)
@@ -5712,6 +5718,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		var current_actor = actor_ref.get_ref()
 		var current_window = window_ref.get_ref()
 		return not _game_over and current_actor != null and players.has(current_actor) \
+			and lifecycle_generation == _dying_lifecycle_generation \
 			and players[0] == current_actor and not current_actor.is_dead() \
 			and revision == turn_manager.get_context_revision() \
 			and current_window != null and not current_window.is_queued_for_deletion() \
@@ -6348,7 +6355,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		var damage = await _deal_damage_result(p, t, 1, EffectChain.DamageType.PHYSICAL)
 		if damage.invalidated: return
 		if not sequence_valid.call(): break
-	# 再发动流程保留既有窗口；新文是否删除该能力另待负责人核对。
+	# E03-R02-Q1已答：包括各半成功，均保留成功后再次发动的既有窗口。
 	var can_repeat = func():
 		return action_valid.call() and players.has(p) \
 			and p.general_name == "史蒂芬·彼特先斯" and not _zhuangbi_blocked_this_phase
@@ -8551,7 +8558,8 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 				_draw_blank_cards, func(): return not valid.call(), _on_yudaxi_limit)
 			if not valid.call(): return _invalidate_dying_context(victim, context)
 		if not _game_over and victim.is_dying() and not yudaxi.is_active():
-			await rule_scheduler.checkpoint(context, "before_death")
+			if not await rule_scheduler.checkpoint(context, "before_death"):
+				return _invalidate_dying_context(victim, context)
 			if not valid.call(): return _invalidate_dying_context(victim, context)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.FINAL_DEATH
@@ -8872,6 +8880,7 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
+	if rule_scheduler != null: rule_scheduler.reset()
 	if yudaxi != null: yudaxi.reset()
 	_sage_save_pending.clear()
 	_rescue_choice_pending.clear()

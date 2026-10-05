@@ -65,6 +65,7 @@ var current_phase: Phase = Phase.RESPONSE
 var is_cancelled: bool = false
 # 交互过期只停止后续动作，不等于规则防止原伤害（例如舍己）。
 var continuation_invalid: bool = false
+var continuation_allowed: Callable
 var response_result: ResponseResult = ResponseResult.NONE
 # true → 跳过目标响应阶段（【贯石斧】强制命中用：杀被闪抵消后重新结算伤害）
 var skip_response: bool = false
@@ -98,11 +99,16 @@ func _sync_record():
 	source_player = damage.source
 
 func _trigger(event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
+	if not _continuation_is_current(): return true
 	if is_cancelled:
 		return true
 	_sync_record()
 	if scheduler != null:
-		await scheduler.checkpoint(self, event_name)
+		if not await scheduler.checkpoint(self, event_name):
+			continuation_invalid = true
+			if not damage.committed: is_cancelled = true
+			return true
+	if not _continuation_is_current(): return true
 	_sync_record()
 	if is_cancelled:
 		return true
@@ -118,16 +124,28 @@ func _trigger(event_name: String, subject: Player, source: Player, data: Diction
 	var handled = false
 	if trigger_callback.is_valid():
 		handled = await trigger_callback.call(self, event_name, subject, source, data)
+	if not _continuation_is_current(): return true
 	if is_cancelled:
 		return true
 	if data.has("value"):
 		effect_value = data["value"]
 	if scheduler != null:
-		await scheduler.checkpoint(self, event_name + ":after")
+		if not await scheduler.checkpoint(self, event_name + ":after"):
+			continuation_invalid = true
+			if not damage.committed: is_cancelled = true
+			return true
+	if not _continuation_is_current(): return true
 	_sync_record()
 	if data.has("value"):
 		data["value"] = effect_value
 	return handled or is_cancelled
+
+func _continuation_is_current() -> bool:
+	if continuation_invalid or (continuation_allowed.is_valid() and not continuation_allowed.call()):
+		continuation_invalid = true
+		if not damage.committed: is_cancelled = true
+		return false
+	return true
 
 # 启动链条，可 await 获取结果
 func start() -> ResponseResult:
@@ -135,13 +153,16 @@ func start() -> ResponseResult:
 	if _started:
 		return response_result
 	_started = true
+	if not _continuation_is_current():
+		_finish()
+		return response_result
 	await _phase_response()
 	if not is_cancelled:
 		await _phase_effect()
 	if not is_cancelled:
 		await _phase_resolution()
 	_finish()
-	if completion_callback.is_valid():
+	if _continuation_is_current() and completion_callback.is_valid():
 		await completion_callback.call(self)
 	return response_result
 
@@ -181,6 +202,7 @@ func _phase_response():
 	# 4. 目标响应（杀→闪）——skip_response 时跳过（贯石斧强制命中）
 	if not skip_response and effect_type == EffectType.DAMAGE and target_player and response_callback.is_valid():
 		var dodged = await response_callback.call(self, target_player, CardData.CardSubType.DODGE, source_player)
+		if not _continuation_is_current(): return
 		if dodged:
 			is_cancelled = true
 			response_result = ResponseResult.DODGED
