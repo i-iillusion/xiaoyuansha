@@ -594,6 +594,14 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 	judgment_indicator.mouse_filter = 2
 	panel.add_child(judgment_indicator)
 
+	var prep_indicator = Label.new()
+	prep_indicator.position = Vector2(4, 80)
+	prep_indicator.size = Vector2(56, 18)
+	prep_indicator.add_theme_font_size_override("font_size", 11)
+	prep_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prep_indicator.visible = false
+	panel.add_child(prep_indicator)
+
 	panel.set_meta("avatar_label", avatar_label)
 	panel.set_meta("name_label", name_label)
 	panel.set_meta("hp_label", hp_label)
@@ -605,6 +613,7 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 	panel.set_meta("facedown_indicator", facedown_indicator)
 	panel.set_meta("kneeling_indicator", kneeling_indicator)
 	panel.set_meta("judgment_indicator", judgment_indicator)
+	panel.set_meta("prep_indicator", prep_indicator)
 	panel.set_meta("player", player)
 
 	panel.gui_input.connect(_on_player_panel_click.bind(panel))
@@ -678,6 +687,10 @@ func _update_player_panel(panel: Control, player: Player):
 		judgment_indicator.text = ""
 	else:
 		judgment_indicator.text = "⚖×%d" % player.judgment_cards.size()
+
+	var prep_indicator: Label = panel.get_meta("prep_indicator")
+	prep_indicator.visible = player.general_name == "里奥·普利威尔"
+	prep_indicator.text = "预习:%d" % player.prep_tokens
 
 	panel.set_meta("player", player)
 
@@ -1738,8 +1751,18 @@ func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind =
 		from_hand: bool = true, is_virtual: bool = false) -> CardActionEvent:
 	_card_action_serial += 1
 	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
+	# 同步消费已成立事实，先于外部观察者；不从弃牌/费用或当前PLAY操作者推导。
+	_apply_prep_card_action(p, event)
 	card_action_committed.emit(event)
 	return event
+
+func _apply_prep_card_action(p: Player, event: CardActionEvent):
+	if p.general_name != "里奥·普利威尔" or p.is_dead() or not players.has(p): return
+	if event.actor_seat != p.seat_index or event.actor_seat != event.turn_owner_seat: return
+	if not event.from_hand or event.is_virtual: return
+	if event.kind not in [CardActionEvent.Kind.USE, CardActionEvent.Kind.RESPONSE]: return
+	p.prep_tokens += 1
+	_update_debug("%s 获得1个【预习】标记（共%d个）" % [p.player_name, p.prep_tokens])
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	var p = players[turn_manager.get_play_actor_idx()]

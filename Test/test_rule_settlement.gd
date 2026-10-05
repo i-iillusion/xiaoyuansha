@@ -69,6 +69,7 @@ func reset_players():
 		p.heal_staff_peach_used = false
 		p.awoken = false
 		p.awake_choice = 0
+		p.prep_tokens = 0
 		p.capture_game_start_state()
 
 func strike(source: Player, target: Player, ignore_restrictions: bool = false):
@@ -782,6 +783,8 @@ func _run():
 	await trick_event_cases.run(self)
 	var equipment_event_cases = load("res://Test/equipment_event_cases.gd").new()
 	await equipment_event_cases.run(self)
+	var prep_token_cases = load("res://Test/prep_token_cases.gd").new()
+	await prep_token_cases.run(self)
 	var play_skill_actor_cases = load("res://Test/play_skill_actor_cases.gd").new()
 	await play_skill_actor_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
