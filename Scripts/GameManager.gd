@@ -6450,6 +6450,13 @@ func _execute_gay(p: Player, target: Player) -> void:
 	if _gay_used:
 		return
 	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
+			and p.general_name == "比尔·盖伊" and players.has(target) and target != p \
+			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
+			and not _is_kneeling(target) and not _gay_used
+	if not valid.call():
+		return
 	var max_x = mini(p.max_hp, target.max_hp)
 	max_x = mini(max_x, p.hand_size())
 	if max_x <= 0:
@@ -6457,19 +6464,22 @@ func _execute_gay(p: Player, target: Player) -> void:
 		return
 	var x := 0
 	if _gay_x_override.is_valid():
-		x = _gay_x_override.call()
+		x = await _gay_x_override.call()
 	elif p.seat_index == 0:
-		x = await _show_gay_x_picker(max_x)
+		x = await _show_gay_x_picker(max_x, valid)
+	if x == CHOICE_INVALID or not valid.call():
+		return
 	if x <= 0 or x > max_x:
 		_update_debug("取消【Gay】")
 		_sync_all_ui()
 		return
 	# 弹窗返回后重新验证，数量不足不得部分支付或获得效果。
-	if _game_over or revision != turn_manager.get_context_revision() \
-			or not p.is_alive() or not target.is_alive() or _gay_used:
+	if x > mini(p.max_hp, target.max_hp) or p.hand_size() < x:
 		return
 	if not await _select_hand_discard(p, x, false, func():
-		return target.is_alive() and revision == turn_manager.get_context_revision() and not _gay_used):
+		return valid.call() and x <= mini(p.max_hp, target.max_hp)):
+		return
+	if not valid.call() or x > mini(p.max_hp, target.max_hp):
 		return
 	_gay_used = true
 	var p_before = p.hp
@@ -6480,11 +6490,13 @@ func _execute_gay(p: Player, target: Player) -> void:
 	_sync_all_ui()
 
 # X 选择弹窗（玩家0）：返回 1..max_x（取消返回 0）
-func _show_gay_x_picker(max_x: int) -> int:
+func _show_gay_x_picker(max_x: int, allowed: Callable = Callable()) -> int:
 	var buttons: Array = []
 	for i in range(1, max_x + 1):
 		buttons.append("弃置 %d 张，各回复 %d 点" % [i, i])
-	var idx = await _show_choice_popup("【Gay】：弃置 X 张手牌（X ≤ %d），双方各回复 X 点体力" % max_x, buttons)
+	var idx = await _show_choice_popup("【Gay】：弃置 X 张手牌（X ≤ %d），双方各回复 X 点体力" % max_x, buttons, allowed)
+	if idx == CHOICE_INVALID:
+		return CHOICE_INVALID
 	if idx < 0:
 		return 0
 	return idx + 1
