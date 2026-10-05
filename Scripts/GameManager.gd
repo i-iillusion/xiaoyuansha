@@ -5589,7 +5589,7 @@ func _show_reveal_opportunity_prompt(owner: Player, allowed: Callable = Callable
 # ============================
 
 # 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
-func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable(), timed: bool = true) -> int:
+func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable(), timed: bool = true, initial_step: float = STEP_SECONDS, remaining_out: Array = []) -> int:
 	var actor: Player = players[0]
 	var actor_ref = weakref(actor)
 	var window_ref = weakref(overlay)
@@ -5617,10 +5617,13 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		if previous.generation == _countdown_generation:
 			previous.step = _step_remaining
 	var pending = {"overlay": overlay, "answer": answer, "who": actor.player_name,
-		"step": STEP_SECONDS, "generation": -1, "timed": timed}
+		"step": maxf(0.0, initial_step), "generation": -1, "timed": timed}
 	_choice_prompt_stack.append(pending)
 	_start_choice_countdown(pending)
 	var result: int = await answer.answered
+	# 在清理/恢复嵌套窗口前保存本窗口剩余预算；不重置全局备用时间。
+	if not remaining_out.is_empty():
+		remaining_out[0] = maxf(0.0, _step_remaining if pending.generation == _countdown_generation else float(pending.step))
 	game_over.disconnect(stop)
 	tree.process_frame.disconnect(watch)
 	if is_instance_valid(overlay):

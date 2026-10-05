@@ -16,6 +16,29 @@ func prepare(stage: String, option: int = 1):
 func run(host):
 	suite = host
 	game = host.game
+	# TURN-03/Q3：真实等待窗口之间传递基础读条，不重置为30秒。
+	prepare("activate")
+	var remaining: Array = [30.0]
+	var first = Control.new()
+	game.get_node("UI").add_child(first)
+	var first_answer = ChoicePromptAnswer.new()
+	var confirm = func():
+		game._step_remaining = 5.0
+		first_answer.submit(0)
+	confirm.call_deferred()
+	suite.check(await game._wait_choice_prompt(first, first_answer, Callable(), true, 30.0, remaining) == 0 and remaining[0] == 5.0, "E03e-20c-0：确认前消耗25秒保存剩余5秒")
+	var second = Control.new()
+	game.get_node("UI").add_child(second)
+	var second_answer = ChoicePromptAnswer.new()
+	var finish = func():
+		suite.check(game._step_remaining == 5.0 and game._countdown_active, "E03e-20c-0：下一真实窗口沿用5秒而非重置30秒")
+		first_answer.submit(-1)
+		suite.check(not second_answer.settled, "E03e-20c-0：旧窗口回答不结束续接窗口")
+		game._step_remaining = 2.0
+		second_answer.submit(-1)
+	finish.call_deferred()
+	suite.check(await game._wait_choice_prompt(second, second_answer, Callable(), true, remaining[0], remaining) == -1 and remaining[0] == 2.0, "E03e-20c-0：取消前保存续接窗口余量")
+	await suite.process_frame
 	for stage in ["activate", "option", "target"]:
 		for mode in ["accept", "invalid", "phase", "end", "general", "duplicate", "old_signal"] + (["decline"] if stage == "activate" else []):
 			prepare(stage)
