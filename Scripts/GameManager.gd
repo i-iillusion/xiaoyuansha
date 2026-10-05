@@ -993,6 +993,11 @@ func _do_draw(pid: int):
 # 获赠摸牌同样执行目标自己的锁定技/已有减益，但不消费源角色的兵粮状态。
 func _draw_phase_cards(p: Player, apply_supply: bool = true):
 	var draw_count = 2
+	# 【丑态】仅改变摸牌阶段基数；兵粮等修改项继续在其后结算。
+	# 额外摸牌走_draw_blank_cards，不受这个阶段锁定技限制。
+	if p.general_name == "里奥·普利威尔" and p.is_alive():
+		draw_count = 1
+		_update_debug("%s 发动【丑态】：摸牌阶段基础摸一张" % p.player_name)
 	# 【英姿】（比尔·盖伊）锁定技：摸牌阶段多摸一张
 	if p.general_name == "比尔·盖伊" and p.is_alive():
 		draw_count += 1
