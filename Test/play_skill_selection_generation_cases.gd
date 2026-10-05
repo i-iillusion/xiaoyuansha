@@ -83,8 +83,10 @@ func run(host):
 	var start_new = func():
 		game.reset_game_over_state()
 		var finish = func():
+			var new_owner = game._lanzhonghou_execution_owner
 			old_answer.submit(0)
 			await suite.process_frame
+			suite.check(new_owner != -1 and game._lanzhonghou_execution_owner == new_owner, "E03e-17b-4b：重开后旧没用完成不清除新执行锁")
 			suite.check(game._lanzhonghou_pending.size() == 1 and a.get_equipment_card("weapon") == weapon and not game._lanzhonghou_used, "E03e-17b-4a：旧没用只清旧暂存，新待交换原牌与费用未被破坏")
 			new_answer.submit(0)
 		finish.call_deferred()
