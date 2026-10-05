@@ -8,6 +8,14 @@ var steps_used: int = 0
 var aborted: bool = false
 var results: Array[Dictionary] = []
 var _owners: Array[Player] = []
+var _generation: int = 0
+
+func reset():
+	_generation += 1
+	_owners.clear()
+	steps_used = 0
+	aborted = false
+	results.clear()
 
 func is_active() -> bool:
 	return not _owners.is_empty()
@@ -24,6 +32,8 @@ func _step(stopped: Callable, on_limit: Callable) -> bool:
 
 func resolve(owner: Player, targets_for: Callable, settle_dying: Callable,
 		draw_cards: Callable, stopped: Callable, on_limit: Callable):
+	var generation = _generation
+	var stop = func(): return generation != _generation or stopped.call()
 	if _owners.has(owner):
 		return
 	if not is_active():
@@ -32,23 +42,24 @@ func resolve(owner: Player, targets_for: Callable, settle_dying: Callable,
 		results.clear()
 	_owners.append(owner)
 	var deaths := 0
-	if _step(stopped, on_limit):
+	if _step(stop, on_limit):
 		# 每帧保存发动时目标快照；轮到时再次检查，子帧不能覆盖父帧游标。
 		var targets: Array[Player] = targets_for.call(owner)
 		for target in targets:
-			if not _step(stopped, on_limit):
+			if not _step(stop, on_limit):
 				break
 			if not target.is_alive() or _owners.has(target):
 				continue
 			target.hp -= 2
 			if target.is_dying():
 				await settle_dying.call(target)
-				if aborted or stopped.call():
+				if aborted or stop.call():
 					break
 				# 只统计这次扣血目标最终死亡。子帧的其他死亡不透传给父帧。
 				if target.is_dead():
 					deaths += 1
-		if _step(stopped, on_limit) and deaths > 0 and not owner.is_dead():
+		if generation != _generation: return # 旧await不能修改新局计数/结果/结算栈。
+		if _step(stop, on_limit) and deaths > 0 and not owner.is_dead():
 			owner.hp = deaths # 回复至 X，不叠加旧负体力，也不按普通回复封顶。
 			draw_cards.call(owner, deaths)
 	results.append({"owner": owner, "deaths": deaths, "aborted": aborted})

@@ -4366,7 +4366,7 @@ func _try_liehuo_nullify_result(p: Player, sub: CardData.CardSubType, allowed: C
 	_update_debug("%s 发动【烈火盾】：失去1点体力，【%s】对其无效（%d/%d）" % [p.player_name, CardData.get_type_name(sub), p.hp, p.max_hp])
 	_sync_all_ui()
 	if p.is_dying():
-		await _resolve_dying(p, null, "liehuo")
+		if await _resolve_dying(p, null, "liehuo") == CHOICE_INVALID: return LiehuoOutcome.INVALIDATED
 	return LiehuoOutcome.PREVENTED
 
 # 询问是否发动烈火盾：玩家0弹窗，AI 默认不发动
@@ -5785,23 +5785,26 @@ func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> in
 # ============================
 
 # 将要死亡时与场上所有存活玩家各拼点一次；赢至少一半（向上取整）则回复至 1 点体力；每名对手只猜一次，平局不重猜
-func _try_zhuangsha(dying: Player) -> void:
+func _try_zhuangsha(dying: Player) -> int:
 	var opponents: Array[Player] = []
 	for pl in players:
 		if pl != dying and pl.is_alive():
 			opponents.append(pl)
 	if opponents.is_empty():
-		return
+		return 0
 	_update_debug("%s 发动【装傻】：与场上所有存活玩家拼点！" % dying.player_name)
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var context = _dying_contexts.get(dying)
 	var wins := 0
 	for opp in opponents:
 		var valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
-				and dying.is_dying() and opp.is_alive()
+				and generation == _dying_lifecycle_generation and _dying_contexts.get(dying) == context \
+				and players.has(dying) and players.has(opp) and dying.is_dying() and opp.is_alive()
 		var r = await _do_ping_dian_once(dying, opp, valid)
 		if r == RPS_INVALID or not valid.call():
-			return
+			return CHOICE_INVALID
 		if r == RPS_WIN:
 			wins += 1
 	if wins >= ceili(opponents.size() / 2.0):
@@ -5810,6 +5813,7 @@ func _try_zhuangsha(dying: Player) -> void:
 	else:
 		_update_debug("%s 【装傻】拼点胜 %d/%d，未能回复…" % [dying.player_name, wins, opponents.size()])
 	_sync_all_ui()
+	return 0
 
 # ============================
 #  【觉醒】史蒂芬·彼特先斯（觉醒技：满足条件立即自动发动）
@@ -8443,7 +8447,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and players.has(victim) \
-			and turn_manager.get_context_revision() == revision and _dying_contexts.get(victim) == context
+			and turn_manager.get_context_revision() == revision and _dying_contexts.get(victim) == context and not context.invalidated
 	var rescue = await _check_dying(victim)
 	if rescue == CHOICE_INVALID or not valid.call():
 		return _invalidate_dying_context(victim, context)
@@ -8452,7 +8456,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 		# 锁定规则先于普通检查点；里奥尚未加入选将表，完整武将仍待开发。
 		if victim.general_name == "里奥·普利威尔":
 			await yudaxi.resolve(victim, _yudaxi_targets, _settle_yudaxi_target,
-				_draw_blank_cards, func(): return _game_over, _on_yudaxi_limit)
+				_draw_blank_cards, func(): return not valid.call(), _on_yudaxi_limit)
 			if not valid.call(): return _invalidate_dying_context(victim, context)
 		if not _game_over and victim.is_dying() and not yudaxi.is_active():
 			await rule_scheduler.checkpoint(context, "before_death")
@@ -8467,6 +8471,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	return 0
 
 func _invalidate_dying_context(victim: Player, context: DyingContext) -> int:
+	context.invalidated = true
 	if context.effect_chain != null:
 		context.effect_chain.continuation_invalid = true
 		context.effect_chain.is_cancelled = true
@@ -8490,7 +8495,12 @@ func _yudaxi_targets(owner: Player) -> Array[Player]:
 func _settle_yudaxi_target(target: Player):
 	# 扣除体力没有伤害来源/击杀奖励，仍允许普通求救及既定保命技能。
 	_sync_all_ui()
-	await _resolve_dying(target, null, "yudaxi")
+	var generation = _dying_lifecycle_generation
+	var result = await _resolve_dying(target, null, "yudaxi")
+	if result == CHOICE_INVALID and generation == _dying_lifecycle_generation:
+		# 扣除已提交；子窗口失效停止同局父帧，不继续扣其他人或误回血。
+		for context in _dying_contexts.values(): context.invalidated = true
+	return result
 
 func _on_yudaxi_limit():
 	# 终止悬挂的外层伤害链，不在平局后继续普通伤害后技能。
@@ -8526,7 +8536,7 @@ func _check_dying(dying: Player) -> int:
 
 	# 桃/酒自救后仍处于濒死 → 阵亡效果·【装傻】（安普提·斯丢皮得，锁定技）：与所有存活玩家拼点，赢至少一半（向上取整）回复至 1 点体力
 	if dying.is_dying() and dying.general_name == "安普提·斯丢皮得":
-		await _try_zhuangsha(dying)
+		if await _try_zhuangsha(dying) == CHOICE_INVALID: return CHOICE_INVALID
 		if not valid.call(): return CHOICE_INVALID
 		if dying.is_alive():
 			_sync_all_ui()
@@ -8768,6 +8778,7 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
+	if yudaxi != null: yudaxi.reset()
 	_sage_save_pending.clear()
 	_rescue_choice_pending.clear()
 	if not turn_manager._standalone_play_frame.is_empty():

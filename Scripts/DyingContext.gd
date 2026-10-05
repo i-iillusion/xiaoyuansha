@@ -10,6 +10,7 @@ var killer: Player
 var cause: String
 var effect_chain: EffectChain
 var stage: Stage = Stage.RESCUE
+var invalidated: bool = false
 
 func _init(target: Player, source: Player, reason: String, chain: EffectChain = null):
 	victim = target
