@@ -17,7 +17,6 @@ var observations: Array = []
 var _check_log_buffer: Array[String] = []
 
 func _init():
-	process_frame.connect(_flush_check_log)
 	_run()
 
 func _flush_check_log():
@@ -27,13 +26,15 @@ func _flush_check_log():
 
 func check(ok: bool, message: String):
 	checks += 1
+	if checks % 1000 == 0: print("[PROFILE] asserts=%d elapsed_ms=%d" % [checks, Time.get_ticks_msec()])
 	if not ok:
 		failures += 1
 		# 失败断言同时显示在 Actions 注释中；不改变失败计数或通过条件。
 		var annotation = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 		print("::error file=Test/test_rule_settlement.gd::" + annotation)
 	_check_log_buffer.append(("PASS: " if ok else "FAIL: ") + message)
-	if not ok or _check_log_buffer.size() >= 64: _flush_check_log()
+	# 保留每条PASS/FAIL；按固定批次写出，不在每帧重复刷新标准输出。
+	if not ok or _check_log_buffer.size() >= 256: _flush_check_log()
 
 func reset_players():
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
@@ -883,6 +884,8 @@ func _run():
 	await rescue_lifecycle_cases.run(self)
 	var dying_caller_lifecycle_cases = load("res://Test/dying_caller_lifecycle_cases.gd").new()
 	await dying_caller_lifecycle_cases.run(self)
+	var judgment_damage_lifecycle_cases = load("res://Test/judgment_damage_lifecycle_cases.gd").new()
+	await judgment_damage_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

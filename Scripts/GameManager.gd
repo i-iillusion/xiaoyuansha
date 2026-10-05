@@ -20,6 +20,7 @@ class RescueAnswer extends RefCounted:
 const CHOICE_INVALID: int = -2
 var _choice_prompt_stack: Array[Dictionary] = []
 var _countdown_generation: int = 0
+var _countdown_display_state: String = ""
 
 signal game_started()
 signal game_over(winner_identity: String)
@@ -633,15 +634,15 @@ func _update_player_panel(panel: Control, player: Player):
 	# 身份颜色：主公金 / 忠臣绿 / 反贼红 / 内奸紫（未公开灰色）
 	match player.identity:
 		"主公":
-			identity_label.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
+			_set_label_font_color(identity_label, Color(1, 0.85, 0.3))
 		"忠臣":
-			identity_label.add_theme_color_override("font_color", Color(0.45, 0.9, 0.45))
+			_set_label_font_color(identity_label, Color(0.45, 0.9, 0.45))
 		"反贼":
-			identity_label.add_theme_color_override("font_color", Color(0.95, 0.4, 0.35))
+			_set_label_font_color(identity_label, Color(0.95, 0.4, 0.35))
 		"内奸":
-			identity_label.add_theme_color_override("font_color", Color(0.75, 0.5, 0.95))
+			_set_label_font_color(identity_label, Color(0.75, 0.5, 0.95))
 		_:
-			identity_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.65))
+			_set_label_font_color(identity_label, Color(0.6, 0.6, 0.65))
 	# 阵亡：面板置灰
 	panel.modulate = Color(0.45, 0.45, 0.45, 1) if not player.is_alive() else Color.WHITE
 
@@ -883,13 +884,14 @@ func _do_judge(pid: int):
 # granted=true = 【烂忠厚】授予的判定阶段：乐不思蜀/兵粮寸断失效（不触发效果）；闪电/火烧连营正常生效
 func _run_judgment(p: Player, granted: bool) -> bool:
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	if granted:
 		_update_debug("%s 进行（授予的）判定阶段：判定区 %d 张牌（乐不思蜀/兵粮寸断失效）" % [p.player_name, p.judgment_cards.size()])
 	else:
 		_update_debug("%s 判定阶段：判定区 %d 张牌（后放置的先判定）" % [p.player_name, p.judgment_cards.size()])
 
 	while not p.judgment_cards.is_empty() and p.is_alive():
-		if _game_over or revision != turn_manager.get_context_revision():
+		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not players.has(p):
 			return false
 		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
 		var card = p.judgment_cards.back()
@@ -897,7 +899,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
-			var valid = func(): return players.has(p) and p.is_alive() and not p.judgment_cards.is_empty() and p.judgment_cards.back() == card
+			var valid = func(): return generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and not p.judgment_cards.is_empty() and p.judgment_cards.back() == card
 			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
 			if nullified == NullificationOutcome.INVALIDATED:
 				return false
@@ -909,7 +911,10 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 				else:
 					_update_debug("【闪电】判定：必定命中！即将对 %s 造成 3 点雷电伤害" % p.player_name)
 					# 规则（朋友设定）：闪电造成的属性伤害无伤害来源（铁索传导随之为无来源）
-					await _deal_damage(null, p, 3, EffectChain.DamageType.THUNDER)
+					var damage = await _deal_damage_result(null, p, 3, EffectChain.DamageType.THUNDER)
+					if damage.invalidated:
+						deck.discard(card)
+						return false
 			CardData.CardSubType.INDULGENCE:
 				if granted:
 					# 【烂忠厚】授予的判定阶段：乐不思蜀失效（不触发效果）
@@ -936,7 +941,9 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 				else:
 					_update_debug("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
 					# 规则（朋友设定）：火烧连营造成的属性伤害无伤害来源（与闪电一致）
-					await _resolve_burning_camp_damage(null, p, 1)
+					if await _resolve_burning_camp_damage(null, p, 1) == CHOICE_INVALID or _game_over:
+						deck.discard(card)
+						return false
 					# 蔓延：判定者左右判定区各生成一张火烧连营（已有则不重复）
 					var bc_left = players[(p.seat_index + 1) % player_count]
 					var bc_right = players[(p.seat_index - 1 + player_count) % player_count]
@@ -951,7 +958,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		for c in p.judgment_cards:
 			deck.discard(c)
 		p.judgment_cards.clear()
-	return not _game_over and revision == turn_manager.get_context_revision()
+	return not _game_over and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation
 
 func _do_draw(pid: int):
 	var p = players[pid]
@@ -2520,7 +2527,8 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
-			await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
+			var damage = await _deal_damage_result(p, target, 1, EffectChain.DamageType.PHYSICAL)
+			if damage.invalidated: break
 
 	_sync_all_ui()
 
@@ -3986,7 +3994,8 @@ func _play_duel(attacker: Player, target: Player):
 				if not HandPayment.has_response(current, CardData.CardSubType.STRIKE):
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
-					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+					if damage.invalidated: return
 					break
 				var cont = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
 				if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
@@ -3997,7 +4006,8 @@ func _play_duel(attacker: Player, target: Player):
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)
-					await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+					if damage.invalidated: return
 					break
 			# 交换攻守
 			var tmp = current
@@ -4006,7 +4016,8 @@ func _play_duel(attacker: Player, target: Player):
 		else:
 			# 无法出杀 → 受伤害（伤害来源 = 决斗对手；【暴怒】布鲁斯·萨维奇作为伤害来源时附加已损失体力值伤害）
 			_update_debug("%s 在【决斗】中无法出【杀】" % current.player_name)
-			await _deal_damage(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+			var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
+			if damage.invalidated: return
 			break
 
 	_sync_all_ui()
@@ -4118,7 +4129,9 @@ func _show_duel_second_strike_prompt() -> int:
 
 # 火烧连营伤害结算：中心角色 → 左侧（下家 seat+1）→ 右侧（上家 seat-1），各受 amount 点火焰伤害
 # 每个受伤者独立濒死检查 + 铁索传导（火焰伤害）
-func _resolve_burning_camp_damage(source: Player, center: Player, amount: int):
+func _resolve_burning_camp_damage(source: Player, center: Player, amount: int) -> int:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var left = players[(center.seat_index + 1) % player_count]
 	var right = players[(center.seat_index - 1 + player_count) % player_count]
 
@@ -4127,14 +4140,17 @@ func _resolve_burning_camp_damage(source: Player, center: Player, amount: int):
 	_update_debug("火焰蔓延：%s（顺序：%s）" % [victim_names[0], "、".join(victim_names)])
 
 	for victim in victims:
+		if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation: return CHOICE_INVALID
 		if not victim.is_alive():
 			continue
 		# 胜负已分：不再结算后续伤害
 		if _game_over:
 			break
-		await _deal_damage(source, victim, amount, EffectChain.DamageType.FIRE)
+		var damage = await _deal_damage_result(source, victim, amount, EffectChain.DamageType.FIRE)
+		if damage.invalidated: return CHOICE_INVALID
 
 	_sync_all_ui()
+	return 0
 
 # 在目标判定区生成一张火烧连营（判定区已有火烧连营则不重复，防止无限蔓延）
 func _spawn_burning_camp(target: Player, source_seat: int):
@@ -4868,23 +4884,32 @@ func _show_kaiwen_prompt(opponent_name: String, is_receive: bool, allowed: Calla
 # source 可为 null（边界情况），此时不触发铁索传导
 # 返回实际受伤者
 func _deal_damage(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Player:
+	var result = await _deal_damage_result(source, target, amount, element)
+	return result.target
+
+# 需要继续判定/多目标结算的调用者必须使用显式结果，不能把失效当普通受伤。
+func _deal_damage_result(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Dictionary:
 	if target == null or target.is_dead() or amount <= 0:
-		return target
+		return {"target": target, "invalidated": false}
 	var chain = _new_damage_chain(source, target, null, amount, element)
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	chain.skip_targeting = true
 	chain.skip_response = true
 	await chain.start()
 	await _finish_damage_chain(chain)
-	if chain.continuation_invalid:
-		return chain.damage.final_damage().target
+	var result = {"target": chain.damage.final_damage().target, "invalidated": chain.continuation_invalid}
+	if chain.continuation_invalid or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
+		result.invalidated = true
+		return result
 	if chain.damage.final_damage().committed:
-		if _game_over or revision != turn_manager.get_context_revision():
-			return chain.damage.final_damage().target
+		if _game_over: return result # 正常终局不是技术失效，但外层不再继续目标。
 		if await _try_calamity_transfer(chain.source_player) == CHOICE_INVALID:
-			return chain.damage.final_damage().target
+			result.invalidated = true
+			return result
 	await _maybe_ask_reveal()
-	return chain.damage.final_damage().target
+	result.invalidated = _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation
+	return result
 
 func _trigger_pofeng(source: Player, amount: int):
 	if source == null or amount <= 0:
@@ -6250,7 +6275,8 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 			continue
 		if _game_over:
 			break
-		await _deal_damage(p, t, 1, EffectChain.DamageType.PHYSICAL)
+		var damage = await _deal_damage_result(p, t, 1, EffectChain.DamageType.PHYSICAL)
+		if damage.invalidated: return
 		if not action_valid.call():
 			break  # 自己已死（如荆棘反伤），不再继续
 	# 严格超过一半且成功结算后，才允许再次主动发动。
@@ -9618,13 +9644,18 @@ func _halt_countdown():
 	_countdown_on_timeout = Callable()
 	_step_remaining = 0.0
 	_countdown_label.text = ""
+	_countdown_display_state = ""
 
 func _update_countdown_label():
 	# 显示总剩余 = 本步 + 整局储备
 	var total = _step_remaining + _bank_remaining
 	var secs = ceili(total)
+	var low = secs <= 10 or _bank_remaining <= 5.0
+	var display_state = "%d/%s" % [secs, str(low)]
+	if _countdown_display_state == display_state: return
+	_countdown_display_state = display_state
 	_countdown_label.text = "⏳ %d 秒" % secs
-	if secs <= 10 or _bank_remaining <= 5.0:
+	if low:
 		_countdown_label.add_theme_color_override("font_color", Color(1, 0.4, 0.4))
 	else:
 		_countdown_label.add_theme_color_override("font_color", Color(0.95, 0.9, 0.5))
@@ -9632,6 +9663,11 @@ func _update_countdown_label():
 func _update_debug(msg: String, color: Color = Color(1, 1, 1, 0.55)):
 	# 实时日志：显示在提示句上方，5 秒后消失或被新内容替换（可传颜色：拼点结果按胜负着色）
 	_log_label.text = msg
-	_log_label.add_theme_color_override("font_color", color)
+	_set_label_font_color(_log_label, color)
 	_log_remaining = 5.0
 	print("[Game] ", msg)
+
+# 原文字/颜色不变时避免重复发主题通知；不跳过UI状态更新或计时。
+func _set_label_font_color(label: Label, color: Color):
+	if not label.has_theme_color_override("font_color") or label.get_theme_color("font_color") != color:
+		label.add_theme_color_override("font_color", color)
