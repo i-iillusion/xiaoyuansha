@@ -837,6 +837,8 @@ func _run():
 	await active_equip_picker_cases.run(self)
 	var target_confirm_cases = load("res://Test/target_confirm_cases.gd").new()
 	await target_confirm_cases.run(self)
+	var sao_opportunity_cases = load("res://Test/sao_opportunity_cases.gd").new()
+	await sao_opportunity_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

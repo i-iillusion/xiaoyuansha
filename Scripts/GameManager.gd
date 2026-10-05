@@ -96,6 +96,7 @@ var _is_targeting: bool = false
 var _targeting_card_sub: CardData.CardSubType = -1
 var _card_target_generation: int = 0
 var _card_target_confirm_owner: int = -1
+var _sao_opportunity_generation: int = 0
 # 从「已确定的牌」点击进入出牌流程时，保留待支付的原资源；只在使用真正成立时移除。
 var _pending_determined_card: CardBase = null
 
@@ -5451,7 +5452,7 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 	var pending = _pending_determined_card
 	var old_equipment = _equipment_resource_for_pick(equipper, type_key)
 	var action_valid = func():
-		return not _game_over and equipper.is_alive() and not _is_kneeling(equipper) \
+		return not _game_over and players.has(equipper) and equipper.is_alive() and not _is_kneeling(equipper) \
 			and turn_manager.can_play_card() and turn_manager.get_play_actor_idx() == equipper.seat_index \
 			and turn_manager.get_context_revision() == revision \
 			and equipper.hand == snapshot.hand and equipper.determined_cards == snapshot.determined \
@@ -5465,16 +5466,25 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 		var original = owner.get_hidden_equipment_card(type_key)
 		if original == null or not _hidden_declaration_options(original).has(sub):
 			continue
-		var accepted = false
+		var owner_valid = func():
+			return players.has(owner) and owner.is_alive() and owner.general_name == "安普提·斯丢皮得" \
+				and owner.get_hidden_equipment_card(type_key) == original \
+				and not equipment_pool.is_claimed(sub) and _hidden_declaration_options(original).has(sub)
+		var choice_valid = func(): return action_valid.call() and owner_valid.call()
+		var accepted = 0
 		if _sao_reveal_override.is_valid():
-			accepted = await _sao_reveal_override.call()
+			var reply = await _sao_reveal_override.call()
+			accepted = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 		elif owner.seat_index == 0:
-			accepted = await _show_sao_preempt_prompt(equipper, sub, "武器" if type_key == "weapon" else "防具")
+			accepted = await _show_sao_preempt_prompt(equipper, sub, "武器" if type_key == "weapon" else "防具", choice_valid)
 		# AI 暂保守不发动；D决策可接此入口，不能把角色是否可抢先硬编码为座位0。
 		if not action_valid.call():
 			return true
-		if not accepted or not owner.is_alive() or owner.general_name != "安普提·斯丢皮得" \
-				or owner.get_hidden_equipment_card(type_key) != original or equipment_pool.is_claimed(sub):
+		# 原暗置/技能已不存在时不能抢先，原装备动作仍合法则继续；技术关闭不是主动拒绝。
+		if not owner_valid.call():
+			continue
+		if accepted == CHOICE_INVALID: return true
+		if accepted == 0:
 			continue
 		if _reveal_hidden_slot_as(owner, type_key, original, sub):
 			_update_debug("%s 抢先明置【%s】，%s 本次未装备，手牌未消耗" % [owner.player_name, CardData.get_type_name(sub), equipper.player_name])
@@ -5482,9 +5492,10 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 	return false
 
 # 抢先明置确认弹窗（玩家0）
-func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_name: String) -> bool:
-	var idx = await _show_choice_popup("%s 声明将装备【%s】\n你是否将暗置%s明置为【%s】并阻止本次装备？" % [equipper.player_name, CardData.get_type_name(sub), type_name, CardData.get_type_name(sub)], ["明置并阻止", "不阻止"])
-	return idx == 0
+func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_name: String, allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("%s 声明将装备【%s】\n你是否将暗置%s明置为【%s】并阻止本次装备？" % [equipper.player_name, CardData.get_type_name(sub), type_name, CardData.get_type_name(sub)], ["明置并阻止", "不阻止"], allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
+	return 1 if idx == 0 else 0
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）
 func _maybe_ask_reveal() -> void:
@@ -5496,20 +5507,32 @@ func _maybe_ask_reveal() -> void:
 		return
 	if not owner.has_hidden_equip():
 		return
+	_sao_opportunity_generation += 1
+	var generation = _sao_opportunity_generation
+	var revision = turn_manager.get_context_revision()
+	var originals: Dictionary = {}
+	for slot in Player.EQUIP_SLOTS:
+		var original = owner.get_hidden_equipment_card(slot)
+		if original != null: originals[slot] = original
+	var valid = func():
+		return not _game_over and players.has(owner) and owner.is_alive() \
+			and owner.general_name == "安普提·斯丢皮得" and generation == _sao_opportunity_generation \
+			and revision == turn_manager.get_context_revision() \
+			and originals.keys().all(func(slot): return owner.get_hidden_equipment_card(slot) == originals[slot])
+	var accepted = 0
 	if _sao_reveal_override.is_valid():
-		if _sao_reveal_override.call():
-			await _do_sao_reveal(owner)
-		return
-	if owner.seat_index != 0:
-		return
-	var yes = await _show_reveal_opportunity_prompt(owner)
-	if yes:
+		var reply = await _sao_reveal_override.call()
+		accepted = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
+	else:
+		accepted = await _show_reveal_opportunity_prompt(owner, valid)
+	if accepted == 1 and valid.call():
 		await _do_sao_reveal(owner)
 
 # 明置时机确认弹窗（玩家0）
-func _show_reveal_opportunity_prompt(owner: Player) -> bool:
-	var idx = await _show_choice_popup("你暗置了一件装备\n是否现在明置？", ["明置", "暂不明置"])
-	return idx == 0
+func _show_reveal_opportunity_prompt(owner: Player, allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("你暗置了一件装备\n是否现在明置？", ["明置", "暂不明置"], allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
+	return 1 if idx == 0 else 0
 
 # ============================
 #  通用弹窗（按钮选择）
