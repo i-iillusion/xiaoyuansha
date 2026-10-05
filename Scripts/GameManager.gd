@@ -2716,6 +2716,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(attacker) and players.has(target) \
 			and target.is_alive() and not _is_kneeling(target)
 	if not valid.call():
 		return
@@ -2728,7 +2729,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	# 选择牌的区域：使用者是玩家 0 时交互，否则 AI 随机
 	var zone: String
 	if attacker.seat_index == 0:
-		zone = await _show_zone_picker(action, target)
+		zone = await _show_zone_picker(action, target, valid)
 	else:
 		zone = _pick_random_zone(target)
 
@@ -2736,7 +2737,11 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 		_update_debug("取消使用【%s】" % card_name)
 		return
 
-	if not valid.call():
+	if not valid.call() or zone not in ["hand", "equip", "judgment"]:
+		return
+	if (zone == "hand" and target.hand_size() == 0) \
+			or (zone == "equip" and target.get_equip_slots().is_empty()) \
+			or (zone == "judgment" and target.judgment_cards.is_empty()):
 		return
 
 	# 确认后消耗手牌
@@ -2768,7 +2773,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 		"hand":
 			await _steal_hand(attacker, target, is_snatch, card_name)
 		"equip":
-			await _steal_equip(attacker, target, is_snatch, card_name)
+			await _steal_equip(attacker, target, is_snatch, card_name, valid)
 		"judgment":
 			await _steal_judgment(attacker, target, is_snatch, card_name)
 
@@ -2798,7 +2803,7 @@ func _equipment_resource_for_pick(p: Player, slot: String) -> CardBase:
 		return p.get_hidden_equipment_card(slot)
 	return p.get_equipment_card(slot)
 
-func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: String):
+func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: String, allowed: Callable = Callable()):
 	var slots = target.get_equip_slots()
 	if slots.is_empty():
 		_update_debug("目标没有装备牌")
@@ -2807,17 +2812,22 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	var offered_cards := {}
 	for offered_slot in slots:
 		offered_cards[offered_slot] = _equipment_resource_for_pick(target, offered_slot)
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(attacker) and players.has(target) and target.is_alive() \
+			and (not allowed.is_valid() or allowed.call())
 
 	var slot: String
 	if attacker.seat_index == 0:
-		slot = await _show_equip_picker(target, slots)
+		slot = await _show_equip_picker(target, slots, "选择要处理的装备：", valid)
 		if slot == "cancel":
 			_update_debug("取消选择装备，【%s】未生效（牌已消耗）" % card_name)
 			return
 	else:
 		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
-	if _game_over or target.is_dead() or not slots.has(slot) or not target.equipment.has(slot):
+	if not valid.call() or not slots.has(slot) or not target.equipment.has(slot):
 		return
 	var selected_card: CardBase = offered_cards.get(slot, null)
 	if selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card:
@@ -2833,7 +2843,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if is_snatch:
 		attacker.determined_cards.append(equipment_card)
 		if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
-			await _declare_stolen_hidden_equipment(target, attacker, equipment_card)
+			await _declare_stolen_hidden_equipment(target, attacker, equipment_card, valid)
 		_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
 		deck.discard(equipment_card)
@@ -3027,10 +3037,17 @@ func _pick_random_zone(target: Player) -> String:
 	return zones[ai_driver.rng.randi_range(0, zones.size() - 1)]
 
 # 选择牌区域弹窗（手牌/装备牌/判定牌）——锚点布局，窗口缩放自动居中
-func _show_zone_picker(action: String, target: Player) -> String:
+func _show_zone_picker(action: String, target: Player, allowed: Callable = Callable()) -> String:
 	# 测试钩子：跳过 UI 直接返回区域名
 	if _zone_pick_override.is_valid():
 		return _zone_pick_override.call()
+	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(target) and target.is_alive() \
+			and (not allowed.is_valid() or allowed.call())
+	if not valid.call(): return ""
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3063,50 +3080,49 @@ func _show_zone_picker(action: String, target: Player) -> String:
 	hand_btn.text = "手牌（%d 张）" % target.hand_size()
 	hand_btn.custom_minimum_size = Vector2(160, 44)
 	hand_btn.disabled = target.hand_size() <= 0
-	hand_btn.pressed.connect(func():
-		overlay.queue_free()
-		_zone_pick_result.emit("hand")
-	, CONNECT_ONE_SHOT)
+	hand_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
 	hbox.add_child(hand_btn)
 
 	var equip_btn = Button.new()
 	equip_btn.text = "装备牌（%d 件）" % target.get_equip_slots().size()
 	equip_btn.custom_minimum_size = Vector2(160, 44)
 	equip_btn.disabled = target.get_equip_slots().is_empty()
-	equip_btn.pressed.connect(func():
-		overlay.queue_free()
-		_zone_pick_result.emit("equip")
-	, CONNECT_ONE_SHOT)
+	equip_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
 	hbox.add_child(equip_btn)
 
 	var judgment_btn = Button.new()
 	judgment_btn.text = "判定牌（%d 张）" % target.judgment_cards.size()
 	judgment_btn.custom_minimum_size = Vector2(160, 44)
 	judgment_btn.disabled = target.judgment_cards.is_empty()
-	judgment_btn.pressed.connect(func():
-		overlay.queue_free()
-		_zone_pick_result.emit("judgment")
-	, CONNECT_ONE_SHOT)
+	judgment_btn.pressed.connect(func(): answer.submit(2), CONNECT_ONE_SHOT)
 	hbox.add_child(judgment_btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(160, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_zone_pick_result.emit("cancel")
-	, CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(func(): answer.submit(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var result = await _zone_pick_result
-	return result
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID: return ""
+	return ["hand", "equip", "judgment"][result] if result >= 0 and result < 3 else "cancel"
 
 # 选择具体装备弹窗——锚点布局，窗口缩放自动居中
-func _show_equip_picker(target: Player, slots: Array[String], title: String = "选择要处理的装备：") -> String:
+func _show_equip_picker(target: Player, slots: Array[String], title: String = "选择要处理的装备：", allowed: Callable = Callable()) -> String:
 	# 测试钩子：跳过 UI 直接返回槽位
 	if _equip_pick_override.is_valid():
 		return _equip_pick_override.call()
+	var revision = turn_manager.get_context_revision()
+	var candidates = slots.duplicate()
+	var originals: Dictionary = {}
+	for slot in candidates: originals[slot] = _equipment_resource_for_pick(target, slot)
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(target) and target.is_alive() \
+			and (not allowed.is_valid() or allowed.call())
+	if not valid.call(): return ""
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3134,30 +3150,29 @@ func _show_equip_picker(target: Player, slots: Array[String], title: String = "�
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	for slot in slots:
+	for i in candidates.size():
+		var slot = candidates[i]
 		var btn = Button.new()
 		var sub = target.equipment[slot]
 		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(sub)]
 		btn.custom_minimum_size = Vector2(160, 44)
-		btn.pressed.connect(_emit_equip_pick.bind(overlay, slot), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(i), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(160, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_equip_pick_result.emit("cancel")
-	, CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(func(): answer.submit(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var result = await _equip_pick_result
-	return result
-
-func _emit_equip_pick(overlay: ColorRect, slot: String):
-	overlay.queue_free()
-	_equip_pick_result.emit(slot)
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID: return ""
+	if result < 0: return "cancel"
+	if result >= candidates.size(): return ""
+	var chosen: String = candidates[result]
+	if originals[chosen] == null or _equipment_resource_for_pick(target, chosen) != originals[chosen]: return ""
+	return chosen
 
 # 坐骑槽满时：选择要顶掉的马（锚点居中弹窗）
 func _show_mount_replace_picker(p: Player) -> String:
