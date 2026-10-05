@@ -829,6 +829,8 @@ func _run():
 	await soul_blade_prompt_cases.run(self)
 	var soul_blade_discard_cases = load("res://Test/soul_blade_discard_cases.gd").new()
 	await soul_blade_discard_cases.run(self)
+	var soul_blade_rps_cases = load("res://Test/soul_blade_rps_cases.gd").new()
+	await soul_blade_rps_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
