@@ -1811,6 +1811,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 	chain.ignore_target_restrictions = ignore_target_restrictions
 	chain.response_callback = _on_chain_response_check
 	var strike_revision = turn_manager.get_context_revision()
+	var strike_generation = _dying_lifecycle_generation
 	var result = await chain.start()
 	if result == EffectChain.ResponseResult.DODGED:
 		var actual = chain.target_player
@@ -1820,16 +1821,17 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 			var original_weapon = p.get_equipment_card("weapon")
 			var choice_valid = func():
 				return not _game_over and strike_revision == turn_manager.get_context_revision() \
+					and strike_generation == _dying_lifecycle_generation \
 					and players.has(p) and p.is_alive() and players.has(actual) and actual.is_alive() \
 					and chain.target_player == actual and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE \
 					and p.get_equipment_card("weapon") == original_weapon and p.mount_count() > 0 \
 					and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 			if not choice_valid.call():
-				return false
+				return CHOICE_INVALID
 			var activate = 1 if p.seat_index != 0 else await _ask_guanshi(actual.player_name, choice_valid)
 			# 原杀已被闪抵消；贯石未有效发动时没有可继续的余伤。
 			if activate == CHOICE_INVALID or not choice_valid.call():
-				return false
+				return CHOICE_INVALID
 			if activate == 1:
 				var slots = p.get_mount_slots()
 				var originals: Dictionary = {}
@@ -1838,7 +1840,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				var slot: String = await _show_mount_discard_picker(p, choice_valid) if p.seat_index == 0 else slots.pick_random()
 				if not choice_valid.call() or not originals.has(slot) or originals[slot] == null \
 						or _guanshi_mount_card(p, slot) != originals[slot]:
-					return false
+					return CHOICE_INVALID
 				var discarded_mount = p.remove_equipment(slot)
 				if discarded_mount != null:
 					deck.discard(discarded_mount)
@@ -4709,19 +4711,24 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
 		_trigger_pofeng(subject, data["damage"])
 		var post_revision = turn_manager.get_context_revision()
-		await _try_gou_lian_claw(subject, chain.target_player)
-		if _game_over or post_revision != turn_manager.get_context_revision():
-			chain.is_cancelled = true
+		var post_generation = _dying_lifecycle_generation
+		var claw_result = await _try_gou_lian_claw(subject, chain.target_player)
+		if claw_result == CHOICE_INVALID or post_revision != turn_manager.get_context_revision() \
+				or post_generation != _dying_lifecycle_generation:
+			chain.continuation_invalid = true
 			return true
+		if _game_over: return true
 		record.refresh_source()
 		if subject.is_dead() or not chain.target_player.is_alive():
 			return false
 		var blood_result = await _try_bloodthirsty(subject, chain.target_player, data["damage"])
-		if _game_over or post_revision != turn_manager.get_context_revision():
-			chain.is_cancelled = true
+		if blood_result == CHOICE_INVALID or post_revision != turn_manager.get_context_revision() \
+				or post_generation != _dying_lifecycle_generation:
+			chain.continuation_invalid = true
 			return true
+		if _game_over: return true
 		record.refresh_source()
-		if blood_result == CHOICE_INVALID or subject.is_dead() or not chain.target_player.is_alive():
+		if subject.is_dead() or not chain.target_player.is_alive():
 			return false
 		# EQ-06：首次达到阈值的整次伤害只激活，从下一次伤害才按点发动。
 		var soul_original = subject.get_equipment_card("weapon")
@@ -4743,26 +4750,42 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			return true
 
 	if event_name == "after_take_damage" and subject != null and subject.is_alive():
-		await _try_thorn_counter(subject, source, data["damage"])
+		if await _try_thorn_counter(subject, source, data["damage"]) == CHOICE_INVALID:
+			chain.continuation_invalid = true
+			return true
+		if _game_over: return true
 		if await _try_kaiwen_receive(subject, source, data["damage"]) == CHOICE_INVALID:
 			chain.continuation_invalid = true
 			return true
 	return false
-func _try_thorn_counter(victim: Player, source: Player, amount: int):
+func _try_thorn_counter(victim: Player, source: Player, amount: int) -> int:
 	if source == null or victim == null or source == victim:
-		return
+		return 0
 	if not victim.is_alive() or not source.is_alive():
-		return
+		return 0
 	if victim.get_armor() != CardData.CardSubType.THORN_ARMOR:
-		return
+		return 0
+	var original = victim.get_equipment_card("armor")
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var valid = func():
+		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
+			and players.has(victim) and players.has(source) and victim.is_alive() and source.is_alive() \
+			and original != null and victim.get_equipment_card("armor") == original
 	for i in amount:
-		if not victim.is_alive() or not source.is_alive():
-			break
-		var r = await _do_ping_dian_once(victim, source)
+		if not valid.call(): return CHOICE_INVALID
+		# 手册3.2默认平局续猜；装傻单次平局例外不适用于荆棘。
+		var r = await _do_ping_dian(victim, source, valid)
+		if r == RPS_INVALID or not valid.call(): return CHOICE_INVALID
 		if r == RPS_WIN:
 			_update_debug("%s 的【荆棘战甲】拼点获胜，对 %s 造成 1 点伤害！" % [victim.player_name, source.player_name])
-			await _deal_damage(victim, source, 1, EffectChain.DamageType.PHYSICAL)
+			var counter = await _deal_damage_result(victim, source, 1, EffectChain.DamageType.PHYSICAL)
+			if counter.invalidated: return CHOICE_INVALID
+			# 正常反伤终局或来源最终死亡不属于技术失效，也不再向死人拼点。
+			if _game_over or not source.is_alive() or not victim.is_alive(): return 0
 	_sync_all_ui()
+	return 0
 
 # ============================
 #  【你个壊货】（凯文·罗本）
@@ -5019,27 +5042,29 @@ func _show_fate_blade_prompt(victim: Player, allowed: Callable = Callable()) -> 
 
 # 对一名角色造成伤害后，可获得其装备区里的一张坐骑牌（进入自己「已确定的牌」区）
 # 在普通伤害后触发；目标仍不能行动或与自己相同（舍己为人自转移）不触发。
-func _try_gou_lian_claw(source: Player, victim: Player):
+func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 	if source == null or victim == null or source == victim:
-		return
+		return 0
 	if not source.is_alive() or not victim.is_alive():
-		return
+		return 0
 	if source.get_weapon() != CardData.CardSubType.GOU_LIAN_CLAW:
-		return
+		return 0
 	# 【青釭盾】：目标无视使用效果者的武器
 	if victim.get_armor() == CardData.CardSubType.QINGGANG_SHIELD:
 		_update_debug("%s 的【青釭盾】无视了 %s 的【勾镰爪】！" % [victim.player_name, source.player_name])
-		return
+		return 0
 	var slots = victim.get_mount_slots()
 	if slots.is_empty():
-		return
+		return 0
 	var original_weapon = source.get_equipment_card("weapon")
 	var originals: Dictionary = {}
 	for candidate in slots:
 		originals[candidate] = _equipment_resource_for_pick(victim, candidate)
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
 			and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
 			and source.get_weapon() == CardData.CardSubType.GOU_LIAN_CLAW \
 			and source.get_equipment_card("weapon") == original_weapon \
@@ -5049,34 +5074,38 @@ func _try_gou_lian_claw(source: Player, victim: Player):
 	if source.seat_index == 0:
 		slot = await _ask_gou_lian_slot(victim, slots, valid)
 		if slot == "":
-			return
+			return CHOICE_INVALID
 		if slot == "cancel":
 			_update_debug("%s 放弃发动【勾镰爪】" % source.player_name)
-			return
+			return 0
 	else:
 		# AI 默认发动，随机选一匹
 		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
 	if not valid.call() or not originals.has(slot) or originals[slot] == null \
 			or _equipment_resource_for_pick(victim, slot) != originals[slot]:
-		return
+		return CHOICE_INVALID
 	var sub = victim.equipment[slot]
 	var card = victim.remove_equipment(slot)
 	if card == null:
-		return
+		return CHOICE_INVALID
 	source.determined_cards.append(card)
 	if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
 		# 已完成获得，再由原持有者声明；失效不撤销已经发生的移动。
 		var declaration_valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
+				and generation == _dying_lifecycle_generation \
 				and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
 				and source.determined_cards.has(card) and card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
 		await _declare_stolen_hidden_equipment(victim, source, card, declaration_valid)
+		if not valid.call() or card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+			return CHOICE_INVALID
 		sub = card.sub_type
 	_update_debug("%s 发动【勾镰爪】：获得 %s 的坐骑【%s】（已确定的牌 %d 张）" % [
 		source.player_name, victim.player_name, CardData.get_type_name(sub), source.determined_cards.size()
 	])
 	_sync_all_ui()
+	return 0
 
 # 玩家0选择坐骑：独立答复；cancel是主动放弃，空串是失效，沿用无计时。
 func _ask_gou_lian_slot(victim: Player, slots: Array[String], allowed: Callable = Callable()) -> String:
@@ -7570,8 +7599,10 @@ func _try_bloodthirsty(source: Player, victim: Player, amount: int) -> int:
 		return 0
 	var original = source.get_equipment_card("weapon")
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
 			and players.has(source) and players.has(victim) \
 			and source.is_alive() and victim.is_alive() and original != null \
 			and source.get_equipment_card("weapon") == original \
