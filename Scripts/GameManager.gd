@@ -6711,8 +6711,8 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 	var pending: Array = []
 	_lanzhonghou_pending = pending
 	while true:
-		var zone = await _ask_lanzhonghou_zone(a, b, pending, max_pick)
-		if not action_valid.call():
+		var zone = await _ask_lanzhonghou_zone(a, b, pending, max_pick, action_valid)
+		if zone == "invalid" or not action_valid.call():
 			pending.clear()
 			return
 		if zone == "cancel":
@@ -6750,8 +6750,8 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 				if slots_a.is_empty() or slots_b.is_empty() or not _lanzhonghou_has_swappable_mount(a, pending, true) and not _lanzhonghou_has_swappable_mount(b, pending, false):
 					continue
 				var pair_no = _lanzhonghou_count(pending, "mount") + 1
-				var slot_a = await _ask_lanzhonghou_mount_slot(a, slots_a, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [a.player_name, pair_no])
-				if not action_valid.call():
+				var slot_a = await _ask_lanzhonghou_mount_slot(a, slots_a, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [a.player_name, pair_no], action_valid)
+				if slot_a == "invalid" or not action_valid.call():
 					pending.clear()
 					return
 				if slot_a == "cancel" or not slots_a.has(slot_a):
@@ -6762,8 +6762,12 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 							slots_b.erase(s)
 				if slots_b.is_empty():
 					continue
-				var slot_b = await _ask_lanzhonghou_mount_slot(b, slots_b, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [b.player_name, pair_no])
-				if not action_valid.call():
+				var original_a = _equipment_resource_for_pick(a, slot_a)
+				var type_a = a.equipment.get(slot_a, -1)
+				var pair_valid = func():
+					return action_valid.call() and _equipment_resource_for_pick(a, slot_a) == original_a and a.equipment.get(slot_a, -1) == type_a
+				var slot_b = await _ask_lanzhonghou_mount_slot(b, slots_b, "选择 %s 要交换的坐骑（第 %d 对坐骑）：" % [b.player_name, pair_no], pair_valid)
+				if slot_b == "invalid" or not pair_valid.call():
 					pending.clear()
 					return
 				if slot_b == "cancel" or not slots_b.has(slot_b):
@@ -6789,7 +6793,10 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 			return
 	# 多次选择期间牌可能离手，必须一次完整支付才开始交换。
 	var valid = func():
-		return action_valid.call() and not _lanzhonghou_used
+		if not action_valid.call() or _lanzhonghou_used: return false
+		for entry in pending:
+			if _equipment_resource_for_pick(entry.a, entry.slot_a) != entry.card_a or _equipment_resource_for_pick(entry.b, entry.slot_b) != entry.card_b: return false
+		return true
 	if not await _select_hand_discard(p, x, false, valid):
 		pending.clear()
 		return
@@ -6854,9 +6861,25 @@ func _lanzhonghou_has_swappable_mount(p: Player, picked: Array = [], is_a: bool 
 	return false
 
 # 区域选择弹窗：武器/防具/坐骑（各最多一次）+ 完成交换 + 取消（锚点居中）
-func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -> String:
+func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int, allowed: Callable = Callable()) -> String:
+	var originals: Array = []
+	for owner in [a, b]:
+		var slots: Dictionary = {}
+		for slot in Player.EQUIP_SLOTS:
+			slots[slot] = [owner.equipment.get(slot, -1), _equipment_resource_for_pick(owner, slot)]
+		originals.append({"owner": owner, "slots": slots})
+	var valid = func():
+		if allowed.is_valid() and not allowed.call(): return false
+		for entry in originals:
+			if not players.has(entry.owner) or not entry.owner.is_alive() or _is_kneeling(entry.owner): return false
+			for slot in entry.slots:
+				if entry.owner.equipment.get(slot, -1) != entry.slots[slot][0] or _equipment_resource_for_pick(entry.owner, slot) != entry.slots[slot][1]: return false
+		return true
+	if not valid.call(): return "invalid"
 	if _lanzhonghou_zone_override.is_valid():
-		return await _lanzhonghou_zone_override.call()
+		var reply = await _lanzhonghou_zone_override.call()
+		return reply if valid.call() else "invalid"
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -6891,8 +6914,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	weapon_btn.disabled = _lanzhonghou_zone_picked(picked, "weapon") or picked.size() >= max_pick \
 			or (not a.equipment.has("weapon") and not b.equipment.has("weapon"))
 	weapon_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_zone_result.emit("weapon")
+		if not weapon_btn.disabled: answer.submit(0)
 	, CONNECT_ONE_SHOT)
 	hbox.add_child(weapon_btn)
 
@@ -6902,8 +6924,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	armor_btn.disabled = _lanzhonghou_zone_picked(picked, "armor") or picked.size() >= max_pick \
 			or (not a.equipment.has("armor") and not b.equipment.has("armor"))
 	armor_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_zone_result.emit("armor")
+		if not armor_btn.disabled: answer.submit(1)
 	, CONNECT_ONE_SHOT)
 	hbox.add_child(armor_btn)
 
@@ -6913,8 +6934,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	mount_btn.disabled = _lanzhonghou_count(picked, "mount") >= 4 or picked.size() >= max_pick \
 			or (not _lanzhonghou_has_swappable_mount(a, picked, true) and not _lanzhonghou_has_swappable_mount(b, picked, false))
 	mount_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_zone_result.emit("mount")
+		if not mount_btn.disabled: answer.submit(2)
 	, CONNECT_ONE_SHOT)
 	hbox.add_child(mount_btn)
 
@@ -6923,8 +6943,7 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	done_btn.custom_minimum_size = Vector2(180, 44)
 	done_btn.disabled = picked.is_empty()
 	done_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_zone_result.emit("done")
+		if not done_btn.disabled: answer.submit(3)
 	, CONNECT_ONE_SHOT)
 	hbox.add_child(done_btn)
 
@@ -6933,18 +6952,32 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int) -
 	cancel_btn.custom_minimum_size = Vector2(120, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
 	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_zone_result.emit("cancel")
+		answer.submit(-1)
 	, CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var r = await _lanzhonghou_zone_result
-	return r
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID or not valid.call(): return "invalid"
+	return ["weapon", "armor", "mount", "done"][result] if result >= 0 and result < 4 else "cancel"
 
 # 坐骑槽选择弹窗：返回槽位或 "cancel"（锚点居中；可选空槽）
-func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: String) -> String:
+func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: String, allowed: Callable = Callable()) -> String:
+	var options: Array[String] = []
+	var originals: Dictionary = {}
+	for slot in slots:
+		if Player.MOUNT_SLOTS.has(slot) and not options.has(slot):
+			options.append(slot)
+			originals[slot] = [target.equipment.get(slot, -1), _equipment_resource_for_pick(target, slot)]
+	var valid = func():
+		if not players.has(target) or not target.is_alive() or _is_kneeling(target) or (allowed.is_valid() and not allowed.call()): return false
+		for slot in originals:
+			if target.equipment.get(slot, -1) != originals[slot][0] or _equipment_resource_for_pick(target, slot) != originals[slot][1]: return false
+		return true
+	if options.is_empty() or not valid.call(): return "invalid"
 	if _lanzhonghou_mount_override.is_valid():
-		return _lanzhonghou_mount_override.call(target, slots)
+		var reply = await _lanzhonghou_mount_override.call(target, options)
+		return reply if valid.call() and (reply == "cancel" or options.has(reply)) else "invalid"
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -6973,11 +7006,12 @@ func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: St
 	hbox.add_theme_constant_override("separation", 14)
 	vbox.add_child(hbox)
 
-	for slot in slots:
+	for index in options.size():
+		var slot = options[index]
 		var btn = Button.new()
 		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(target.equipment[slot]) if target.equipment.has(slot) else "空槽"]
 		btn.custom_minimum_size = Vector2(140, 44)
-		btn.pressed.connect(_emit_lanzhonghou_mount.bind(overlay, slot), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(index), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
@@ -6985,17 +7019,13 @@ func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: St
 	cancel_btn.custom_minimum_size = Vector2(140, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
 	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_lanzhonghou_mount_result.emit("cancel")
+		answer.submit(-1)
 	, CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var r = await _lanzhonghou_mount_result
-	return r
-
-func _emit_lanzhonghou_mount(overlay: ColorRect, slot: String):
-	overlay.queue_free()
-	_lanzhonghou_mount_result.emit(slot)
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID or not valid.call(): return "invalid"
+	return options[result] if result >= 0 and result < options.size() else "cancel"
 
 # 交换两名角色指定槽位的装备（武器/防具同槽位；坐骑可跨槽位）
 # 一侧空槽时移动原牌；暗置与明置武器／防具可先互换原牌，再由原持有者声明暗置牌。

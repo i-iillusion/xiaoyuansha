@@ -859,6 +859,8 @@ func _run():
 	await play_skill_selection_generation_cases.run(self)
 	var play_skill_entry_guard_cases = load("res://Test/play_skill_entry_guard_cases.gd").new()
 	await play_skill_entry_guard_cases.run(self)
+	var exchange_prompt_lifecycle_cases = load("res://Test/exchange_prompt_lifecycle_cases.gd").new()
+	await exchange_prompt_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
