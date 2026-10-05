@@ -196,6 +196,8 @@ var _gou_lian_slot_override: Callable = Callable()
 
 # 【下跪】确认弹窗测试钩子（正常游戏不设置）：返回 true = 发动/解除，false = 取消
 var _kneel_override: Callable = Callable()
+var _kneel_execution_generation: int = 0
+var _kneel_execution_owner: int = -1
 
 # 猜拳拼点测试钩子（正常游戏不设置）：返回指定玩家出的拳（0=石头 1=剪刀 2=布）
 var _rps_override: Callable = Callable()
@@ -8464,6 +8466,8 @@ func reset_game_over_state():
 	_gay_execution_owner = -1
 	_lanzhonghou_execution_generation += 1
 	_lanzhonghou_execution_owner = -1
+	_kneel_execution_generation += 1
+	_kneel_execution_owner = -1
 	_game_over = false
 	_clear_pending_determined_card()
 	_dead_processed.clear()
@@ -8981,12 +8985,34 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 		return
 	if skill_key != "下跪":
 		return
+	await _on_kneel_skill_clicked(owner_player)
+
+func _on_kneel_skill_clicked(owner_player: Player) -> void:
 	var p = players[0]
 	if owner_player != p or p.seat_index != 0:
 		_update_debug("只能对自己使用【下跪】")
 		return
 	if p.general_name != "布鲁斯·萨维奇":
 		return
+	if _game_over or p.is_dead() or _kneel_execution_owner != -1:
+		return
+	_kneel_execution_generation += 1
+	var owner = _kneel_execution_generation
+	_kneel_execution_owner = owner
+	await _execute_kneel_pending(p, owner)
+	if _kneel_execution_owner == owner:
+		_kneel_execution_owner = -1
+
+func _execute_kneel_pending(p: Player, owner: int) -> void:
+	var revision = turn_manager.get_context_revision()
+	var original_kneeling = p.kneeling
+	var original_used = p.kneel_used
+	var valid = func():
+		return _kneel_execution_owner == owner and _kneel_execution_generation == owner \
+			and not _game_over and players.has(p) and players[0] == p and not p.is_dead() \
+			and p.general_name == "布鲁斯·萨维奇" and revision == turn_manager.get_context_revision() \
+			and p.kneeling == original_kneeling and p.kneel_used == original_used \
+			and (original_kneeling or _kneel_conditions_met(p))
 
 	# 限定技已使用（当前未下跪）→ 技能灰色，点击提示
 	if p.kneel_used and not p.kneeling:
@@ -8995,8 +9021,8 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 
 	# 下跪状态中 → 询问是否解除（任意时刻）
 	if p.kneeling:
-		var cancel = await _show_kneel_confirm("是否解除【下跪】状态？", "解除", "保持")
-		if cancel:
+		var cancel = await _show_kneel_confirm("是否解除【下跪】状态？", "解除", "保持", valid)
+		if cancel == 1 and valid.call():
 			p.kneeling = false
 			_update_debug("%s 解除了【下跪】状态" % p.player_name)
 			_sync_all_ui()
@@ -9012,18 +9038,22 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 		else:
 			_show_toast("【下跪】发动条件：已经受伤（体力小于上限）")
 		return
-	var ok = await _show_kneel_confirm("是否发动【下跪】？\n（下跪状态：不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）", "发动", "取消")
-	if ok:
+	var ok = await _show_kneel_confirm("是否发动【下跪】？\n（下跪状态：不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）", "发动", "取消", valid)
+	if ok == 1 and valid.call():
 		p.kneeling = true
 		p.kneel_used = true
 		_update_debug("%s 发动【下跪】！进入下跪状态（不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）" % p.player_name)
 		_sync_all_ui()
 		_refresh_detail_popup()
 
-# 【下跪】确认弹窗（发动 / 解除）：返回 true = 确认
-func _show_kneel_confirm(question: String, yes_text: String, no_text: String) -> bool:
+# 【下跪】确认弹窗（发动 / 解除）：1=确认，0=主动拒绝，-2=技术失效。
+func _show_kneel_confirm(question: String, yes_text: String, no_text: String, allowed: Callable = Callable()) -> int:
+	if _game_over or (allowed.is_valid() and not allowed.call()): return CHOICE_INVALID
 	if _kneel_override.is_valid():
-		return _kneel_override.call()
+		var reply = await _kneel_override.call()
+		if (allowed.is_valid() and not allowed.call()) or (typeof(reply) == TYPE_INT and reply == CHOICE_INVALID): return CHOICE_INVALID
+		return 1 if reply else 0
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -9063,20 +9093,14 @@ func _show_kneel_confirm(question: String, yes_text: String, no_text: String) ->
 	no_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(no_btn)
 
-	var result = [false]
 	yes_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_kneel_cfm_result.emit(true)
+		answer.submit(1)
 	, CONNECT_ONE_SHOT)
 	no_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_kneel_cfm_result.emit(false)
+		answer.submit(0)
 	, CONNECT_ONE_SHOT)
 
-	var res = await _kneel_cfm_result
-	return res
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 刷新详情弹窗（下跪发动/解除后技能颜色、状态区更新）
 func _refresh_detail_popup():
