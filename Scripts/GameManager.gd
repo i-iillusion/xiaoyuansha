@@ -5847,21 +5847,26 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 		# 来源是自己（舍己为人自转移等）：无需弃牌，伤害照常
 		return PaixiongOutcome.NOT_USED
 	var action_revision = turn_manager.get_context_revision()
+	var valid = func():
+		return not _game_over and action_revision == turn_manager.get_context_revision() \
+			and players.has(victim) and victim.is_alive() and victim.general_name == "史蒂芬·彼特先斯" \
+			and players.has(source) and source.is_alive()
+	var use = 0
 	if _paixiong_override.is_valid():
-		if not _paixiong_override.call():
-			return PaixiongOutcome.NOT_USED
+		var reply = await _paixiong_override.call()
+		use = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
 		if victim.seat_index != 0:
 			return PaixiongOutcome.NOT_USED  # AI 暂不发动
-		var use = await _show_paixiong_prompt(source.player_name)
-		if _game_over or not victim.is_alive():
-			return PaixiongOutcome.INVALIDATED
-		if source.is_dead():
-			return PaixiongOutcome.NOT_USED
-		if action_revision != turn_manager.get_context_revision():
-			return PaixiongOutcome.INVALIDATED
-		if not use:
-			return PaixiongOutcome.NOT_USED
+		use = await _show_paixiong_prompt(source.player_name, valid)
+	if _game_over or not players.has(victim) or not victim.is_alive():
+		return PaixiongOutcome.INVALIDATED
+	if source.is_dead():
+		return PaixiongOutcome.NOT_USED # 来源最终死亡，已使用杀余伤无源继续。
+	if use == CHOICE_INVALID or not valid.call():
+		return PaixiongOutcome.INVALIDATED
+	if use == 0:
+		return PaixiongOutcome.NOT_USED
 	# 发动：来源可选择弃一张手牌使整次伤害照常结算，也可拒绝并防止整次伤害。
 	while source.hand_size() > 0:
 		if _game_over or not victim.is_alive():
@@ -5870,8 +5875,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 			return PaixiongOutcome.NOT_USED
 		if action_revision != turn_manager.get_context_revision():
 			return PaixiongOutcome.INVALIDATED
-		var result = await _select_hand_discard_result(source, 1, false, func():
-			return victim.is_alive() and source.is_alive())
+		var result = await _select_hand_discard_result(source, 1, false, valid)
 		if _game_over or not victim.is_alive():
 			return PaixiongOutcome.INVALIDATED
 		if result == HandDiscardOutcome.PAID:
@@ -5903,9 +5907,10 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 	return PaixiongOutcome.PREVENTED
 
 # 玩家0 的【拍胸脯】发动确认弹窗
-func _show_paixiong_prompt(source_name: String) -> bool:
-	var idx = await _show_choice_popup("你将受到伤害！\n是否发动【拍胸脯】？（发动后 %s 需弃置一张手牌才能造成伤害）" % source_name, ["发动【拍胸脯】", "不发动"])
-	return idx == 0
+func _show_paixiong_prompt(source_name: String, allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("你将受到伤害！\n是否发动【拍胸脯】？（发动后 %s 需弃置一张手牌才能造成伤害）" % source_name, ["发动【拍胸脯】", "不发动"], allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
+	return 1 if idx == 0 else 0
 
 # ============================
 #  【装逼】史蒂芬·彼特先斯：出牌阶段选任意数量其他角色，各弃一张手牌后依次拼点
