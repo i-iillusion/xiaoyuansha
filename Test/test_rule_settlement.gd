@@ -841,6 +841,8 @@ func _run():
 	await sao_opportunity_cases.run(self)
 	var paixiong_prompt_cases = load("res://Test/paixiong_prompt_cases.gd").new()
 	await paixiong_prompt_cases.run(self)
+	var zhuangbi_again_cases = load("res://Test/zhuangbi_again_cases.gd").new()
+	await zhuangbi_again_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()

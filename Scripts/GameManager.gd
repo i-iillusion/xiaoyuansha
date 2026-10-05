@@ -6123,14 +6123,18 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		await _deal_damage(p, t, 1, EffectChain.DamageType.PHYSICAL)
 		if not p.is_alive():
 			break  # 自己已死（如荆棘反伤），不再继续
-	# 赢了一半及以上 → 可以再次使用此技能
-	if _paid_skill_rps_valid(p, null, revision):
-		var again = false
+	# 严格超过一半且成功结算后，才允许再次主动发动。
+	var can_repeat = func():
+		return _paid_skill_rps_valid(p, null, revision) and players.has(p) \
+			and p.general_name == "史蒂芬·彼特先斯" and not _zhuangbi_blocked_this_phase
+	if can_repeat.call():
+		var again = 0
 		if _zhuangbi_again_override.is_valid():
-			again = _zhuangbi_again_override.call()
+			var reply = await _zhuangbi_again_override.call()
+			again = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 		else:
-			again = await _show_zhuangbi_again_prompt()
-		if again and _paid_skill_rps_valid(p, null, revision):
+			again = await _show_zhuangbi_again_prompt(can_repeat)
+		if again == 1 and can_repeat.call():
 			_start_zhuangbi_mode()  # 重新进入选择模式
 
 # 装逼输局：立即进入弃牌阶段（清理选择状态）
@@ -6145,9 +6149,10 @@ func _enter_discard_from_zhuangbi():
 	turn_manager.advance_phase()  # PLAY → DISCARD
 
 # 赢局后询问是否再次使用装逼（玩家0弹窗）
-func _show_zhuangbi_again_prompt() -> bool:
-	var idx = await _show_choice_popup("你赢了一半及以上！\n是否再次使用【装逼】？", ["再次装逼", "就此收手"])
-	return idx == 0
+func _show_zhuangbi_again_prompt(allowed: Callable = Callable()) -> int:
+	var idx = await _show_choice_popup("装逼成功！\n是否再次使用【装逼】？", ["再次装逼", "就此收手"], allowed)
+	if idx == CHOICE_INVALID: return CHOICE_INVALID
+	return 1 if idx == 0 else 0
 
 # ============================
 #  【校园霸主】杰基·斯特朗：出牌阶段选一名有手牌的角色，各弃一张手牌后拼点，赢者对输者造成 1 点伤害
