@@ -4651,11 +4651,15 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			if await _try_soul_blade(subject, chain.target_player) == CHOICE_INVALID:
 				chain.continuation_invalid = true
 				return true
-		await _try_kaiwen_deal(subject, chain.target_player, data["damage"])
+		if await _try_kaiwen_deal(subject, chain.target_player, data["damage"]) == CHOICE_INVALID:
+			chain.continuation_invalid = true
+			return true
 
 	if event_name == "after_take_damage" and subject != null and subject.is_alive():
 		await _try_thorn_counter(subject, source, data["damage"])
-		await _try_kaiwen_receive(subject, source, data["damage"])
+		if await _try_kaiwen_receive(subject, source, data["damage"]) == CHOICE_INVALID:
+			chain.continuation_invalid = true
+			return true
 	return false
 func _try_thorn_counter(victim: Player, source: Player, amount: int):
 	if source == null or victim == null or source == victim:
@@ -4678,58 +4682,61 @@ func _try_thorn_counter(victim: Player, source: Player, amount: int):
 # ============================
 
 # 受到伤害时：victim 是凯文，与伤害来源 source 拼点，赢摸两张
-func _try_kaiwen_receive(victim: Player, source: Player, amount: int):
-	await _try_kaiwen_ping(victim, source, amount, true)
+func _try_kaiwen_receive(victim: Player, source: Player, amount: int) -> int:
+	return await _try_kaiwen_ping(victim, source, amount, true)
 
 # 造成伤害时：source 是凯文，与受伤目标 victim 拼点，赢摸两张
-func _try_kaiwen_deal(source: Player, victim: Player, amount: int):
-	await _try_kaiwen_ping(victim, source, amount, false)
+func _try_kaiwen_deal(source: Player, victim: Player, amount: int) -> int:
+	return await _try_kaiwen_ping(victim, source, amount, false)
 
 # 核心：可选发动（玩家0弹窗 / AI 默认发动），按伤害点数逐点触发，赢摸两张
 # is_receive = true 表示凯文是受伤方（victim），false 表示凯文是伤害来源（source）
-func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: bool):
+func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: bool) -> int:
 	var kaiwen: Player = victim if is_receive else source
 	var opponent: Player = source if is_receive else victim
 	if kaiwen == null or opponent == null or kaiwen == opponent:
-		return
+		return 0
 	if kaiwen.general_name != "凯文·罗本":
-		return
+		return 0
 	if not kaiwen.is_alive() or not opponent.is_alive():
-		return
+		return 0
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and players.has(kaiwen) and players.has(opponent) \
 			and kaiwen.is_alive() and opponent.is_alive() and kaiwen.general_name == "凯文·罗本"
 	for i in amount:
 		if not valid.call():
-			break
+			return CHOICE_INVALID
 		# 伤害效果先展示（日志 + 体力变化），稍作停顿再询问是否发动
 		if not _kaiwen_override.is_valid():
 			await get_tree().create_timer(0.8).timeout
 		if not valid.call():
-			break
-		var use = await _ask_kaiwen(kaiwen, opponent, is_receive)
-		if not valid.call():
-			break
-		if not use:
+			return CHOICE_INVALID
+		var use = await _ask_kaiwen(kaiwen, opponent, is_receive, valid)
+		if use == CHOICE_INVALID or not valid.call():
+			return CHOICE_INVALID
+		if use == 0:
 			continue
 		# 拼点结果（出拳 + 胜负，按胜负着色）由 _do_ping_dian_once 输出，这里不再补日志覆盖它
 		var r = await _do_ping_dian(kaiwen, opponent, valid)
 		if r == RPS_INVALID or not valid.call():
-			break
+			return CHOICE_INVALID
 		if r == RPS_WIN:
 			_draw_blank_cards(kaiwen, 2)
 	_sync_all_ui()
+	return 0
 
 # 询问是否发动【你个壊货】：玩家0弹窗，AI 默认发动（摸牌收益）
-func _ask_kaiwen(kaiwen: Player, opponent: Player, is_receive: bool) -> bool:
+func _ask_kaiwen(kaiwen: Player, opponent: Player, is_receive: bool, allowed: Callable = Callable()) -> int:
 	if _kaiwen_override.is_valid():
-		return _kaiwen_override.call()
+		var reply = await _kaiwen_override.call()
+		return CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	if kaiwen.seat_index == 0:
-		return await _show_kaiwen_prompt(opponent.player_name, is_receive)
-	return true
+		return await _show_kaiwen_prompt(opponent.player_name, is_receive, allowed)
+	return 1
 
-func _show_kaiwen_prompt(opponent_name: String, is_receive: bool) -> bool:
+func _show_kaiwen_prompt(opponent_name: String, is_receive: bool, allowed: Callable = Callable()) -> int:
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -4771,22 +4778,16 @@ func _show_kaiwen_prompt(opponent_name: String, is_receive: bool) -> bool:
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var result = [false]
+	var answer = ChoicePromptAnswer.new()
 	use_btn.pressed.connect(func():
-		result[0] = true
-		overlay.queue_free()
-		_response_ready.emit()
+		answer.submit(1)
 	, CONNECT_ONE_SHOT)
 	skip_btn.pressed.connect(func():
-		result[0] = false
-		overlay.queue_free()
-		_response_ready.emit()
+		answer.submit(0)
 	, CONNECT_ONE_SHOT)
 
-	_start_response_countdown(overlay, players[0].player_name, func(): _response_ready.emit())
-	await _response_ready
-	_stop_countdown()
-	return result[0]
+	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	return CHOICE_INVALID if result == CHOICE_INVALID else (1 if result == 1 else 0)
 
 # 所有伤害统一走这里：
 #   ① 询问【舍己为人】（其他玩家可代替受伤者承受等量同属性伤害）
