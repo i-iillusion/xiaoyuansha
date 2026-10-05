@@ -2208,9 +2208,12 @@ func play_card(sub: CardData.CardSubType):
 				var old_is_hidden = old_weapon == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有武器：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
 				if p.seat_index == 0 and not old_is_hidden:
-					var ok = await _show_weapon_replace_confirm(old_weapon, sub)
-					if not ok:
-						_update_debug("取消替换武器，手牌未消耗")
+					var valid = func():
+						return _can_use_play_skill(p) and weapon_context == turn_manager.get_context_revision() \
+							and p.get_equipment_card("weapon") == old_weapon_card and p.get_weapon() == old_weapon
+					var ok = await _show_weapon_replace_confirm(old_weapon, sub, valid)
+					if ok != 1:
+						_update_debug("替换武器确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换武器，手牌未消耗")
 						return
 				if not _replace_play_equipment_if_current(p, "weapon", sub, old_weapon, old_weapon_card, weapon_context):
 					_update_debug("武器替换已失效或所选牌不在手中，未替换")
@@ -2256,9 +2259,12 @@ func play_card(sub: CardData.CardSubType):
 				var old_is_hidden = old_armor == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有防具：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
 				if p.seat_index == 0 and not old_is_hidden:
-					var ok = await _show_weapon_replace_confirm(old_armor, sub)
-					if not ok:
-						_update_debug("取消替换防具，手牌未消耗")
+					var valid = func():
+						return _can_use_play_skill(p) and armor_context == turn_manager.get_context_revision() \
+							and p.get_equipment_card("armor") == old_armor_card and p.get_armor() == old_armor
+					var ok = await _show_weapon_replace_confirm(old_armor, sub, valid)
+					if ok != 1:
+						_update_debug("替换防具确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换防具，手牌未消耗")
 						return
 				if not _replace_play_equipment_if_current(p, "armor", sub, old_armor, old_armor_card, armor_context):
 					_update_debug("防具替换已失效或所选牌不在手中，未替换")
@@ -2312,7 +2318,8 @@ func play_card(sub: CardData.CardSubType):
 				mount_snapshot[slot] = {"sub": p.equipment[slot], "card": p.get_equipment_card(slot)}
 			var play_context = turn_manager.get_context_revision()
 			if p.seat_index == 0:
-				target_slot = await _show_mount_replace_picker(p)
+				var valid = func(): return _can_use_play_skill(p) and play_context == turn_manager.get_context_revision()
+				target_slot = await _show_mount_replace_picker(p, valid)
 				if target_slot == "cancel":
 					_update_debug("取消替换坐骑，手牌未消耗")
 					return
@@ -3175,9 +3182,19 @@ func _show_equip_picker(target: Player, slots: Array[String], title: String = "�
 	return chosen
 
 # 坐骑槽满时：选择要顶掉的马（锚点居中弹窗）
-func _show_mount_replace_picker(p: Player) -> String:
+func _show_mount_replace_picker(p: Player, allowed: Callable = Callable()) -> String:
 	if _mount_replace_override.is_valid():
 		return _mount_replace_override.call()
+	var revision = turn_manager.get_context_revision()
+	var candidates = p.get_mount_slots()
+	var originals: Dictionary = {}
+	for slot in candidates: originals[slot] = _equipment_resource_for_pick(p, slot)
+	var valid = func():
+		return not _game_over and players.has(p) and p.is_alive() \
+			and revision == turn_manager.get_context_revision() \
+			and (not allowed.is_valid() or allowed.call())
+	if not valid.call(): return ""
+	var answer = ChoicePromptAnswer.new()
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -3205,35 +3222,38 @@ func _show_mount_replace_picker(p: Player) -> String:
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	for slot in p.get_mount_slots():
+	for i in candidates.size():
+		var slot = candidates[i]
 		var btn = Button.new()
 		btn.text = "%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(p.equipment[slot])]
 		btn.custom_minimum_size = Vector2(160, 44)
-		btn.pressed.connect(_emit_mount_replace.bind(overlay, slot), CONNECT_ONE_SHOT)
+		btn.pressed.connect(func(): answer.submit(i), CONNECT_ONE_SHOT)
 		hbox.add_child(btn)
 
 	var cancel_btn = Button.new()
 	cancel_btn.text = "取消"
 	cancel_btn.custom_minimum_size = Vector2(160, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
-	cancel_btn.pressed.connect(func():
-		overlay.queue_free()
-		_mount_replace_result.emit("cancel")
-	, CONNECT_ONE_SHOT)
+	cancel_btn.pressed.connect(func(): answer.submit(-1), CONNECT_ONE_SHOT)
 	vbox.add_child(cancel_btn)
 
-	var result = await _mount_replace_result
-	return result
-
-func _emit_mount_replace(overlay: ColorRect, slot: String):
-	overlay.queue_free()
-	_mount_replace_result.emit(slot)
+	var result = await _wait_choice_prompt(overlay, answer, valid, false)
+	if result == CHOICE_INVALID: return ""
+	if result < 0: return "cancel"
+	if result >= candidates.size(): return ""
+	var chosen: String = candidates[result]
+	if originals[chosen] == null or _equipment_resource_for_pick(p, chosen) != originals[chosen]: return ""
+	return chosen
 
 # 已有武器时替换确认弹窗（锚点居中）
-func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: CardData.CardSubType) -> bool:
+func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: CardData.CardSubType, allowed: Callable = Callable()) -> int:
 	# 测试钩子：跳过 UI 直接返回
 	if _weapon_replace_override.is_valid():
-		return _weapon_replace_override.call()
+		var reply = await _weapon_replace_override.call()
+		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID: return CHOICE_INVALID
+		return 1 if reply else 0
+	if _game_over or (allowed.is_valid() and not allowed.call()): return CHOICE_INVALID
+	var answer = ChoicePromptAnswer.new()
 
 	var overlay = ColorRect.new()
 	overlay.color = Color(0, 0, 0, 0.55)
@@ -3267,24 +3287,17 @@ func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: 
 	var yes_btn = Button.new()
 	yes_btn.text = "替换"
 	yes_btn.custom_minimum_size = Vector2(160, 44)
-	yes_btn.pressed.connect(func():
-		overlay.queue_free()
-		_weapon_replace_result.emit(true)
-	, CONNECT_ONE_SHOT)
+	yes_btn.pressed.connect(func(): answer.submit(1), CONNECT_ONE_SHOT)
 	hbox.add_child(yes_btn)
 
 	var no_btn = Button.new()
 	no_btn.text = "取消"
 	no_btn.custom_minimum_size = Vector2(160, 44)
 	no_btn.modulate = Color(0.7, 0.7, 0.7)
-	no_btn.pressed.connect(func():
-		overlay.queue_free()
-		_weapon_replace_result.emit(false)
-	, CONNECT_ONE_SHOT)
+	no_btn.pressed.connect(func(): answer.submit(0), CONNECT_ONE_SHOT)
 	hbox.add_child(no_btn)
 
-	var result = await _weapon_replace_result
-	return result
+	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 # 丈八蛇矛：杀命中后、扣血前询问流失体力数（X≤3），合并伤害。
 # 返回流失的体力数（0 = 放弃，CHOICE_INVALID = 等待失效）；AI 不主动流失。
