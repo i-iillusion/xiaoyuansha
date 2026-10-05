@@ -5952,12 +5952,12 @@ func _check_player_awaken(p: Player):
 		p.awoken = true
 	else:
 		return
-	if _awaken_in_progress.get(p, -1) == p.awakening_revision:
+	if _awaken_in_progress.get(p, {}) == {"revision": p.awakening_revision, "lifecycle": _dying_lifecycle_generation}:
 		return
 	if p.seat_index == 0:
-		call_deferred("_do_awaken", p, p.awakening_revision)
+		call_deferred("_do_awaken", p, p.awakening_revision, _dying_lifecycle_generation)
 	else:
-		_do_awaken(p, p.awakening_revision)
+		_do_awaken(p, p.awakening_revision, _dying_lifecycle_generation)
 
 # 手牌变化监听（add_to_hand / remove_from_hand 路径的补充触发）
 func _on_hand_updated(p: Player):
@@ -5969,15 +5969,18 @@ func _awaken_choice_pending(p: Player, revision: int) -> bool:
 		and p.general_name == "史蒂芬·彼特先斯" and p.awoken and p.awake_choice == 0 \
 		and p.awakening_revision == revision
 
-func _do_awaken(p: Player, expected_revision: int = -1):
+func _do_awaken(p: Player, expected_revision: int = -1, expected_lifecycle: int = -1):
 	if not is_instance_valid(p):
 		return
+	var lifecycle = _dying_lifecycle_generation
+	if expected_lifecycle >= 0 and expected_lifecycle != lifecycle: return
 	var generation = p.awakening_revision
 	if expected_revision >= 0 and expected_revision != generation:
 		return
-	if not _awaken_choice_pending(p, generation) or _awaken_in_progress.get(p, -1) == generation:
+	var lease = {"revision": generation, "lifecycle": lifecycle}
+	if not _awaken_choice_pending(p, generation) or _awaken_in_progress.get(p, {}) == lease:
 		return
-	_awaken_in_progress[p] = generation
+	_awaken_in_progress[p] = lease
 	if not p.awaken_effects_applied:
 		# 先记已结算，摸牌及UI信号不能重入扣上限/摸牌。
 		p.awaken_effects_applied = true
@@ -5986,14 +5989,15 @@ func _do_awaken(p: Player, expected_revision: int = -1):
 		_update_debug("%s 觉醒！失去 1 点体力上限（上限 %d，体力 %d/%d），摸两张牌" % [p.player_name, p.max_hp, p.hp, p.max_hp])
 		_draw_blank_cards(p, 2)
 	await _resolve_awaken_choice(p, generation)
-	if _awaken_in_progress.get(p, -1) == generation:
+	if _awaken_in_progress.get(p, {}) == lease:
 		_awaken_in_progress.erase(p)
 	# 人类必选窗口被销毁或阶段过期时，重新显示待选择项；不重做已结算效果。
-	if _awaken_choice_pending(p, generation) and p.seat_index == 0:
-		call_deferred("_do_awaken", p, generation)
+	if lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p, generation) and p.seat_index == 0:
+		call_deferred("_do_awaken", p, generation, lifecycle)
 
 func _resolve_awaken_choice(p: Player, generation: int):
 	var revision = turn_manager.get_context_revision()
+	var lifecycle = _dying_lifecycle_generation
 	var choice: int
 	if _awaken_pick_override.is_valid():
 		choice = await _awaken_pick_override.call()
@@ -6001,8 +6005,8 @@ func _resolve_awaken_choice(p: Player, generation: int):
 		choice = await _choose_ai_response(p, "awaken", [1, 2, 3])
 	else:
 		var actor_ref = weakref(p)
-		choice = await _show_awaken_pick(func(): return _awaken_choice_pending(actor_ref.get_ref(), generation))
-	if not _awaken_choice_pending(p, generation) or revision != turn_manager.get_context_revision():
+		choice = await _show_awaken_pick(func(): return lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(actor_ref.get_ref(), generation))
+	if lifecycle != _dying_lifecycle_generation or not _awaken_choice_pending(p, generation) or revision != turn_manager.get_context_revision():
 		return
 	if choice == CHOICE_INVALID:
 		return
@@ -8891,6 +8895,7 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
+	_awaken_in_progress.clear()
 	_card_target_generation += 1
 	_card_target_confirm_owner = -1
 	if rule_scheduler != null: rule_scheduler.reset()
