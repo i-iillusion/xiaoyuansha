@@ -270,6 +270,8 @@ var _duel_respond_override: Callable = Callable()
 var _duel_second_override: Callable = Callable()
 # 【校园霸主】（杰基·斯特朗）：目标选择模式
 var _is_campus_targeting: bool = false                          
+var _campus_execution_generation: int = 0
+var _campus_execution_owner: int = -1
 # 【神速】（比尔·盖伊）：回合开始选项1 的杀目标选择中
 var _is_shensu_targeting: bool = false
 # 【Gay】（比尔·盖伊）：回复目标选择中
@@ -6237,11 +6239,27 @@ func _on_campus_target_click(target: Player):
 
 # 执行校园霸主：双方各弃一张手牌 → 进行拼点（平局继续直到分出胜负）→ 赢者对输者造成 1 点伤害
 func _execute_campus_dominator(p: Player, target: Player) -> void:
+	if _campus_execution_owner != -1:
+		return
+	_campus_execution_generation += 1
+	var owner = _campus_execution_generation
+	_campus_execution_owner = owner
+	await _execute_campus_pending(p, target, owner)
+	if _campus_execution_owner == owner:
+		_campus_execution_owner = -1
+
+func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 	if not _can_use_play_skill(p):
 		return
 	if p.general_name != "杰基·斯特朗" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
+	var valid = func():
+		return _campus_execution_owner == owner and _campus_execution_generation == owner \
+			and players.has(p) and players.has(target) and target != p \
+			and p.general_name == "杰基·斯特朗" and _paid_skill_rps_valid(p, target, revision)
+	if not valid.call():
+		return
 	if not target.is_alive() or target.hand_size() <= 0:
 		_update_debug("目标没有手牌，【校园霸主】未发动")
 		return
@@ -6249,22 +6267,20 @@ func _execute_campus_dominator(p: Player, target: Player) -> void:
 		_update_debug("你没有手牌，【校园霸主】未发动")
 		return
 	# 指定目标并确认发动后，双方都必须支付；只能选择牌，不能拒绝。
-	if not await _select_hand_discard(p, 1, true, func():
-		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+	if not await _select_hand_discard(p, 1, true, valid):
 		return
-	if not _paid_skill_rps_valid(p, target, revision):
+	if not valid.call():
 		return
-	if not await _select_hand_discard(target, 1, true, func():
-		return p.is_alive() and target.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+	if not await _select_hand_discard(target, 1, true, valid):
 		return
-	if not _paid_skill_rps_valid(p, target, revision):
+	if not valid.call():
 		return
 	_update_debug("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
 
 	# 进行拼点（平局继续直到分出胜负）
-	var r = await _do_ping_dian(p, target, func(): return _paid_skill_rps_valid(p, target, revision))
-	if r == RPS_INVALID:
+	var r = await _do_ping_dian(p, target, valid)
+	if r == RPS_INVALID or not valid.call():
 		return
 	if r == RPS_WIN:
 		_update_debug("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
@@ -8309,6 +8325,8 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_campus_execution_generation += 1
+	_campus_execution_owner = -1
 	_gay_execution_generation += 1
 	_gay_execution_owner = -1
 	_game_over = false

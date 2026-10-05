@@ -851,6 +851,8 @@ func _run():
 	await gay_prompt_cases.run(self)
 	var gay_execution_cases = load("res://Test/gay_execution_cases.gd").new()
 	await gay_execution_cases.run(self)
+	var campus_execution_cases = load("res://Test/campus_execution_cases.gd").new()
+	await campus_execution_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
