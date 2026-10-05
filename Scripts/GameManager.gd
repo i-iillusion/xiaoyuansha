@@ -4270,8 +4270,8 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
-			await _maybe_ask_reveal()
-			if not valid.call():
+			var revealed = await _maybe_ask_reveal()
+			if revealed == CHOICE_INVALID or not valid.call():
 				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name}
 	return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
@@ -4945,8 +4945,8 @@ func _deal_damage_result(source: Player, target: Player, amount: int, element: E
 		if await _try_calamity_transfer(chain.source_player) == CHOICE_INVALID:
 			result.invalidated = true
 			return result
-	await _maybe_ask_reveal()
-	result.invalidated = _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation
+	var revealed = await _maybe_ask_reveal()
+	result.invalidated = revealed == CHOICE_INVALID or _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation
 	return result
 
 func _trigger_pofeng(source: Player, amount: int):
@@ -5510,19 +5510,24 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	_refresh_detail_popup()
 
 # 明置：选择具体装备（未被装备过的武器/防具；马全部可选）
-func _do_sao_reveal(p: Player) -> void:
+func _do_sao_reveal(p: Player) -> int:
 	if not p.has_hidden_equip():
-		return
+		return 0
 	var reveal_context = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var hidden_slots: Array[String] = []
 	for slot in Player.EQUIP_SLOTS:
 		if p.get_hidden_equipment_card(slot) != null:
 			hidden_slots.append(slot)
 	if hidden_slots.is_empty():
-		return
+		return 0
 	var hidden_sources: Array[CardBase] = []
 	for slot in hidden_slots:
 		hidden_sources.append(p.get_hidden_equipment_card(slot))
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation \
+			and reveal_context == turn_manager.get_context_revision() and players.has(p) and p.is_alive() \
+			and hidden_slots.all(func(slot): return p.get_hidden_equipment_card(slot) == hidden_sources[hidden_slots.find(slot)])
 	var reveal_slot = hidden_slots[0]
 	var selected_index: int = 0
 	if hidden_slots.size() > 1:
@@ -5533,43 +5538,42 @@ func _do_sao_reveal(p: Player) -> void:
 			var labels: Array = []
 			for slot in hidden_slots:
 				labels.append("武器位" if slot == "weapon" else ("防具位" if slot == "armor" else "坐骑位%s" % slot.trim_prefix("mount_")))
-			selected = await _show_choice_popup("选择要明置的暗置装备槽位：", labels)
+			selected = await _show_choice_popup("选择要明置的暗置装备槽位：", labels, valid)
+		if selected == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if selected < 0 or selected >= hidden_slots.size():
-			return
+			return 0
 		selected_index = selected
 		reveal_slot = hidden_slots[selected]
 	var source = p.get_hidden_equipment_card(reveal_slot)
 	if source == null or source != hidden_sources[selected_index]:
-		return
-	if _game_over or not p.is_alive() \
-			or turn_manager.get_context_revision() != reveal_context:
-		return
+		return CHOICE_INVALID
+	if not valid.call(): return CHOICE_INVALID
 	var options = _hidden_declaration_options(source)
 	if options.is_empty():
 		_show_toast("该类型的所有装备都已被打出过，无法明置")
-		return
+		return 0
 	var chosen: int = -1
 	if _sao_reveal_sub_override.is_valid():
 		chosen = _sao_reveal_sub_override.call()
+		if chosen == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if chosen < 0:
-			return
+			return 0
 		if not options.has(chosen):
-			return
+			return CHOICE_INVALID
 	else:
 		if p.seat_index != 0:
-			return
+			return 0
 		var texts: Array = []
 		for sub in options:
 			texts.append(CardData.get_type_name(sub))
-		var idx = await _show_sao_reveal_picker(texts)
+		var idx = await _show_sao_reveal_picker(texts, valid)
+		if idx == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if idx < 0:
-			return
+			return 0
+		if idx >= options.size(): return CHOICE_INVALID
 		chosen = options[idx]
-	if _game_over or not p.is_alive() \
-			or turn_manager.get_context_revision() != reveal_context \
-			or p.get_hidden_equipment_card(reveal_slot) != source:
-		return
-	_reveal_hidden_slot_as(p, reveal_slot, source, chosen)
+	if not valid.call(): return CHOICE_INVALID
+	return 1 if _reveal_hidden_slot_as(p, reveal_slot, source, chosen) else CHOICE_INVALID
 
 # 执行明置：占位变为具体装备（武器/防具进唯一性占用；坐骑按类型计数）
 func _reveal_hidden_as(p: Player, sub: CardData.CardSubType) -> bool:
@@ -5667,17 +5671,18 @@ func _show_sao_preempt_prompt(equipper: Player, sub: CardData.CardSubType, type_
 	return 1 if idx == 0 else 0
 
 # 【苕】明置时机：任意玩家行动后询问是否明置（同一个行动窗口内最多一次）
-func _maybe_ask_reveal() -> void:
+func _maybe_ask_reveal() -> int:
 	if _game_over or not _reveal_ask_pending:
-		return
+		return 0
 	_reveal_ask_pending = false
 	var owner = players[0]
 	if owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
-		return
+		return 0
 	if not owner.has_hidden_equip():
-		return
+		return 0
 	_sao_opportunity_generation += 1
 	var generation = _sao_opportunity_generation
+	var lifecycle_generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var originals: Dictionary = {}
 	for slot in Player.EQUIP_SLOTS:
@@ -5685,6 +5690,7 @@ func _maybe_ask_reveal() -> void:
 		if original != null: originals[slot] = original
 	var valid = func():
 		return not _game_over and players.has(owner) and owner.is_alive() \
+			and lifecycle_generation == _dying_lifecycle_generation \
 			and owner.general_name == "安普提·斯丢皮得" and generation == _sao_opportunity_generation \
 			and revision == turn_manager.get_context_revision() \
 			and originals.keys().all(func(slot): return owner.get_hidden_equipment_card(slot) == originals[slot])
@@ -5694,8 +5700,9 @@ func _maybe_ask_reveal() -> void:
 		accepted = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
 		accepted = await _show_reveal_opportunity_prompt(owner, valid)
-	if accepted == 1 and valid.call():
-		await _do_sao_reveal(owner)
+	if accepted == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+	if accepted == 1: return await _do_sao_reveal(owner)
+	return 0
 
 # 明置时机确认弹窗（玩家0）
 func _show_reveal_opportunity_prompt(owner: Player, allowed: Callable = Callable()) -> int:
@@ -9223,9 +9230,12 @@ func _on_end_play_pressed():
 	end_play_phase()
 
 func _on_selector_confirmed(sub: CardData.CardSubType):
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
 	_clear_pending_determined_card()
 	_reveal_ask_pending = true
 	await play_card(sub)
+	if generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
 	# 【苕】任意玩家行动后询问是否明置
 	await _maybe_ask_reveal()
 
@@ -9240,8 +9250,11 @@ func _on_determined_card_clicked(card: CardBase):
 		_update_debug("所选的已确定牌已不在当前玩家牌区")
 		return
 	_pending_determined_card = card
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
 	_reveal_ask_pending = true
 	await play_card(card.sub_type)
+	if generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
 	# 目标选择期间继续保留原对象；即时牌、非法牌和完成结算均在这里收口残留状态。
 	if not _is_targeting and not _is_multi_targeting and not _is_iron_chain_targeting:
 		_clear_pending_determined_card()
@@ -9406,7 +9419,7 @@ func _on_target_click(target: Player):
 	_clear_pending_determined_card()
 	_targeting_card_sub = -1
 	# 【苕】任意玩家行动后询问是否明置
-	await _maybe_ask_reveal()
+	if await _maybe_ask_reveal() == CHOICE_INVALID: return
 	# 恢复出牌按钮
 	_restore_play_skill_buttons()
 

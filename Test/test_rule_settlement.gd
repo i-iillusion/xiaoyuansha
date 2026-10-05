@@ -894,6 +894,8 @@ func _run():
 	await zhuangbi_revised_rule_cases.run(self)
 	var reset_scheduler_ai_cases = load("res://Test/reset_scheduler_ai_cases.gd").new()
 	await reset_scheduler_ai_cases.run(self)
+	var reveal_inner_lifecycle_cases = load("res://Test/reveal_inner_lifecycle_cases.gd").new()
+	await reveal_inner_lifecycle_cases.run(self)
 	var mandatory_skill_cases = load("res://Test/mandatory_skill_cases.gd").new()
 	await mandatory_skill_cases.run(self)
 	var equipment_boundary_cases = load("res://Test/equipment_boundary_cases.gd").new()
