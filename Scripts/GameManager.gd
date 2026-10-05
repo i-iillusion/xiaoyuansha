@@ -317,6 +317,7 @@ var _meiyong_execution_generation: int = 0
 var _meiyong_execution_owner: int = -1
 var _meiyong_target_generation: int = 0
 var _meiyong_target_answer: ChoicePromptAnswer
+var _meiyong_combined_state: Dictionary = {}
 var _meiyong_option: int = -1                       # 0=判定 / 1=摸牌 / 2=出牌
 # 测试钩子（正常游戏不设置）：
 var _meiyong_override: Callable = Callable()             # 返回 true = 发动【烂忠厚】
@@ -5655,7 +5656,7 @@ func _start_choice_countdown(pending: Dictionary):
 	_update_countdown_label()
 
 # 通用按钮选择弹窗（锚点居中）：返回选中索引，取消返回 -1
-func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Callable()) -> int:
+func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Callable(), include_cancel: bool = true, initial_step: float = STEP_SECONDS, remaining_out: Array = []) -> int:
 	if _game_over:
 		return CHOICE_INVALID
 	if buttons.is_empty():
@@ -5700,9 +5701,12 @@ func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Calla
 	cancel_btn.custom_minimum_size = Vector2(190, 44)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
 	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
-	vbox.add_child(cancel_btn)
+	if include_cancel:
+		vbox.add_child(cancel_btn)
+	else:
+		cancel_btn.free()
 
-	return await _wait_choice_prompt(overlay, answer, allowed)
+	return await _wait_choice_prompt(overlay, answer, allowed, true, initial_step, remaining_out)
 
 # 明置具体装备选择弹窗（网格布局，装备多）：返回选中索引，取消返回 -1
 func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> int:
@@ -7235,58 +7239,94 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 		return 0
 	# 是否发动（玩家0弹窗 / 测试钩子）
 	var activate := 0
+	var remaining: Array = [STEP_SECONDS]
 	if _meiyong_override.is_valid():
 		var reply = await _meiyong_override.call()
 		activate = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
-		activate = await _show_meiyong_activate_prompt(valid)
+		activate = await _show_meiyong_activate_prompt(valid, remaining)
 	if activate == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if activate != 1: return 0
-	# 摸一张牌
+	# 最终选定合法目标及阶段之前不摸牌、不跳过阶段。
+	var chosen = await _choose_meiyong_phase_target(p, valid, float(remaining[0]))
+	if typeof(chosen) == TYPE_INT:
+		return CHOICE_INVALID if chosen == CHOICE_INVALID else 0
+	if not valid.call(): return CHOICE_INVALID
+	var chosen_target: Player = chosen.target
+	var chosen_option: int = chosen.option
+	if not _meiyong_target_valid(p, chosen_target, chosen_option): return CHOICE_INVALID
 	_draw_blank_cards(p, 1)
-	_update_debug("%s 发动【烂忠厚】！摸了 1 张牌（手牌 %d 张），选择跳过一个阶段" % [p.player_name, p.hand_size()])
-	# 三选一（取消 → 收回已摸的牌）
-	var option := -1
-	if _meiyong_option_override.is_valid():
-		option = await _meiyong_option_override.call()
-	else:
-		option = await _show_meiyong_option_prompt(valid)
-	if option == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
-	# 仅保留旧主动取消行为；其游戏后果待E03e-20-Q1裁决，不能据此宣称正确。
-	if option < 0 or option > 2:
-		p.hand.pop_back()
-		_update_debug("取消【烂忠厚】（已摸的牌收回）")
-		return 0
-	match option:
-		0:
-			var target0 = await _pick_meiyong_target(0, p, valid)
-			if (typeof(target0) == TYPE_INT and target0 == CHOICE_INVALID) or not valid.call(): return CHOICE_INVALID
-			if target0 == null:
-				_update_debug("没有可选的判定目标，【烂忠厚】未生效（已摸的牌保留）")
-				return 0 # 主动取消的保牌后果待Q2；技术失效已在上方独立返回。
-			if not _meiyong_target_valid(p, target0, 0): return CHOICE_INVALID
-			turn_manager.granted_judge_target_idx = target0.seat_index
-			_update_debug("%s 跳过自己的判定阶段！%s 立刻进行判定阶段（其乐不思蜀/兵粮寸断失效，闪电/火烧连营正常生效）" % [p.player_name, target0.player_name])
-		1:
-			var target1 = await _pick_meiyong_target(1, p, valid)
-			if (typeof(target1) == TYPE_INT and target1 == CHOICE_INVALID) or not valid.call(): return CHOICE_INVALID
-			if target1 == null:
-				_update_debug("没有可选的摸牌目标，【烂忠厚】未生效（已摸的牌保留）")
-				return 0
-			if not _meiyong_target_valid(p, target1, 1): return CHOICE_INVALID
-			turn_manager.granted_draw_target_idx = target1.seat_index
-			_update_debug("%s 跳过自己的摸牌阶段！%s 立刻获得一个摸牌阶段" % [p.player_name, target1.player_name])
-		2:
-			var target2 = await _pick_meiyong_target(2, p, valid)
-			if (typeof(target2) == TYPE_INT and target2 == CHOICE_INVALID) or not valid.call(): return CHOICE_INVALID
-			if target2 == null:
-				_update_debug("没有可选的出牌目标，【烂忠厚】未生效（已摸的牌保留）")
-				return 0
-			if not _meiyong_target_valid(p, target2, 2): return CHOICE_INVALID
-			turn_manager.granted_play_target_idx = target2.seat_index
-			_update_debug("%s 跳过自己的出牌阶段！%s 立刻获得一个出牌阶段" % [p.player_name, target2.player_name])
+	match chosen_option:
+		0: turn_manager.granted_judge_target_idx = chosen_target.seat_index
+		1: turn_manager.granted_draw_target_idx = chosen_target.seat_index
+		2: turn_manager.granted_play_target_idx = chosen_target.seat_index
+	_update_debug("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
 	_sync_all_ui()
 	return 1
+
+func _choose_meiyong_phase_target(p: Player, allowed: Callable, remaining: float):
+	# 仅双钩子路径用于既有确定性测试；真实交互必须同屏选人再点阶段。
+	if _meiyong_option_override.is_valid() and _meiyong_target_override.is_valid():
+		var option = await _meiyong_option_override.call()
+		if not allowed.call() or option == CHOICE_INVALID: return CHOICE_INVALID
+		if option < 0 or option > 2: return -1
+		var target = await _meiyong_target_override.call()
+		if not allowed.call() or (typeof(target) == TYPE_INT and target == CHOICE_INVALID): return CHOICE_INVALID
+		if target == null: return -1
+		return {"option": option, "target": target}
+	_meiyong_target_generation += 1
+	var generation = _meiyong_target_generation
+	var answer = ChoicePromptAnswer.new()
+	_meiyong_target_answer = answer
+	var state = {"answer": answer, "target": null, "buttons": []}
+	_meiyong_combined_state = state
+	_is_meiyong_targeting = true
+	_cancel_target_btn.visible = true
+	var overlay = Control.new()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	$UI.add_child(overlay)
+	var panel = PanelContainer.new()
+	overlay.add_child(panel)
+	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	panel.offset_left = -310
+	panel.offset_top = -130
+	panel.offset_right = 310
+	panel.offset_bottom = -30
+	panel.custom_minimum_size = Vector2(620, 100)
+	var box = VBoxContainer.new()
+	panel.add_child(box)
+	var label = Label.new()
+	label.text = "【烂忠厚】先点击其他角色头像，再选择赠送阶段"
+	box.add_child(label)
+	var row = HBoxContainer.new()
+	box.add_child(row)
+	for i in 4:
+		var button = Button.new()
+		button.text = ["判定", "摸牌", "出牌", "取消"][i]
+		button.custom_minimum_size = Vector2(140, 44)
+		button.disabled = i < 3
+		state.buttons.append(button)
+		row.add_child(button)
+		var select = func():
+			if button.disabled: return
+			if i == 3: answer.submit(-1)
+			elif _meiyong_target_valid(p, state.target, i): answer.submit(i)
+		button.pressed.connect(select)
+	var valid = func():
+		for i in 3:
+			if is_instance_valid(state.buttons[i]):
+				state.buttons[i].disabled = not _meiyong_target_valid(p, state.target, i)
+		return generation == _meiyong_target_generation and _meiyong_target_answer == answer and allowed.call() \
+			and (state.target == null or _meiyong_target_valid(p, state.target, 1))
+	var result = await _wait_choice_prompt(overlay, answer, valid, true, remaining)
+	if _meiyong_target_answer == answer:
+		_meiyong_target_answer = null
+		_meiyong_combined_state = {}
+		_is_meiyong_targeting = false
+		_cancel_target_btn.visible = false
+	if result < 0: return result
+	return {"option": result, "target": state.target}
 
 # 选择目标：option 0 = 除自己外判定区有牌的角色；1/2 = 除自己外任意存活角色（下跪除外）
 func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()):
@@ -7340,10 +7380,19 @@ func _meiyong_target_valid(p: Player, target: Player, option: int) -> bool:
 	return target != null and players.has(target) and target != p and target.is_alive() and not _is_kneeling(target) \
 		and (option != 0 or not target.judgment_cards.is_empty())
 
-# 烂忠厚目标点击：单选，点击即生效
+# 烂忠厚联合界面：头像仅选人，最终阶段按钮才提交。
 func _on_meiyong_target_click(target: Player):
 	if not _is_meiyong_targeting: return
+	if _meiyong_target_answer != null and _meiyong_target_answer.allowed.is_valid() and not _meiyong_target_answer.allowed.call():
+		_meiyong_target_answer.submit(CHOICE_INVALID)
+		return
 	var p = players[turn_manager.current_player_idx]
+	if not _meiyong_combined_state.is_empty() and _meiyong_combined_state.answer == _meiyong_target_answer:
+		if not _meiyong_target_valid(p, target, 1): return
+		_meiyong_combined_state.target = target
+		for i in 3:
+			_meiyong_combined_state.buttons[i].disabled = not _meiyong_target_valid(p, target, i)
+		return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -7360,8 +7409,8 @@ func _on_meiyong_target_click(target: Player):
 	if _meiyong_target_answer != null and players.has(target): _meiyong_target_answer.submit(players.find(target))
 
 # 是否发动【烂忠厚】（玩家0弹窗）
-func _show_meiyong_activate_prompt(allowed: Callable = Callable()) -> int:
-	var idx = await _show_choice_popup("是否发动【烂忠厚】？\n（摸一张牌，然后跳过你的判定/摸牌/出牌阶段之一，令一名其他角色立刻获得对应阶段）", ["发动", "不发动"], allowed)
+func _show_meiyong_activate_prompt(allowed: Callable = Callable(), remaining: Array = [STEP_SECONDS]) -> int:
+	var idx = await _show_choice_popup("是否发动【烂忠厚】？\n确认后选择目标和阶段，最终确认阶段时摸一张牌。", ["确认", "取消"], allowed, false, float(remaining[0]), remaining)
 	if idx == CHOICE_INVALID: return CHOICE_INVALID
 	return 1 if idx == 0 else 0
 

@@ -40,13 +40,17 @@ func run(host):
 	suite.check(await game._wait_choice_prompt(second, second_answer, Callable(), true, remaining[0], remaining) == -1 and remaining[0] == 2.0, "E03e-20c-0：取消前保存续接窗口余量")
 	await suite.process_frame
 	for stage in ["activate", "option", "target"]:
-		for mode in ["accept", "invalid", "phase", "end", "general", "duplicate", "old_signal"] + (["decline"] if stage == "activate" else []):
+		for mode in ["accept", "invalid", "phase", "end", "general", "duplicate", "old_signal", "decline", "timeout"]:
 			prepare(stage)
 			var actor = game.players[0]
 			var act = func():
-				var buttons = [] if stage == "target" else game._choice_prompt_stack.back().overlay.find_children("*", "Button", true, false)
+				var buttons = game._choice_prompt_stack.back().overlay.find_children("*", "Button", true, false)
+				if stage == "target":
+					game._on_meiyong_target_click(game.players[1])
+					suite.check(not game._meiyong_target_answer.settled and actor.hand_size() == 3, "E03e-20c-1：已选头像未按阶段仍不提交或摸牌")
 				match mode:
-					"decline": buttons[1].pressed.emit()
+					"decline": buttons[1 if stage == "activate" else 3].pressed.emit()
+					"timeout": game._countdown_on_timeout.call()
 					"invalid":
 						if stage == "target": game._meiyong_target_generation += 1
 						else: game._choice_prompt_stack.back().overlay.queue_free()
@@ -60,18 +64,42 @@ func run(host):
 					"old_signal":
 						game._meiyong_pick_result.emit(game.players[2])
 						if stage == "target": suite.check(not game._meiyong_target_answer.settled, "E03e-20b：旧共享赠送目标信号不回答实际等待")
-				if mode not in ["decline", "invalid"]:
-					if stage == "target": game._on_meiyong_target_click(game.players[1])
-					else: buttons[0 if stage == "activate" else 1].pressed.emit()
+				if mode not in ["decline", "timeout", "invalid"]:
+					if stage != "activate": game._on_meiyong_target_click(game.players[1])
+					buttons[0 if stage == "activate" else 1].pressed.emit()
 			act.call_deferred()
 			var reply = await game._maybe_meiyong(actor)
 			var success = mode in ["accept", "duplicate", "old_signal"]
-			suite.check(reply == (1 if success else (0 if mode == "decline" else GameManager.CHOICE_INVALID)) and game._meiyong_execution_owner == -1 and game.turn_manager.granted_draw_target_idx == (1 if success else -1) and game.turn_manager.granted_judge_target_idx == -1 and game.turn_manager.granted_play_target_idx == -1, "E03e-20b：仅有效正向赠送写阶段，技术失效不误赠送")
-			suite.check(actor.hand_size() == (4 if success or stage != "activate" else 3), "E03e-20b：发动前失效不摸牌，技术失效保留已实际完成的摸牌")
+			suite.check(reply == (1 if success else (0 if mode in ["decline", "timeout"] else GameManager.CHOICE_INVALID)) and game._meiyong_execution_owner == -1 and game.turn_manager.granted_draw_target_idx == (1 if success else -1) and game.turn_manager.granted_judge_target_idx == -1 and game.turn_manager.granted_play_target_idx == -1, "E03e-20c-1：仅有效正向赠送写阶段，取消/超时不发动，失效不误赠送")
+			suite.check(actor.hand_size() == (4 if success else 3), "E03e-20c-1：最终阶段确认前的取消或失效均不摸牌")
 			await suite.process_frame
+	prepare("activate")
+	game._meiyong_option_override = Callable()
+	game._meiyong_target_override = Callable()
+	var combined_checks = func():
+		var buttons = game._choice_prompt_stack.back().overlay.find_children("*", "Button", true, false)
+		suite.check(buttons.size() == 4 and buttons[0].disabled and buttons[1].disabled and buttons[2].disabled and not buttons[3].disabled and game._step_remaining == 5.0, "E03e-20c-1：四按钮初始仅取消可用，技能第二屏实际剩5秒")
+		buttons[1].pressed.emit()
+		suite.check(game.players[0].hand_size() == 3 and not game._meiyong_target_answer.settled, "E03e-20c-1：伪造禁用按钮不提交或摸牌")
+		game.players[2].judgment_cards.clear()
+		game._on_meiyong_target_click(game.players[2])
+		suite.check(buttons[0].disabled and not buttons[1].disabled and not buttons[2].disabled and game.players[0].hand_size() == 3 and game._step_remaining == 5.0, "E03e-20c-1：无判定牌目标只开摸/出牌且头像点击不摸牌或重置读条")
+		game._on_meiyong_target_click(game.players[1])
+		suite.check(not buttons[0].disabled and game.players[0].hand_size() == 3 and game._step_remaining == 5.0, "E03e-20c-1：改选判定区有牌目标开放判定，仍不摸牌或重置")
+		buttons[1].pressed.emit()
+	var first_confirm = func():
+		suite.check(game._choice_prompt_stack.back().overlay.find_children("*", "Button", true, false).size() == 2, "E03e-20c-1：最初确认界面恰好两个按钮")
+		game._step_remaining = 5.0
+		combined_checks.call_deferred()
+		game._choice_prompt_stack.back().overlay.find_children("*", "Button", true, false)[0].pressed.emit()
+	first_confirm.call_deferred()
+	suite.check(await game._maybe_meiyong(game.players[0]) == 1 and game.players[0].hand_size() == 4 and game.turn_manager.granted_draw_target_idx == 1, "E03e-20c-1：完整确认→选人→阶段只摸一次并提交最终目标")
+	await suite.process_frame
 	for option in [0, 1, 2]:
 		prepare("target", option)
-		var choose = func(): game._on_meiyong_target_click(game.players[1])
+		var choose = func():
+			game._on_meiyong_target_click(game.players[1])
+			game._meiyong_combined_state.buttons[option].pressed.emit()
 		choose.call_deferred()
 		await game._maybe_meiyong(game.players[0])
 		suite.check([game.turn_manager.granted_judge_target_idx, game.turn_manager.granted_draw_target_idx, game.turn_manager.granted_play_target_idx][option] == 1 and game.players[0].hand_size() == 4, "E03e-20b：三种正常赠送实际选人各写对应目标并摸一次")
@@ -92,13 +120,14 @@ func run(host):
 			old_answer.submit(1)
 			suite.check(owner != -1 and game._meiyong_execution_owner == owner and game._is_meiyong_targeting and not game._meiyong_target_answer.settled and game._cancel_target_btn.visible, "E03e-20b：旧赠送答复不清新头像模式/按钮或新锁")
 			game._on_meiyong_target_click(game.players[1])
+			game._meiyong_combined_state.buttons[1].pressed.emit()
 		finish_new.call_deferred()
 		await game._maybe_meiyong(game.players[0])
 		done[0] = true
 	restart.call_deferred()
 	await game._maybe_meiyong(game.players[0])
 	while not done[0]: await suite.process_frame
-	suite.check(game.players[0].hand_size() == 5 and game.turn_manager.granted_draw_target_idx == 1 and game._meiyong_execution_owner == -1 and not game._is_meiyong_targeting, "E03e-20b：重开保留已完成两次摸牌，仅新有效选择赠送一次")
+	suite.check(game.players[0].hand_size() == 4 and game.turn_manager.granted_draw_target_idx == 1 and game._meiyong_execution_owner == -1 and not game._is_meiyong_targeting, "E03e-20c-1：重开旧选择不摸牌，仅新有效阶段点击摸一次")
 	await suite.process_frame
 	reset("稻草人")
 	game.turn_manager.granted_judge_target_idx = -1
