@@ -164,7 +164,9 @@ func check_immediate_judge_draw():
 		var source_hand = source.hand_size()
 		var target_hand = target.hand_size()
 		var turn_id = game.turn_manager.turn_id
+		var phase_id = game.turn_manager.phase_id
 		var reply = await game._maybe_meiyong(source)
+		suite.check(game.turn_manager.phase_id == phase_id + 1 and game.turn_manager._standalone_play_frame.is_empty(), "E03e-20c-2c：获赠判定/摸牌建立独立阶段ID，完成后释放原阶段帧")
 		suite.check(reply == 1 and game.turn_manager.current_phase == TurnManager.Phase.START and game.turn_manager.current_player_idx == 0 and game.turn_manager.turn_id == turn_id and source.hand_size() == source_hand + 1, "E03e-20c-2a：获赠判定/摸牌在源START完成，不新增回合且源只摸1")
 		if option == 0:
 			suite.check(target.judgment_cards.is_empty() and game.deck._discard.has(target_card) and source.judgment_cards == [own_judgment] and not game.turn_manager.skip_play_phase, "E03e-20c-2a：目标立即判定乐不失效，源判定牌保留")
@@ -199,11 +201,12 @@ func check_immediate_judge_draw():
 	var lightning = CardBase.create(CardData.CardSubType.LIGHTNING)
 	game.players[1].judgment_cards.assign([lightning])
 	var close_judge = func():
+		suite.check(game.turn_manager.current_phase == TurnManager.Phase.JUDGE and game.turn_manager._standalone_play_frame.actor == 1, "E03e-20c-2c：真实获赠闪电无懈窗口处于目标判定阶段而非源START")
 		game._choice_prompt_stack.back().overlay.queue_free()
 	close_judge.call_deferred()
 	var reply = await game._maybe_meiyong(game.players[0])
 	suite.check(reply == GameManager.CHOICE_INVALID and game.players[0].hand_size() == 4 and game.players[1].judgment_cards == [lightning] and not game.deck._discard.has(lightning) and game.players[1].hp == 1, "E03e-20c-2a：已提交赠送的真实无懈窗口关闭保留源摸牌，不误判定闪电或丢原牌")
-	suite.check(game.turn_manager.current_phase == TurnManager.Phase.START and game._meiyong_execution_owner == -1 and game.turn_manager.granted_judge_completed, "E03e-20c-2a：判定技术失效停旧执行，不在源阶段重新赠送")
+	suite.check(game.turn_manager.current_phase == TurnManager.Phase.JUDGE and game.turn_manager._standalone_play_frame.is_empty() and game._meiyong_execution_owner == -1 and game.turn_manager.granted_judge_completed, "E03e-20c-2c：判定技术失效释放原帧但不强制恢复旧START或重新赠送")
 	game._nullify_override = old_nullification
 	game.turn_manager._begin_turn()
 	await suite.process_frame

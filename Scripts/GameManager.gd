@@ -7276,16 +7276,35 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 		0:
 			turn_manager.granted_judge_target_idx = chosen_target.seat_index
 			turn_manager.granted_judge_completed = true
-			if not await _run_judgment(chosen_target, true) or not valid.call(): return CHOICE_INVALID
+			if await _run_meiyong_granted_nonplay(p, chosen_target, owner, TurnManager.Phase.JUDGE) == CHOICE_INVALID: return CHOICE_INVALID
 		1:
 			turn_manager.granted_draw_target_idx = chosen_target.seat_index
 			turn_manager.granted_draw_completed = true
-			_draw_phase_cards(chosen_target, false)
+			if await _run_meiyong_granted_nonplay(p, chosen_target, owner, TurnManager.Phase.DRAW) == CHOICE_INVALID: return CHOICE_INVALID
 		2:
 			turn_manager.granted_play_target_idx = chosen_target.seat_index
 			turn_manager.granted_play_completed = true
 			if await _run_meiyong_granted_play(p, chosen_target, owner) == CHOICE_INVALID: return CHOICE_INVALID
 	_update_debug("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
+	_sync_all_ui()
+	return 1
+
+func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, phase: TurnManager.Phase) -> int:
+	var frame = turn_manager.begin_standalone_phase(target.seat_index, phase)
+	if frame.is_empty(): return CHOICE_INVALID
+	var revision: int = frame.revision
+	frame.allowed = func():
+		return not _game_over and _meiyong_execution_owner == owner and _meiyong_execution_generation == owner \
+			and players.has(source) and players.has(target) and source.general_name == "麦克斯·欧尼斯特" \
+			and turn_manager.get_context_revision() == revision
+	var completed := true
+	if phase == TurnManager.Phase.JUDGE:
+		completed = await _run_judgment(target, true)
+	else:
+		_draw_phase_cards(target, false)
+	if not completed or not turn_manager.complete_standalone_phase(frame):
+		turn_manager.cancel_standalone_play(frame)
+		return CHOICE_INVALID
 	_sync_all_ui()
 	return 1
 

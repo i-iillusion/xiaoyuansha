@@ -104,14 +104,32 @@ var _standalone_play_frame: Dictionary = {}
 
 # 烂忠厚在START插入单独出牌阶段；不发回合开始/弃牌/结束事件。
 func begin_standalone_play(actor: int) -> Dictionary:
+	return begin_standalone_phase(actor, Phase.PLAY)
+
+func begin_standalone_phase(actor: int, phase: Phase) -> Dictionary:
 	if current_phase != Phase.START or not _standalone_play_frame.is_empty() or actor < 0 or actor >= player_count or actor == current_player_idx: return {}
-	var frame = {"source": current_player_idx, "turn": turn_id, "actor": actor, "completed": false}
+	if phase not in [Phase.JUDGE, Phase.DRAW, Phase.PLAY]: return {}
+	var frame = {"source": current_player_idx, "turn": turn_id, "actor": actor, "phase": phase, "completed": false}
 	_standalone_play_frame = frame
-	current_phase = Phase.PLAY
+	current_phase = phase
 	phase_id += 1
-	play_actor_idx = actor
+	if phase == Phase.PLAY: play_actor_idx = actor
 	frame.revision = _context_revision
 	return frame
+
+func complete_standalone_phase(frame: Dictionary) -> bool:
+	if not is_same(_standalone_play_frame, frame) or current_phase != frame.phase \
+		or current_player_idx != frame.source or turn_id != frame.turn or _context_revision != frame.revision:
+		return false
+	if frame.phase == Phase.PLAY and play_actor_idx != frame.actor: return false
+	var allowed: Callable = frame.get("allowed", Callable())
+	if allowed.is_valid() and not allowed.call(): return false
+	frame["allowed"] = Callable()
+	_standalone_play_frame = {}
+	current_phase = Phase.START
+	frame.completed = true
+	standalone_play_finished.emit(frame)
+	return true
 
 func cancel_standalone_play(frame: Dictionary):
 	if is_same(_standalone_play_frame, frame):
@@ -148,17 +166,9 @@ func _change_phase(new_phase: Phase):
 
 # 推进到下一阶段（阶段内逻辑由 GameManager 处理）
 func advance_phase():
-	if current_phase == Phase.PLAY and not _standalone_play_frame.is_empty():
-		var frame = _standalone_play_frame
-		if current_player_idx != frame.source or turn_id != frame.turn or play_actor_idx != frame.actor or _context_revision != frame.revision:
-			return
-		var allowed: Callable = frame.get("allowed", Callable())
-		if allowed.is_valid() and not allowed.call(): return
-		frame["allowed"] = Callable()
-		_standalone_play_frame = {}
-		current_phase = Phase.START
-		frame.completed = true
-		standalone_play_finished.emit(frame)
+	if not _standalone_play_frame.is_empty():
+		# 判定/摸牌由效果入口明确完成；不能把一次旧advance当作完成。
+		if current_phase == Phase.PLAY: complete_standalone_phase(_standalone_play_frame)
 		return
 	match current_phase:
 		Phase.START:
