@@ -66,6 +66,32 @@ func run(host):
 	var result = await game._maybe_meiyong(source)
 	suite.check(result == 1 and game.turn_manager.current_phase == TurnManager.Phase.START and game.turn_manager.current_player_idx == 1 and game.players[0].hand.size() == 5 and source.hand.size() == 2, "E03-R02/22d-Q1：获赠出牌装逼失败结束后恢复源START，B不额外弃至2，A不代弃")
 	await suite.process_frame
+	setup_human()
+	source = game.players[1]
+	configure(game.players[0], 2)
+	source.hand.assign([null])
+	game.players[0].hp = 1
+	game._paixiong_override = func(): return false
+	game.players[0].identity = "忠臣"
+	game.players[4].identity = "主公"
+	game.players[1].identity = "忠臣"
+	game.players[2].identity = "反贼"
+	game.players[3].identity = "内奸"
+	source.equip_card_to_slot("armor", CardBase.create(CardData.CardSubType.THORN_ARMOR))
+	calls.clear()
+	source.hp = 10 # 获赠夹具默认1体力；需存活受伤后才能进行荆棘反伤。
+	game._rps_override = func(p):
+		calls.append(p)
+		return GameManager.RPS_ROCK if p.seat_index == 0 else (GameManager.RPS_PAPER if calls.size() > 4 else GameManager.RPS_SCISSORS)
+	var finish_dead_actor = func():
+		await game._execute_zhuangbi([game.players[1], game.players[2]] as Array[Player])
+		suite.check(game.players[0].is_dead() and game.players[1].hp == 9 and game.players[2].hp == 9 and calls.size() == 6 and game.turn_manager.current_phase == TurnManager.Phase.PLAY, "E03e-22d-3b：获赠操作者反伤最终死亡，不提前恢复源START吞剩余无源伤害")
+		suite.check(game._end_play_btn.visible and game._zhuangbi_execution_owner == -1 and not game._game_over, "E03e-22d-3b：死亡后无再发动窗口，既有结束按钮仍可收口独立阶段")
+		game._on_end_play_pressed()
+	finish_dead_actor.call_deferred()
+	result = await game._maybe_meiyong(source)
+	suite.check(result == 1 and game.turn_manager.current_phase == TurnManager.Phase.START and game.turn_manager.current_player_idx == 1 and game.turn_manager.play_actor_idx == -1 and game.turn_manager._standalone_play_frame.is_empty() and game.turn_manager.granted_play_completed, "E03e-22d-3b：实际结束按钮恢复赠送者START，死亡者无额外弃牌阶段")
+	await suite.process_frame
 	suite.reset_players()
 	game._paixiong_override = Callable()
 	game._rps_override = Callable()
