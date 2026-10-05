@@ -264,6 +264,8 @@ var _zhuangbi_targets: Array[Player] = []
 var _paixiong_override: Callable = Callable()
 # 【装逼】再发动测试钩子（正常游戏不设置）：返回 true = 玩家0在赢局后再次使用【装逼】
 var _zhuangbi_again_override: Callable = Callable()
+var _zhuangbi_execution_generation: int = 0
+var _zhuangbi_execution_owner: int = -1
 # 【霸王】决斗响应测试钩子（正常游戏不设置）：返回 true = 玩家0响应决斗时出【杀】（第一次出牌询问）
 var _duel_respond_override: Callable = Callable()
 # 【霸王】决斗第二张杀测试钩子（正常游戏不设置）：返回 true = 玩家0响应决斗打出第一张杀后继续出第二张
@@ -6051,6 +6053,16 @@ func _on_confirm_zhuangbi():
 
 # 执行装逼：双方各弃一张手牌 → 依次拼点 → 判定结果
 func _execute_zhuangbi(targets: Array[Player]) -> void:
+	if _zhuangbi_execution_owner != -1:
+		return
+	_zhuangbi_execution_generation += 1
+	var owner = _zhuangbi_execution_generation
+	_zhuangbi_execution_owner = owner
+	await _execute_zhuangbi_pending(targets, owner)
+	if _zhuangbi_execution_owner == owner:
+		_zhuangbi_execution_owner = -1
+
+func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	if not _can_use_play_skill(players[0]):
 		return
 	if _zhuangbi_blocked_this_phase:
@@ -6060,10 +6072,18 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	if p.general_name != "史蒂芬·彼特先斯" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
+	var action_valid = func():
+		return _zhuangbi_execution_owner == owner and _zhuangbi_execution_generation == owner \
+			and players.has(p) and p.general_name == "史蒂芬·彼特先斯" \
+			and _paid_skill_rps_valid(p, null, revision)
+	var target_valid = func(t):
+		return action_valid.call() and players.has(t) and t != p and _paid_skill_rps_valid(p, t, revision)
+	if not action_valid.call():
+		return
 	# 过滤：当前无手牌的目标剔除（选择时已保证，执行时防变化）
 	var valid: Array[Player] = []
 	for t in targets:
-		if t.is_alive() and t.hand_size() > 0:
+		if target_valid.call(t) and t.hand_size() > 0 and not valid.has(t):
 			valid.append(t)
 	if valid.is_empty():
 		_update_debug("没有有效目标，【装逼】未发动")
@@ -6074,21 +6094,21 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		return
 	# 发动者确认目标后，自己与全部目标都必须支付；只能选择牌，不能拒绝。
 	if not await _select_hand_discard(p, 1, true, func():
-		return p.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+		return action_valid.call()):
 		return
 	# 选牌快照直接移除手牌，不经 hand_updated；本人的最后一张牌一旦支付，
 	# 必须先完成强制觉醒的三选一，再继续其他目标支付或拼点。
 	if p.hand_size() == 0 and not p.awoken:
 		p.awoken = true
 		await _do_awaken(p)
-	if not _paid_skill_rps_valid(p, valid[0], revision):
+	if not target_valid.call(valid[0]):
 		return
 	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
 	for t in valid:
 		if not await _select_hand_discard(t, 1, true, func():
-			return p.is_alive() and t.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY):
+			return target_valid.call(t)):
 			return
-		if not _paid_skill_rps_valid(p, t, revision):
+		if not target_valid.call(t):
 			return
 	_update_debug("各目标弃置一张手牌，依次与 %s 拼点！" % p.player_name)
 	_sync_all_ui()
@@ -6098,16 +6118,16 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	var losses := 0
 	var losers: Array[Player] = []  # 输给 p 的目标
 	for t in valid:
-		if not _paid_skill_rps_valid(p, null, revision):
+		if not action_valid.call():
 			return
 		# 已付费但在轮到出拳前最终死亡的目标不参与此次拼点；
 		# 保留此前胜负，继续后续目标，费用不返还。
 		if t.is_dead():
 			continue
-		if not _paid_skill_rps_valid(p, t, revision):
+		if not target_valid.call(t):
 			return
-		var r = await _do_ping_dian(p, t, func(): return _paid_skill_rps_valid(p, t, revision))
-		if r == RPS_INVALID:
+		var r = await _do_ping_dian(p, t, func(): return target_valid.call(t))
+		if r == RPS_INVALID or not target_valid.call(t):
 			return
 		if r == RPS_WIN:
 			wins += 1
@@ -6131,16 +6151,18 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 	# 胜负各半已单独处理；成功才允许再次主动发动。
 	_update_debug("%s 拼点赢 %d/%d！输给你的角色受到 1 点伤害！" % [p.player_name, wins, n])
 	for t in losers:
+		if not action_valid.call():
+			return
 		if not t.is_alive():
 			continue
 		if _game_over:
 			break
 		await _deal_damage(p, t, 1, EffectChain.DamageType.PHYSICAL)
-		if not p.is_alive():
+		if not action_valid.call():
 			break  # 自己已死（如荆棘反伤），不再继续
 	# 严格超过一半且成功结算后，才允许再次主动发动。
 	var can_repeat = func():
-		return _paid_skill_rps_valid(p, null, revision) and players.has(p) \
+		return action_valid.call() and players.has(p) \
 			and p.general_name == "史蒂芬·彼特先斯" and not _zhuangbi_blocked_this_phase
 	if can_repeat.call():
 		var again = 0
@@ -8325,6 +8347,8 @@ func _on_game_over(winner_identity: String):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_zhuangbi_execution_generation += 1
+	_zhuangbi_execution_owner = -1
 	_campus_execution_generation += 1
 	_campus_execution_owner = -1
 	_gay_execution_generation += 1
