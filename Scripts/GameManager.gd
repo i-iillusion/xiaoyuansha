@@ -1856,8 +1856,9 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 					and players.has(p) and players.has(target) and p.is_alive() \
 					and target.is_alive() and not _is_kneeling(p) and not _is_kneeling(target)
 			var replacements: Array = []
-			var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements)
-			await _resolve_prep_effect(p, [target], effect_sub, actions, replacements, valid, action_revision)
+			var roster: Array[Player] = []
+			var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements, false, roster)
+			await _resolve_prep_effect(p, [target], effect_sub, actions, replacements, valid, action_revision, "", roster)
 
 		CardData.CardSubType.DISMANTLE:
 			await _play_steal_card(p, target, false)
@@ -2595,7 +2596,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 		return
 	await _replace_paid_global(p, card_sub, actions, response_revision)
 
-func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int):
+func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = []):
 	_sync_all_ui()
 	turn_manager.use_card("aoe")
 	_reset_play_countdown_if_p0()
@@ -2603,11 +2604,8 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 	_update_debug("%s 使用了【%s】，所有人需出【%s】或受到 1 点伤害" % [p.player_name, card_name, required_name])
 
 	# 从当前玩家座位顺时针依次结算
-	var start_seat = p.seat_index
-	for i in range(1, player_count):
-		var target_seat = (start_seat + i) % player_count
-		var target = players[target_seat]
-		if not target.is_alive():
+	for target in _prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster):
+		if not players.has(target) or not target.is_alive():
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
 		if _game_over or response_revision != turn_manager.get_context_revision():
@@ -2770,7 +2768,7 @@ func _play_peach_garden():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.PEACH_GARDEN, actions, revision)
 
-func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int):
+func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
 	_reset_play_countdown_if_p0()
@@ -2778,11 +2776,8 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 	_update_debug("%s 使用了【桃园结义】，所有角色回复 1 点体力" % p.player_name)
 
 	# 从使用者开始顺时针依次结算（与南蛮/万箭方向一致）
-	var start_seat = p.seat_index
-	for i in range(player_count):
-		var seat = (start_seat + i) % player_count
-		var target = players[seat]
-		if not target.is_alive():
+	for target in _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster):
+		if not players.has(target) or not target.is_alive():
 			continue
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -2820,7 +2815,7 @@ func _play_harvest():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.HARVEST, actions, revision)
 
-func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int):
+func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
 	_reset_play_countdown_if_p0()
@@ -2829,11 +2824,8 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 	_update_debug("每名角色摸「已损失体力值」数量的牌（体力上限 - 当前体力），最多 3 张")
 
 	# 从使用者开始顺时针依次结算（与桃园结义方向一致）
-	var start_seat = p.seat_index
-	for i in range(player_count):
-		var seat = (start_seat + i) % player_count
-		var target = players[seat]
-		if not target.is_alive():
+	for target in _prep_group_scope(p, CardData.CardSubType.HARVEST, roster):
+		if not players.has(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 
@@ -2881,7 +2873,7 @@ func _play_disarm():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.DISARM, actions, revision)
 
-func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int):
+func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
@@ -2890,11 +2882,8 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 	_update_debug("所有有装备的角色弃置所有装备牌，之后摸相同数量的牌")
 
 	# 从使用者开始顺时针依次结算（与桃园结义/五谷丰登方向一致）
-	var start_seat = p.seat_index
-	for i in range(player_count):
-		var seat = (start_seat + i) % player_count
-		var target = players[seat]
-		if not target.is_alive():
+	for target in _prep_group_scope(p, CardData.CardSubType.DISARM, roster):
+		if not players.has(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 
@@ -2961,12 +2950,29 @@ func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) 
 	return candidates
 
 # Q14：群体互换后按新牌条件生效，合条件目标为空也可更换。
-func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int, initial_multi: bool = false) -> Array:
+func _prep_group_roster(p: Player) -> Array[Player]:
+	var roster: Array[Player] = []
+	for i in range(players.size()):
+		var target = players[(p.seat_index + i) % players.size()]
+		if target.is_alive(): roster.append(target)
+	return roster
+
+# 保存声明范围，不用满血/无装备/免疫后的实际起效人数改写AOE分类。
+# 新牌最终包含/排除使用者，但不在逐目标结算时补入后来出现的人物。
+func _prep_group_scope(p: Player, sub: int, roster: Array[Player] = []) -> Array[Player]:
+	var scope: Array[Player] = []
+	var declared = _prep_group_roster(p) if roster.is_empty() else roster
+	for target in declared:
+		if target == p and sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS]: continue
+		scope.append(target)
+	return scope
+
+func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int, initial_multi: bool = false, roster: Array[Player] = []) -> Array:
 	var candidates: Array = []
 	if current_sub in GLOBAL_TRICKS:
 		if current_sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS] \
-				and _prep_other_single(attacker) != null:
-			candidates = _prep_fixed_candidates(attacker, _prep_other_single(attacker), current_sub)
+				and _prep_other_single(attacker, roster) != null:
+			candidates = _prep_fixed_candidates(attacker, _prep_other_single(attacker, roster), current_sub)
 	elif not initial_multi and target != null:
 		candidates = _prep_fixed_candidates(attacker, target, current_sub)
 	for sub in GLOBAL_TRICKS:
@@ -2978,10 +2984,11 @@ func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int,
 	return candidates
 
 # 两人例外按存活玩家判断，不能把“AOE只有一人实际受伤”当两人局。
-func _prep_other_single(attacker: Player) -> Player:
-	var alive: Array[Player] = []
-	for p in players:
-		if p.is_alive(): alive.append(p)
+func _prep_other_single(attacker: Player, roster: Array[Player] = []) -> Player:
+	var alive: Array[Player] = roster.duplicate()
+	if roster.is_empty():
+		for p in players:
+			if p.is_alive(): alive.append(p)
 	if alive.size() != 2 or not alive.has(attacker): return null
 	return alive[1] if alive[0] == attacker else alive[0]
 
@@ -2991,36 +2998,37 @@ func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], 
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and not _is_kneeling(p)
 	var replacements: Array = []
+	var roster: Array[Player] = []
 	var target = _prep_other_single(p)
-	var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements, true)
-	await _resolve_prep_effect(p, [] if target == null else [target], effect_sub, actions, replacements, valid, revision)
+	var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements, true, roster)
+	await _resolve_prep_effect(p, [] if target == null else [target], effect_sub, actions, replacements, valid, revision, "", roster)
 
 # 共用已付费派发；中间类型不执行效果，也不计次数。
-func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions: Array[CardActionEvent], replacements: Array, allowed: Callable, revision: int, zone: String = ""):
+func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions: Array[CardActionEvent], replacements: Array, allowed: Callable, revision: int, zone: String = "", roster: Array[Player] = []):
 	var generation = _dying_lifecycle_generation
 	if sub == CHOICE_INVALID or not allowed.call():
 		_abandon_card_actions(actions)
 		return
 	match sub:
 		CardData.CardSubType.BARBARIAN_INVASION:
-			await _resolve_paid_aoe(p, CardData.CardSubType.STRIKE, "南蛮入侵", "杀", actions, revision)
+			await _resolve_paid_aoe(p, CardData.CardSubType.STRIKE, "南蛮入侵", "杀", actions, revision, roster)
 			return
 		CardData.CardSubType.VOLLEY_OF_ARROWS:
-			await _resolve_paid_aoe(p, CardData.CardSubType.DODGE, "万箭齐发", "闪", actions, revision)
+			await _resolve_paid_aoe(p, CardData.CardSubType.DODGE, "万箭齐发", "闪", actions, revision, roster)
 			return
 		CardData.CardSubType.PEACH_GARDEN:
-			await _resolve_paid_peach_garden(p, actions, revision)
+			await _resolve_paid_peach_garden(p, actions, revision, roster)
 			return
 		CardData.CardSubType.HARVEST:
-			await _resolve_paid_harvest(p, actions, revision)
+			await _resolve_paid_harvest(p, actions, revision, roster)
 			return
 		CardData.CardSubType.DISARM:
-			await _resolve_paid_disarm(p, actions, revision)
+			await _resolve_paid_disarm(p, actions, revision, roster)
 			return
-	var target: Player = original_targets[0] if not original_targets.is_empty() else _prep_other_single(p)
+	var target: Player = original_targets[0] if not original_targets.is_empty() else _prep_other_single(p, roster)
 	for replacement in replacements:
-		if replacement in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS] and _prep_other_single(p) != null:
-			target = _prep_other_single(p)
+		if replacement in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS] and _prep_other_single(p, roster) != null:
+			target = _prep_other_single(p, roster)
 	if sub == CardData.CardSubType.IRON_CHAIN:
 		var targets: Array[Player] = []
 		if replacements.is_empty(): targets.assign(original_targets)
@@ -3048,8 +3056,9 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		return
 	_abandon_card_actions(actions)
 
-func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array, group_origin: bool = false) -> int:
+func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array, group_origin: bool = false, roster: Array[Player] = []) -> int:
 	var generation = _dying_lifecycle_generation
+	roster.assign(_prep_group_roster(attacker))
 	if not allowed.call():
 		return CHOICE_INVALID
 	var leo: Player = null
@@ -3071,8 +3080,8 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 		if leo.prep_tokens <= 0 or not players.has(leo) or not leo.is_alive() \
 				or _is_kneeling(leo) or leo.general_name != "里奥·普利威尔":
 			return current_sub
-		var current_target = _prep_other_single(attacker) if current_sub in GLOBAL_TRICKS else target
-		var candidates = _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty())
+		var current_target = _prep_other_single(attacker, roster) if current_sub in GLOBAL_TRICKS else target
+		var candidates = _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster)
 		if candidates.is_empty(): return current_sub
 		var selected: int = -1
 		if _prep_replace_override.is_valid():
@@ -3089,7 +3098,7 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 		if selected == CHOICE_INVALID or not valid.call():
 			return CHOICE_INVALID
 		# 每次确认均复查；拒绝/超时保留当前牌效果及本次未用标记。
-		if not candidates.has(selected) or not _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty()).has(selected):
+		if not candidates.has(selected) or not _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster).has(selected):
 			return current_sub
 		leo.prep_tokens -= 1
 		replacements.append(selected)
@@ -3140,8 +3149,9 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	if not await _consume_trick(attacker, sub, actions):
 		return
 	var replacements: Array = []
-	var effect_sub = await _maybe_prep_fixed_effect(attacker, target, sub, valid, replacements)
-	await _resolve_prep_effect(attacker, [target], effect_sub, actions, replacements, valid, revision, zone)
+	var roster: Array[Player] = []
+	var effect_sub = await _maybe_prep_fixed_effect(attacker, target, sub, valid, replacements, false, roster)
+	await _resolve_prep_effect(attacker, [target], effect_sub, actions, replacements, valid, revision, zone, roster)
 
 # 已支付的拆/顺效果入口：不再取手牌、不重发使用事实。
 # 原入口仍在支付前选区域；替换后按PREP-12强制选原目标的一张牌。
@@ -4302,8 +4312,9 @@ func _execute_iron_chain(targets: Array[Player]):
 			if not players.has(target) or not target.is_alive() or _is_kneeling(target): return false
 		return true
 	var target: Player = targets[0] if targets.size() == 1 else null
-	var effect_sub = await _maybe_prep_fixed_effect(p, target, CardData.CardSubType.IRON_CHAIN, valid, replacements, targets.size() != 1)
-	await _resolve_prep_effect(p, targets, effect_sub, actions, replacements, valid, revision)
+	var roster: Array[Player] = []
+	var effect_sub = await _maybe_prep_fixed_effect(p, target, CardData.CardSubType.IRON_CHAIN, valid, replacements, targets.size() != 1, roster)
+	await _resolve_prep_effect(p, targets, effect_sub, actions, replacements, valid, revision, "", roster)
 
 func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[CardActionEvent], force_chained: bool = false):
 	_sync_all_ui()

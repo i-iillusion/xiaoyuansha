@@ -244,6 +244,8 @@ func _run():
 	await prep_paid_global_cases.run(self)
 	var prep_group_replace_cases = load("res://Test/prep_group_replace_cases.gd").new()
 	await prep_group_replace_cases.run(self)
+	var prep_group_scope_cases = load("res://Test/prep_group_scope_cases.gd").new()
+	await prep_group_scope_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
