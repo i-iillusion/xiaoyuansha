@@ -25,7 +25,9 @@ var _countdown_display_state: String = ""
 signal game_started()
 signal game_over(winner_identity: String)
 signal card_action_committed(event: CardActionEvent)
+signal card_action_completed(event: CardActionEvent)
 var _card_action_serial: int = 0
+var _pending_card_actions: Dictionary = {}
 
 @export var player_count: int = 5
 @export var auto_start: bool = true
@@ -1753,13 +1755,33 @@ func _clear_pending_determined_card():
 
 # 仅在具体规则入口确认使用/打出后调用，不能放进通用取牌/弃牌函数。
 func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind = CardActionEvent.Kind.USE,
-		from_hand: bool = true, is_virtual: bool = false) -> CardActionEvent:
+		from_hand: bool = true, is_virtual: bool = false, defer_completion: bool = false) -> CardActionEvent:
 	_card_action_serial += 1
 	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
-	# 同步消费已成立事实，先于外部观察者；不从弃牌/费用或当前PLAY操作者推导。
-	_apply_prep_card_action(p, event)
+	if defer_completion:
+		_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
+	else:
+		# F02b-1迁移过渡：尚未迁移的入口仍有已登记的早累计缺口。
+		# 不为这些入口伪造完成事实；后续逐链迁移并删除此兼容分支。
+		_apply_prep_card_action(p, event)
 	card_action_committed.emit(event)
 	return event
+
+func _complete_card_actions(events: Array):
+	var completed: Array[CardActionEvent] = []
+	for event in events:
+		if not event is CardActionEvent or not _pending_card_actions.has(event.id): continue
+		var receipt: Dictionary = _pending_card_actions[event.id]
+		if receipt.event != event: continue
+		_pending_card_actions.erase(event.id)
+		if receipt.generation != _dying_lifecycle_generation or not players.has(receipt.actor): continue
+		if event.settlement_completed: continue
+		event.settlement_completed = true
+		_apply_prep_card_action(receipt.actor, event)
+		completed.append(event)
+	# 全批计数先完成，再通知观察者；无懈链迁移可共用该批量边界。
+	for event in completed:
+		card_action_completed.emit(event)
 
 func _apply_prep_card_action(p: Player, event: CardActionEvent):
 	if p.general_name != "里奥·普利威尔" or p.is_dead() or not players.has(p): return
@@ -2165,12 +2187,13 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			turn_manager.use_card("wine")
-			_record_card_action(p, used_wine)
+			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false, true)
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
 			deck.discard(used_wine)
 			_update_debug("%s 使用了【酒】（当前 %d 层，下一张【杀】伤害+%d）" % [p.player_name, p.wine_stacks, p.wine_stacks])
+			_complete_card_actions([action])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2182,10 +2205,11 @@ func play_card(sub: CardData.CardSubType):
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
-			_record_card_action(p, used_peach)
+			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false, true)
 			var healed = _heal_with_staff(p)
 			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
+			_complete_card_actions([action])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2623,11 +2647,12 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 	if used_card == null:
 		return BasicResponseOutcome.DECLINED
 	deck.discard(used_card)
-	_record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE)
+	var action = _record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE, true, false, true)
 	if expected == CardData.CardSubType.STRIKE:
 		_record_strike_played(p)
 	if expected == CardData.CardSubType.DODGE:
 		_try_bagua_draw(p)
+	_complete_card_actions([action])
 	_sync_all_ui()
 	return BasicResponseOutcome.PAID
 
@@ -8933,6 +8958,7 @@ func _on_game_over(winner_identity: String):
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
 	_dying_lifecycle_generation += 1
+	_pending_card_actions.clear()
 	_awaken_in_progress.clear()
 	_card_target_generation += 1
 	_card_target_confirm_owner = -1
@@ -9102,13 +9128,14 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if card == null:
 		return false
 	deck.discard(card)
-	_record_card_action(rescuer, card)
+	var action = _record_card_action(rescuer, card, CardActionEvent.Kind.USE, true, false, true)
 	var healed = 1
 	if sub == CardData.CardSubType.PEACH:
 		healed = _heal_with_staff(rescuer, dying)
 	else:
 		dying.heal(1)
 	_update_debug("%s 对 %s 使用【%s】，回复 %d 点体力（%d/%d）" % [rescuer.player_name, dying.player_name, CardData.get_type_name(sub), healed, dying.hp, dying.max_hp])
+	_complete_card_actions([action])
 	_sync_all_ui()
 	return true
 

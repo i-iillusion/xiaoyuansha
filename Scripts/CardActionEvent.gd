@@ -15,6 +15,8 @@ var sub_type: CardData.CardSubType
 var card: CardBase
 var from_hand: bool
 var is_virtual: bool
+# 成立与完成分离；仅由持有本次凭据的真实结算入口完成。
+var settlement_completed: bool = false
 
 func _init(serial: int, tm: TurnManager, actor: Player, resource: CardBase,
 		action_kind: Kind, hand_origin: bool, virtual_use: bool):
