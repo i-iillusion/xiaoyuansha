@@ -1849,11 +1849,16 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			_complete_card_actions([action])
 
 		CardData.CardSubType.DUEL:
-			if not await _consume_trick(p, CardData.CardSubType.DUEL):
+			var actions: Array[CardActionEvent] = []
+			if not await _consume_trick(p, CardData.CardSubType.DUEL, actions):
 				return
 			_sync_all_ui()
 			turn_manager.use_card("duel")
-			await _play_duel(p, target)
+			var result = await _play_duel(p, target)
+			if result == CHOICE_INVALID or action_revision != turn_manager.get_context_revision():
+				_abandon_card_actions(actions)
+				return
+			_complete_card_actions(actions)
 
 		CardData.CardSubType.DISMANTLE:
 			await _play_steal_card(p, target, false)
@@ -2948,7 +2953,8 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 
 	# 确认后消耗手牌
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
-	if not await _consume_trick(attacker, sub):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(attacker, sub, actions):
 		return
 	turn_manager.use_card("steal")
 	_reset_play_countdown_if_p0()
@@ -2957,28 +2963,45 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	# 成为目标时先处理烈火盾；无效后不选装备、不移动任何目标牌。
 	var shield_result = await _try_liehuo_nullify_result(target, sub, valid)
 	if shield_result != LiehuoOutcome.NOT_USED:
+		if shield_result == LiehuoOutcome.PREVENTED:
+			_complete_card_actions(actions)
+		else:
+			_abandon_card_actions(actions)
+		_sync_all_ui()
 		return
 	if not valid.call():
+		_abandon_card_actions(actions)
 		return
 
 	# 无懈可击：效果即将对目标生效前
 	var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name], valid)
 	if nullified == NullificationOutcome.INVALIDATED:
+		_abandon_card_actions(actions)
 		return
 	if nullified == NullificationOutcome.NULLIFIED:
 		_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
+		_complete_card_actions(actions)
+		_sync_all_ui()
 		return
 
 	if not valid.call():
+		_abandon_card_actions(actions)
 		return
 	match zone:
 		"hand":
 			await _steal_hand(attacker, target, is_snatch, card_name)
 		"equip":
-			await _steal_equip(attacker, target, is_snatch, card_name, valid)
+			if await _steal_equip(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
+				_abandon_card_actions(actions)
+				_sync_all_ui()
+				return
 		"judgment":
 			await _steal_judgment(attacker, target, is_snatch, card_name)
 
+	if not valid.call():
+		_abandon_card_actions(actions)
+		return
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # 手牌：目标 -1；顺手牵羊时自己 +1
@@ -3030,14 +3053,14 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 		slot = slots[ai_driver.rng.randi_range(0, slots.size() - 1)]
 
 	if not valid.call() or not slots.has(slot) or not target.equipment.has(slot):
-		return
+		return CHOICE_INVALID
 	var selected_card: CardBase = offered_cards.get(slot, null)
 	if selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card:
-		return
+		return CHOICE_INVALID
 	var sub = target.equipment[slot]
 	if _game_over or target.is_dead() or target.equipment.get(slot, -1) != sub \
 			or (selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card):
-		return
+		return CHOICE_INVALID
 	# 持久状态由原牌在卸下/装备时保存恢复；入手不授予佩戴效果。
 	var equipment_card = target.remove_equipment(slot)
 	if equipment_card == null:
@@ -3045,7 +3068,8 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if is_snatch:
 		attacker.determined_cards.append(equipment_card)
 		if sub == CardData.CardSubType.HIDDEN_EQUIPMENT:
-			await _declare_stolen_hidden_equipment(target, attacker, equipment_card, valid)
+			if await _declare_stolen_hidden_equipment(target, attacker, equipment_card, valid) == CHOICE_INVALID:
+				return CHOICE_INVALID
 		_update_debug("%s 获得 %s 的【%s】，已加入你的「已确定的牌」" % [attacker.player_name, target.player_name, CardData.get_type_name(sub)])
 	else:
 		deck.discard(equipment_card)
@@ -3139,7 +3163,7 @@ func _default_stolen_hidden_sub(card: CardBase, options: Array[int]) -> int:
 	return options[randi() % options.size()]
 
 func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player, card: CardBase,
-		allowed: Callable = Callable()) -> void:
+		allowed: Callable = Callable()):
 	if card == null or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
 			or not recipient.determined_cards.has(card) or (allowed.is_valid() and not allowed.call()):
 		return
@@ -3156,14 +3180,14 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 			names.append(CardData.get_type_name(sub))
 		var idx = await _show_sao_reveal_picker(names, allowed)
 		if allowed.is_valid() and idx == CHOICE_INVALID:
-			return
+			return CHOICE_INVALID
 		if idx >= 0 and idx < options.size():
 			chosen = options[idx]
 	else:
 		# AI 的确定性声明策略；不改变人类玩家的名称选择。
 		chosen = options[0]
 	if allowed.is_valid() and (chosen == CHOICE_INVALID or not allowed.call()):
-		return
+		return CHOICE_INVALID
 	if chosen < 0:
 		chosen = _default_stolen_hidden_sub(card, options)
 	if _game_over or card.sub_type != CardData.CardSubType.HIDDEN_EQUIPMENT \
@@ -4000,7 +4024,8 @@ func _execute_iron_chain(targets: Array[Player]):
 	# 铁索连环：选完目标执行时重置每步倒计时
 	_reset_play_countdown_if_p0()
 
-	if not await _consume_trick(p, CardData.CardSubType.IRON_CHAIN):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(p, CardData.CardSubType.IRON_CHAIN, actions):
 		return
 	_sync_all_ui()
 
@@ -4013,7 +4038,8 @@ func _execute_iron_chain(targets: Array[Player]):
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
 		if nullified == NullificationOutcome.INVALIDATED:
-			break
+			_abandon_card_actions(actions)
+			return
 		if not t.is_alive() or _is_kneeling(t):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
@@ -4023,6 +4049,7 @@ func _execute_iron_chain(targets: Array[Player]):
 		var state = "进入连环状态" if t.chained else "退出连环状态"
 		_update_debug("%s %s" % [t.player_name, state])
 
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # 铁索连环传导：属性伤害传导给其它连环角色，之后所有人退出连环
@@ -4074,7 +4101,7 @@ func _play_duel(attacker: Player, target: Player):
 	# 无懈可击：决斗即将对目标生效前
 	var nullified = await _ask_nullification_chain_result("%s的【决斗】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, target.player_name])
 	if nullified == NullificationOutcome.INVALIDATED:
-		return
+		return CHOICE_INVALID
 	if nullified == NullificationOutcome.NULLIFIED:
 		_update_debug("【决斗】的效果被【无懈可击】抵消")
 		return
@@ -4099,14 +4126,14 @@ func _play_duel(attacker: Player, target: Player):
 	while true:
 		# 【霸王】：非杰基方每次响应需打出两张杀（杰基本人只需一张）
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
-			break
+			return CHOICE_INVALID
 		var needs_two = jacqui != null and current != jacqui
 		var can_respond = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
-			break
+			return CHOICE_INVALID
 
 		if can_respond == BasicResponseOutcome.INVALIDATED:
-			break
+			return CHOICE_INVALID
 		if can_respond == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
 			# 【霸王】：对方还需打出第二张杀
@@ -4115,19 +4142,19 @@ func _play_duel(attacker: Player, target: Player):
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
-					if damage.invalidated: return
+					if damage.invalidated: return CHOICE_INVALID
 					break
 				var cont = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
 				if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
-					break
+					return CHOICE_INVALID
 				if cont == BasicResponseOutcome.INVALIDATED:
-					break
+					return CHOICE_INVALID
 				if cont == BasicResponseOutcome.PAID:
 					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)
 					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
-					if damage.invalidated: return
+					if damage.invalidated: return CHOICE_INVALID
 					break
 			# 交换攻守
 			var tmp = current
@@ -4137,7 +4164,7 @@ func _play_duel(attacker: Player, target: Player):
 			# 无法出杀 → 受伤害（伤害来源 = 决斗对手；【暴怒】布鲁斯·萨维奇作为伤害来源时附加已损失体力值伤害）
 			_update_debug("%s 在【决斗】中无法出【杀】" % current.player_name)
 			var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
-			if damage.invalidated: return
+			if damage.invalidated: return CHOICE_INVALID
 			break
 
 	_sync_all_ui()
