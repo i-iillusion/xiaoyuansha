@@ -130,6 +130,7 @@ var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
 var _prep_replace_override: Callable = Callable()
 var _prep_steal_pick_override: Callable = Callable()
+var _borrowed_second_target_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -2991,6 +2992,38 @@ func _prep_other_single(attacker: Player, roster: Array[Player] = []) -> Player:
 			if p.is_alive(): alive.append(p)
 	if alive.size() != 2 or not alive.has(attacker): return null
 	return alive[1] if alive[0] == attacker else alive[0]
+
+# PREP-13：原版和替换后的借刀，均由原使用者不可取消地选择第二目标。
+# 仅选择，不支付借刀/杀或移动武器；真实结算入口下一子任务接入。
+func _choose_borrowed_second_target(user: Player, first: Player, allowed: Callable = Callable()) -> Variant:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	if first == null or user == null or not players.has(first) or not players.has(user): return CHOICE_INVALID
+	var weapon = _equipment_resource_for_pick(first, "weapon")
+	var candidates = _get_strike_targets(first)
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and players.has(user) and players.has(first) \
+			and user != first and user.is_alive() and first.is_alive() and not _is_kneeling(user) and not _is_kneeling(first) \
+			and weapon != null and _equipment_resource_for_pick(first, "weapon") == weapon \
+			and candidates == _get_strike_targets(first) and (not allowed.is_valid() or allowed.call())
+	if not valid.call() or candidates.is_empty(): return CHOICE_INVALID
+	var selected: int
+	if _borrowed_second_target_override.is_valid():
+		selected = await _borrowed_second_target_override.call(candidates.duplicate())
+	elif user.seat_index == 0:
+		var labels: Array = []
+		for target in candidates: labels.append(target.player_name)
+		selected = await _show_sao_reveal_picker(labels, valid, "【借刀杀人】选择 %s 使用杀的目标（不能取消，超时随机）：" % first.player_name, false)
+	else:
+		var seats: Array = []
+		for target in candidates: seats.append(target.seat_index)
+		var seat = await _choose_ai_response(user, "borrowed_second_target", seats, {"first": first.seat_index})
+		selected = CHOICE_INVALID if seat == CHOICE_INVALID else seats.find(seat)
+	if selected == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+	if selected == -1: selected = ai_driver.rng.randi_range(0, candidates.size() - 1)
+	if selected < 0 or selected >= candidates.size(): return CHOICE_INVALID
+	return candidates[selected]
 
 func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], revision: int):
 	var generation = _dying_lifecycle_generation
