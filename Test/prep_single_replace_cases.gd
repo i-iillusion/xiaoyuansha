@@ -8,6 +8,7 @@ func _reset(suite):
 	game._sacrifice_actor_override = Callable()
 	game._ai_response_override = func(_view, _kind, _options): return -1
 	game._prep_replace_override = func(_leo, _user, _target, _sub, _options): return -1
+	game._prep_steal_pick_override = Callable()
 	game._nullify_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
 	game._duel_respond_override = func(): return false
@@ -82,9 +83,12 @@ func run(suite):
 				var windows: Array[int] = [0]
 				game._prep_replace_override = func(owner, actor, fixed, original_sub, candidates):
 					windows[0] += 1
+					var expected: Array = [CardData.CardSubType.IRON_CHAIN] if mode in ["limit", "armor", "awake", "distance"] \
+						else [CardData.CardSubType.DUEL, CardData.CardSubType.IRON_CHAIN]
+					if sub != CardData.CardSubType.SNATCH and mode != "distance": expected.append(CardData.CardSubType.SNATCH)
+					if sub != CardData.CardSubType.DISMANTLE: expected.append(CardData.CardSubType.DISMANTLE)
 					suite.check(owner == leo and actor == user and fixed == target and original_sub == sub
-						and candidates == ([CardData.CardSubType.IRON_CHAIN] if mode in ["limit", "armor", "awake", "distance"]
-							else [CardData.CardSubType.DUEL, CardData.CardSubType.IRON_CHAIN]),
+						and candidates == expected,
 						"F02b-2a：候选保持原使用者/目标，非法决斗不入候选且无舍己")
 					suite.check(events.size() == 1 and not events[0].settlement_completed and leo.prep_tokens == 1,
 						"F02b-2a：原牌已成立，尚未提前累计或支付标记")

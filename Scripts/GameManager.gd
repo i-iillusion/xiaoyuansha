@@ -129,6 +129,7 @@ var _ai_hand_snapshot: HandSelection
 var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
 var _prep_replace_override: Callable = Callable()
+var _prep_steal_pick_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -1862,6 +1863,9 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			if effect_sub == CardData.CardSubType.IRON_CHAIN:
 				await _resolve_paid_iron_chain(p, [target], actions, true)
 				return
+			if effect_sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
+				await _resolve_paid_steal(p, target, effect_sub == CardData.CardSubType.SNATCH, "", actions, valid, true)
+				return
 			_sync_all_ui()
 			turn_manager.use_card("duel")
 			var result = await _play_duel(p, target)
@@ -2941,7 +2945,7 @@ func _play_disarm():
 # ============================
 
 # is_snatch = true → 顺手牵羊（获取），false → 过河拆桥（弃置）
-# F02b-2b-1只接固定目标决斗/铁索；其他候选按后续关卡迁移，不是规则禁用。
+# 固定单体接决斗/铁索/拆顺；群体与借刀按后续关卡迁移，不是规则禁用。
 # 原实体/成立事件由调用者持有；此处只选择本次效果，不再付手牌。
 func _prep_single_duel_legal(attacker: Player, target: Player) -> bool:
 	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2) \
@@ -2953,6 +2957,10 @@ func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) 
 		candidates.append(CardData.CardSubType.DUEL)
 	if current_sub != CardData.CardSubType.IRON_CHAIN and get_trick_targets(attacker, CardData.CardSubType.IRON_CHAIN).has(target):
 		candidates.append(CardData.CardSubType.IRON_CHAIN)
+	if turn_manager.can_use("steal"):
+		for sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
+			if sub != current_sub and get_trick_targets(attacker, sub).has(target):
+				candidates.append(sub)
 	return candidates
 
 func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array) -> int:
@@ -3063,11 +3071,11 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 			_complete_card_actions(actions)
 		_sync_all_ui()
 		return
-	await _resolve_paid_steal(attacker, target, is_snatch, zone, actions, valid)
+	await _resolve_paid_steal(attacker, target, effect_sub == CardData.CardSubType.SNATCH, zone, actions, valid, not replacements.is_empty())
 
 # 已支付的拆/顺效果入口：不再取手牌、不重发使用事实。
-# 原入口仍在支付前选区域；替换后的强制选牌政策另行接入。
-func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable):
+# 原入口仍在支付前选区域；替换后按PREP-12强制选原目标的一张牌。
+func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable, forced_pick: bool = false):
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
 	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
 	if not valid.call():
@@ -3104,6 +3112,13 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 	if not valid.call():
 		_abandon_card_actions(actions)
 		return
+	if forced_pick:
+		if await _resolve_forced_steal_pick(attacker, target, is_snatch, valid) == CHOICE_INVALID:
+			_abandon_card_actions(actions)
+		else:
+			_complete_card_actions(actions)
+		_sync_all_ui()
+		return
 	match zone:
 		"hand":
 			await _steal_hand(attacker, target, is_snatch, card_name)
@@ -3120,6 +3135,69 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 		return
 	_complete_card_actions(actions)
 	_sync_all_ui()
+
+# PREP-12：已付费换牌后，全部合法牌在同一个基础读条窗口选择。
+# 手牌只显示背面/序号，不向使用者暴露目标具体手牌；超时在全体牌中随机。
+func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: bool, allowed: Callable) -> int:
+	var hand_snapshot = HandSelection.new(target)
+	var judgments = target.judgment_cards.duplicate()
+	var equips: Dictionary = {}
+	var choices: Array = []
+	var labels: Array = []
+	for i in hand_snapshot.cards.size():
+		choices.append({"zone": "hand", "index": i})
+		labels.append("手牌 %d（背面）" % (i + 1))
+	for slot in target.get_equip_slots():
+		var card = _equipment_resource_for_pick(target, slot)
+		equips[slot] = card
+		choices.append({"zone": "equip", "slot": slot})
+		labels.append("%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(target.equipment[slot])])
+	for i in judgments.size():
+		choices.append({"zone": "judgment", "index": i})
+		labels.append("判定：" + judgments[i].card_name)
+	var valid = func():
+		if not allowed.call() or target.hand != hand_snapshot.hand or target.determined_cards != hand_snapshot.determined \
+				or target.judgment_cards != judgments or target.get_equip_slots().size() != equips.size():
+			return false
+		for slot in equips:
+			if not target.equipment.has(slot) or _equipment_resource_for_pick(target, slot) != equips[slot]: return false
+		return true
+	if not valid.call(): return CHOICE_INVALID
+	if choices.is_empty(): return 0
+	var selected: int
+	if _prep_steal_pick_override.is_valid():
+		selected = await _prep_steal_pick_override.call(choices.duplicate(true))
+	elif attacker.seat_index == 0:
+		selected = await _show_sao_reveal_picker(labels, valid, "选择%s %s 的一张牌（不能取消，超时随机）：" \
+			% ["获得" if is_snatch else "弃置", target.player_name], false)
+	else:
+		selected = ai_driver.rng.randi_range(0, choices.size() - 1)
+	if selected == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+	if selected == -1: selected = ai_driver.rng.randi_range(0, choices.size() - 1)
+	if selected < 0 or selected >= choices.size(): return CHOICE_INVALID
+	var choice: Dictionary = choices[selected]
+	var taken: CardBase
+	match choice.zone:
+		"hand":
+			var cards = hand_snapshot.take([int(choice.index)], 1)
+			if cards.size() != 1: return CHOICE_INVALID
+			taken = cards[0]
+			if is_snatch: attacker.hand.append(taken)
+		"equip":
+			taken = target.remove_equipment(choice.slot)
+			if taken == null: return CHOICE_INVALID
+			if is_snatch:
+				attacker.determined_cards.append(taken)
+				if taken.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+					if await _declare_stolen_hidden_equipment(target, attacker, taken, allowed) == CHOICE_INVALID: return CHOICE_INVALID
+		"judgment":
+			taken = judgments[choice.index]
+			target.judgment_cards.remove_at(choice.index)
+			if is_snatch: attacker.determined_cards.append(taken)
+	if not is_snatch and taken != null: deck.discard(taken)
+	_update_debug("%s %s %s 的一张%s牌" % [attacker.player_name, "获得" if is_snatch else "弃置", target.player_name,
+		"手" if choice.zone == "hand" else ("装备" if choice.zone == "equip" else "判定")])
+	return 0
 
 # 手牌：目标 -1；顺手牵羊时自己 +1
 func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: String):
@@ -4157,6 +4235,9 @@ func _execute_iron_chain(targets: Array[Player]):
 		var effect_sub = await _maybe_prep_fixed_effect(p, target, CardData.CardSubType.IRON_CHAIN, valid, replacements)
 		if effect_sub == CHOICE_INVALID:
 			_abandon_card_actions(actions)
+			return
+		if effect_sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
+			await _resolve_paid_steal(p, target, effect_sub == CardData.CardSubType.SNATCH, "", actions, valid, true)
 			return
 		if effect_sub == CardData.CardSubType.DUEL:
 			turn_manager.use_card("duel")
@@ -6128,7 +6209,7 @@ func _show_choice_popup(title: String, buttons: Array, allowed: Callable = Calla
 	return await _wait_choice_prompt(overlay, answer, allowed, true, initial_step, remaining_out)
 
 # 明置具体装备选择弹窗（网格布局，装备多）：返回选中索引，取消返回 -1
-func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> int:
+func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable(), title: String = "选择明置为哪件装备：", include_cancel: bool = true) -> int:
 	if _game_over:
 		return CHOICE_INVALID
 	if texts.is_empty():
@@ -6148,7 +6229,7 @@ func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> in
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "选择明置为哪件装备："
+	label.text = title
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 20)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -6174,7 +6255,8 @@ func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable()) -> in
 	cancel_btn.custom_minimum_size = Vector2(190, 40)
 	cancel_btn.modulate = Color(0.7, 0.7, 0.7)
 	cancel_btn.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
-	vbox.add_child(cancel_btn)
+	if include_cancel: vbox.add_child(cancel_btn)
+	else: cancel_btn.free()
 
 	return await _wait_choice_prompt(overlay, answer, allowed)
 

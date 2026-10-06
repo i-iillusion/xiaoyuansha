@@ -238,6 +238,8 @@ func _run():
 	await prep_fixed_chain_replace_cases.run(self)
 	var prep_paid_steal_cases = load("res://Test/prep_paid_steal_cases.gd").new()
 	await prep_paid_steal_cases.run(self)
+	var prep_steal_replace_cases = load("res://Test/prep_steal_replace_cases.gd").new()
+	await prep_steal_replace_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
