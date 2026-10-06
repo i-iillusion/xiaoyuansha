@@ -70,7 +70,7 @@ func run(suite):
 			if sub == CardData.CardSubType.NULLIFICATION:
 				game._ai_response_override = func(view, kind, options):
 					return sub if view.actor == 1 and kind == "nullification" and options.has(sub) else -1
-				await game._ask_nullification_round("F02a原使用事实")
+				await game._ask_nullification_chain_result("F02a原使用事实：完整链结束")
 			else:
 				game._sacrifice_actor_override = func(p, _target, _amount): return p == actor
 				await game._deal_damage(game.players[0], game.players[2], 1, EffectChain.DamageType.PHYSICAL)

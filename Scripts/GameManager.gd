@@ -4325,14 +4325,20 @@ func _ask_nullification_chain(desc: String) -> bool:
 
 func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable()) -> NullificationOutcome:
 	var pending: bool = false        # 当前是否有一张生效中的无懈
+	var actions: Array[CardActionEvent] = []
 	var round_desc: String = desc
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	while true:
 		var reply = await _ask_nullification_round_result(round_desc, allowed)
+		if reply.get("card_action") is CardActionEvent:
+			actions.append(reply.card_action)
 		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
+			_abandon_card_actions(actions)
 			return NullificationOutcome.INVALIDATED
 		if reply.outcome == NullificationOutcome.PASSED:
+			_complete_card_actions(actions)
+			_sync_all_ui()
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
 		pending = not pending
 		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
@@ -4341,6 +4347,9 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 # 询问一轮：按座位顺序询问所有存活角色，返回打出无懈的玩家名（无人打出返回 ""）
 func _ask_nullification_round(desc: String) -> String:
 	var reply = await _ask_nullification_round_result(desc)
+	# 单轮兼容入口仅报告支付；它不是完整反制链，不伪造结算完成。
+	if reply.get("card_action") is CardActionEvent:
+		_abandon_card_actions([reply.card_action])
 	return reply.actor_name if reply.outcome == NullificationOutcome.NULLIFIED else ""
 
 func _ask_nullification_round_result(desc: String, allowed: Callable = Callable()) -> Dictionary:
@@ -4399,14 +4408,14 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 					continue
 				deck.discard(used_card)
 				action_card = used_card
-			_record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
+			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill", true)
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
 			var revealed = await _maybe_ask_reveal()
 			if revealed == CHOICE_INVALID or not valid.call():
-				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
-			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name}
+				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": "", "card_action": action}
+			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name, "card_action": action}
 	return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
