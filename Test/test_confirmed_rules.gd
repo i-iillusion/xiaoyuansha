@@ -250,6 +250,8 @@ func _run():
 	borrowed_sword_foundation_cases.run(self)
 	var borrowed_second_target_cases = load("res://Test/borrowed_second_target_cases.gd").new()
 	await borrowed_second_target_cases.run(self)
+	var borrowed_paid_effect_cases = load("res://Test/borrowed_paid_effect_cases.gd").new()
+	await borrowed_paid_effect_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()

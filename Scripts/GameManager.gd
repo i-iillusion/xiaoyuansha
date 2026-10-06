@@ -131,6 +131,7 @@ var _ai_response_override: Callable = Callable()
 var _prep_replace_override: Callable = Callable()
 var _prep_steal_pick_override: Callable = Callable()
 var _borrowed_second_target_override: Callable = Callable()
+var _borrowed_strike_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -3024,6 +3025,111 @@ func _choose_borrowed_second_target(user: Player, first: Player, allowed: Callab
 	if selected == -1: selected = ai_driver.rng.randi_range(0, candidates.size() - 1)
 	if selected < 0 or selected >= candidates.size(): return CHOICE_INVALID
 	return candidates[selected]
+
+# CARD-04/Q18：借刀要求的杀可选择普通/火/雷杀；不查或占普通主动杀次数。
+func _choose_borrowed_strike(first: Player, second: Player, allowed: Callable) -> int:
+	var snapshot = HandSelection.new(first)
+	var valid = func():
+		return allowed.call() and first.hand == snapshot.hand and first.determined_cards == snapshot.determined \
+			and _get_strike_targets(first).has(second)
+	if not valid.call(): return CHOICE_INVALID
+	var options: Array = []
+	for sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]:
+		if HandPayment.has_card(first, sub): options.append(sub)
+	if options.is_empty(): return -1
+	var selected: int
+	if _borrowed_strike_override.is_valid(): selected = await _borrowed_strike_override.call(first, second, options.duplicate())
+	elif first.seat_index == 0:
+		var labels: Array = []
+		for sub in options: labels.append("使用【%s】" % CardData.get_type_name(sub))
+		labels.append("不出杀，交出武器")
+		var index = await _show_choice_popup("【借刀杀人】对 %s 使用杀，否则交出武器：" % second.player_name, labels, valid, false)
+		selected = options[index] if index >= 0 and index < options.size() else (CHOICE_INVALID if index == CHOICE_INVALID else -1)
+	else: selected = await _choose_ai_response(first, "borrowed_strike", options, {"target": second.seat_index})
+	if selected == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+	if selected == -1: return -1
+	return selected if options.has(selected) and HandPayment.has_card(first, selected) else CHOICE_INVALID
+
+# 已支付借刀效果；当前仅已明确的单目标且原使用者仍在场的分支。
+# Q19已按原版明确可追加目标，留下一子任务接方天选择；Q20死亡分支待答。
+# 菜单/替换入口仍未开放，不把范围验收当作整张牌已完成。
+func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	if user == null or first == null or not players.has(user) or not players.has(first):
+		_abandon_card_actions(actions)
+		return
+	var weapon = _equipment_resource_for_pick(first, "weapon")
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+			and players.has(user) and players.has(first) and user != first and user.is_alive() and first.is_alive() \
+			and not _is_kneeling(user) and not _is_kneeling(first) and weapon != null \
+			and _equipment_resource_for_pick(first, "weapon") == weapon and (not allowed.is_valid() or allowed.call())
+	if not valid.call() or not turn_manager.can_use("borrowed_sword"):
+		_abandon_card_actions(actions)
+		return
+	turn_manager.use_card("borrowed_sword")
+	var second = await _choose_borrowed_second_target(user, first, valid)
+	if not second is Player or not valid.call():
+		_abandon_card_actions(actions)
+		return
+	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid)
+	if nullified == NullificationOutcome.INVALIDATED or not valid.call():
+		_abandon_card_actions(actions)
+		return
+	if nullified == NullificationOutcome.NULLIFIED:
+		_complete_card_actions(actions)
+		_sync_all_ui()
+		return
+	# 尚未接方天追加目标窗口，不能临时按只能杀指定目标处理。
+	if first.get_weapon() == CardData.CardSubType.FANGTIAN_HALBERD:
+		_abandon_card_actions(actions)
+		return
+	var strike_sub = await _choose_borrowed_strike(first, second, valid)
+	if strike_sub == CHOICE_INVALID or not valid.call():
+		_abandon_card_actions(actions)
+		return
+	if strike_sub == -1:
+		var taken = first.remove_equipment("weapon")
+		if taken != weapon:
+			_abandon_card_actions(actions)
+			return
+		user.determined_cards.append(taken)
+		if taken.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
+			var transfer_valid = func():
+				return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+					and players.has(first) and players.has(user) and first.is_alive() and user.is_alive() \
+					and user.determined_cards.has(taken) and (not allowed.is_valid() or allowed.call())
+			if await _declare_stolen_hidden_equipment(first, user, taken, transfer_valid) == CHOICE_INVALID:
+				_abandon_card_actions(actions)
+				return
+		_complete_card_actions(actions)
+		_sync_all_ui()
+		return
+	var card = HandPayment.take_card(first, strike_sub)
+	if card == null:
+		_abandon_card_actions(actions)
+		return
+	deck.discard(card)
+	var strike_action = _record_card_action(first, card, CardActionEvent.Kind.USE, true, false)
+	var damage = 1 + first.consume_wine_bonus() + _rage_bonus(first)
+	_record_strike_played(first)
+	var element = EffectChain.DamageType.PHYSICAL
+	if strike_sub == CardData.CardSubType.FIRE_STRIKE: element = EffectChain.DamageType.FIRE
+	elif strike_sub == CardData.CardSubType.THUNDER_STRIKE: element = EffectChain.DamageType.THUNDER
+	var dealt = await _execute_single_strike(first, second, card, strike_sub, element, damage)
+	if (typeof(dealt) == TYPE_INT and dealt == CHOICE_INVALID) or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+		_abandon_card_actions([strike_action])
+		_abandon_card_actions(actions)
+		return
+	if dealt and await _try_calamity_transfer(first) == CHOICE_INVALID:
+		_abandon_card_actions([strike_action])
+		_abandon_card_actions(actions)
+		return
+	_complete_card_actions([strike_action])
+	_complete_card_actions(actions)
+	_sync_all_ui()
 
 func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], revision: int):
 	var generation = _dying_lifecycle_generation
