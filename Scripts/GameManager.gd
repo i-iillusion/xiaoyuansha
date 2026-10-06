@@ -1848,6 +1848,20 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			var actions: Array[CardActionEvent] = []
 			if not await _consume_trick(p, CardData.CardSubType.DUEL, actions):
 				return
+			var generation = _dying_lifecycle_generation
+			var valid = func():
+				return not _game_over and generation == _dying_lifecycle_generation \
+					and action_revision == turn_manager.get_context_revision() \
+					and players.has(p) and players.has(target) and p.is_alive() \
+					and target.is_alive() and not _is_kneeling(p) and not _is_kneeling(target)
+			var replacements: Array = []
+			var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements)
+			if effect_sub == CHOICE_INVALID:
+				_abandon_card_actions(actions)
+				return
+			if effect_sub == CardData.CardSubType.IRON_CHAIN:
+				await _resolve_paid_iron_chain(p, [target], actions, true)
+				return
 			_sync_all_ui()
 			turn_manager.use_card("duel")
 			var result = await _play_duel(p, target)
@@ -2927,16 +2941,24 @@ func _play_disarm():
 # ============================
 
 # is_snatch = true → 顺手牵羊（获取），false → 过河拆桥（弃置）
-# F02b-2a只接固定拆/顺→决斗；不是其他已确认候选的规则禁用。
+# F02b-2b-1只接固定目标决斗/铁索；其他候选按后续关卡迁移，不是规则禁用。
 # 原实体/成立事件由调用者持有；此处只选择本次效果，不再付手牌。
 func _prep_single_duel_legal(attacker: Player, target: Player) -> bool:
 	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2) \
 		and get_trick_targets(attacker, CardData.CardSubType.DUEL).has(target)
 
-func _maybe_prep_single_duel(attacker: Player, target: Player, original_sub: int, allowed: Callable) -> int:
+func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) -> Array:
+	var candidates: Array = []
+	if current_sub != CardData.CardSubType.DUEL and _prep_single_duel_legal(attacker, target):
+		candidates.append(CardData.CardSubType.DUEL)
+	if current_sub != CardData.CardSubType.IRON_CHAIN and get_trick_targets(attacker, CardData.CardSubType.IRON_CHAIN).has(target):
+		candidates.append(CardData.CardSubType.IRON_CHAIN)
+	return candidates
+
+func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array) -> int:
 	var generation = _dying_lifecycle_generation
-	if not allowed.call() or not _prep_single_duel_legal(attacker, target):
-		return original_sub
+	if not allowed.call():
+		return CHOICE_INVALID
 	var leo: Player = null
 	for p in players:
 		if p.general_name == "里奥·普利威尔" and p.is_alive() and not _is_kneeling(p) and p.prep_tokens > 0:
@@ -2949,25 +2971,37 @@ func _maybe_prep_single_duel(attacker: Player, target: Player, original_sub: int
 			and attacker.is_alive() and not _is_kneeling(attacker) \
 			and players.has(leo) and leo.is_alive() and not _is_kneeling(leo) \
 			and leo.general_name == "里奥·普利威尔" and leo.prep_tokens > 0
-	var candidates: Array = [CardData.CardSubType.DUEL]
-	var selected: int = -1
-	if _prep_replace_override.is_valid():
-		selected = await _prep_replace_override.call(leo, attacker, target, original_sub, candidates.duplicate())
-	elif leo.seat_index == 0:
-		var choice = await _show_choice_popup("【预习】是否消耗1个已有标记，将 %s 的【%s】更换为【决斗】？目标仍为 %s。" \
-			% [attacker.player_name, CardData.get_type_name(original_sub), target.player_name], ["更换为决斗"], valid)
-		selected = CardData.CardSubType.DUEL if choice == 0 else choice
-	else:
-		selected = await _choose_ai_response(leo, "prep_replace", candidates,
-			{"user": attacker.seat_index, "target": target.seat_index, "original_sub": original_sub})
-	if selected == CHOICE_INVALID or not valid.call():
-		return CHOICE_INVALID
-	# 窗口期间限额/目标合法性可能改变；非法选项不扣标记。
-	if selected != CardData.CardSubType.DUEL or not _prep_single_duel_legal(attacker, target):
-		return original_sub
-	leo.prep_tokens -= 1
-	_sync_all_ui()
-	return CardData.CardSubType.DUEL
+	var current_sub = original_sub
+	while true:
+		if generation != _dying_lifecycle_generation or not allowed.call():
+			return CHOICE_INVALID
+		if leo.prep_tokens <= 0 or not players.has(leo) or not leo.is_alive() \
+				or _is_kneeling(leo) or leo.general_name != "里奥·普利威尔":
+			return current_sub
+		var candidates = _prep_fixed_candidates(attacker, target, current_sub)
+		if candidates.is_empty(): return current_sub
+		var selected: int = -1
+		if _prep_replace_override.is_valid():
+			selected = await _prep_replace_override.call(leo, attacker, target, current_sub, candidates.duplicate())
+		elif leo.seat_index == 0:
+			var buttons: Array = []
+			for candidate in candidates: buttons.append("更换为" + CardData.get_type_name(candidate))
+			var choice = await _show_choice_popup("【预习】消耗1个已有标记，更换 %s 的【%s】？目标仍为 %s。" \
+				% [attacker.player_name, CardData.get_type_name(current_sub), target.player_name], buttons, valid)
+			selected = candidates[choice] if choice >= 0 and choice < candidates.size() else choice
+		else:
+			selected = await _choose_ai_response(leo, "prep_replace", candidates,
+				{"user": attacker.seat_index, "target": target.seat_index, "original_sub": original_sub, "current_sub": current_sub})
+		if selected == CHOICE_INVALID or not valid.call():
+			return CHOICE_INVALID
+		# 每次确认均复查；拒绝/超时保留当前牌效果及本次未用标记。
+		if not candidates.has(selected) or not _prep_fixed_candidates(attacker, target, current_sub).has(selected):
+			return current_sub
+		leo.prep_tokens -= 1
+		replacements.append(selected)
+		current_sub = selected
+		_sync_all_ui()
+	return current_sub
 
 func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
@@ -3010,9 +3044,13 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(attacker, sub, actions):
 		return
-	var effect_sub = await _maybe_prep_single_duel(attacker, target, sub, valid)
+	var replacements: Array = []
+	var effect_sub = await _maybe_prep_fixed_effect(attacker, target, sub, valid, replacements)
 	if effect_sub == CHOICE_INVALID:
 		_abandon_card_actions(actions)
+		return
+	if effect_sub == CardData.CardSubType.IRON_CHAIN:
+		await _resolve_paid_iron_chain(attacker, [target], actions, true)
 		return
 	if effect_sub == CardData.CardSubType.DUEL:
 		turn_manager.use_card("duel")
@@ -4096,6 +4134,32 @@ func _execute_iron_chain(targets: Array[Player]):
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.IRON_CHAIN, actions):
 		return
+	var replacements: Array = []
+	if targets.size() == 1:
+		var target = targets[0]
+		var revision = turn_manager.get_context_revision()
+		var generation = _dying_lifecycle_generation
+		var valid = func():
+			return not _game_over and generation == _dying_lifecycle_generation \
+				and revision == turn_manager.get_context_revision() and players.has(p) \
+				and players.has(target) and p.is_alive() and target.is_alive() \
+				and not _is_kneeling(p) and not _is_kneeling(target)
+		var effect_sub = await _maybe_prep_fixed_effect(p, target, CardData.CardSubType.IRON_CHAIN, valid, replacements)
+		if effect_sub == CHOICE_INVALID:
+			_abandon_card_actions(actions)
+			return
+		if effect_sub == CardData.CardSubType.DUEL:
+			turn_manager.use_card("duel")
+			var result = await _play_duel(p, target)
+			if (result is int and result == CHOICE_INVALID) or _game_over \
+					or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+				_abandon_card_actions(actions)
+			else: _complete_card_actions(actions)
+			_sync_all_ui()
+			return
+	await _resolve_paid_iron_chain(p, targets, actions, not replacements.is_empty())
+
+func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[CardActionEvent], force_chained: bool = false):
 	_sync_all_ui()
 
 	var names = []
@@ -4114,7 +4178,7 @@ func _execute_iron_chain(targets: Array[Player]):
 		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【铁索连环】对 %s 的效果被【无懈可击】抵消" % t.player_name)
 			continue
-		t.chained = not t.chained
+		t.chained = true if force_chained else not t.chained
 		var state = "进入连环状态" if t.chained else "退出连环状态"
 		_update_debug("%s %s" % [t.player_name, state])
 

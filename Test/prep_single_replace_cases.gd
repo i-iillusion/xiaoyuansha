@@ -83,7 +83,9 @@ func run(suite):
 				game._prep_replace_override = func(owner, actor, fixed, original_sub, candidates):
 					windows[0] += 1
 					suite.check(owner == leo and actor == user and fixed == target and original_sub == sub
-						and candidates == [CardData.CardSubType.DUEL], "F02b-2a：候选保持原使用者/目标且无舍己")
+						and candidates == ([CardData.CardSubType.IRON_CHAIN] if mode in ["limit", "armor", "awake", "distance"]
+							else [CardData.CardSubType.DUEL, CardData.CardSubType.IRON_CHAIN]),
+						"F02b-2a：候选保持原使用者/目标，非法决斗不入候选且无舍己")
 					suite.check(events.size() == 1 and not events[0].settlement_completed and leo.prep_tokens == 1,
 						"F02b-2a：原牌已成立，尚未提前累计或支付标记")
 					if mode == "fresh_limit": tm.duel_count_this_turn = 2
@@ -114,7 +116,8 @@ func run(suite):
 					"F02b-2a：失效不伪造完成，正常结果完成原事件")
 				suite.check(game._pending_card_actions.is_empty(), "F02b-2a：本次凭据释放")
 				if mode in ["limit", "armor", "awake", "distance", "no_mark"]:
-					suite.check(windows[0] == 0, "F02b-2a：无已有标记或新牌非法不弹候选")
+					suite.check(windows[0] == (0 if mode == "no_mark" else 1),
+						"F02b-2a：无已有标记不弹窗，决斗非法仍可询问已实现的合法铁索")
 	# 真实新增窗口：基础读条/取消/关闭/重开及下一合法更换。
 	for mode in ["confirm", "cancel", "timeout", "close", "restart"]:
 		_reset(suite)
