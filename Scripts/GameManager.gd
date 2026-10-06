@@ -1783,6 +1783,13 @@ func _complete_card_actions(events: Array):
 	for event in completed:
 		card_action_completed.emit(event)
 
+func _abandon_card_actions(events: Array):
+	# 技术失效只释放完成凭据；已成立的USE及已支付原牌不撤销。
+	for event in events:
+		if not event is CardActionEvent or not _pending_card_actions.has(event.id): continue
+		if _pending_card_actions[event.id].event == event:
+			_pending_card_actions.erase(event.id)
+
 func _apply_prep_card_action(p: Player, event: CardActionEvent):
 	if p.general_name != "里奥·普利威尔" or p.is_dead() or not players.has(p): return
 	if event.actor_seat != p.seat_index or event.actor_seat != event.turn_owner_seat: return
@@ -1814,7 +1821,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += _rage_bonus(p)
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
-			_record_card_action(p, card)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, true)
 			_record_strike_played(p)
 			_sync_all_ui()
 
@@ -1826,15 +1833,19 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 					element = EffectChain.DamageType.THUNDER
 
 			var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
-			if dealt is int and dealt == CHOICE_INVALID:
+			if (dealt is int and dealt == CHOICE_INVALID) or action_revision != turn_manager.get_context_revision():
+				_abandon_card_actions([action])
 				return
 
 			# 【灾厄剑】转移：本次杀的全部伤害处理完成后，可选择将灾厄剑移至其他角色
 			if dealt:
 				if _game_over or action_revision != turn_manager.get_context_revision():
+					_abandon_card_actions([action])
 					return
 				if await _try_calamity_transfer(p) == CHOICE_INVALID:
+					_abandon_card_actions([action])
 					return
+			_complete_card_actions([action])
 
 		CardData.CardSubType.DUEL:
 			if not await _consume_trick(p, CardData.CardSubType.DUEL):
@@ -2024,7 +2035,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
-	_record_card_action(p, card)
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, true)
 	_record_strike_played(p)
 	_sync_all_ui()
 
@@ -2050,7 +2061,8 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		if _game_over:
 			break
 		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
-		if dealt is int and dealt == CHOICE_INVALID:
+		if (dealt is int and dealt == CHOICE_INVALID) or action_revision != turn_manager.get_context_revision():
+			_abandon_card_actions([action])
 			return
 		if dealt:
 			dealt_any = true
@@ -2058,10 +2070,13 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【灾厄剑】转移：全部目标的伤害都处理完成后，再选择是否转移（双武器假想下语义正确）
 	if dealt_any:
 		if _game_over or action_revision != turn_manager.get_context_revision():
+			_abandon_card_actions([action])
 			return
 		if await _try_calamity_transfer(p) == CHOICE_INVALID:
+			_abandon_card_actions([action])
 			return
 
+	_complete_card_actions([action])
 	_sync_all_ui()
 
 # 杀、普通伤害与传导共用同一条伤害链。
@@ -4536,6 +4551,7 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 	var dodged = await _ask_basic_card_response_result(responder, expected_sub, prompt, _dodge_override)
 	if dodged == BasicResponseOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or not responder.is_alive():
 		chain.is_cancelled = true
+		chain.continuation_invalid = true
 		return false
 	return dodged == BasicResponseOutcome.PAID
 
