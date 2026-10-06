@@ -78,9 +78,12 @@ func _run():
 	reset_case()
 	var disarm := CardBase.create(CardData.CardSubType.DISARM)
 	owner.hand.assign([disarm, spare])
-	check(await game._consume_trick(owner, CardData.CardSubType.DISARM), "即时锦囊支付成功")
+	var payment_actions: Array[CardActionEvent] = []
+	check(await game._consume_trick(owner, CardData.CardSubType.DISARM, payment_actions), "即时锦囊支付成功")
+	game._abandon_card_actions(payment_actions) # 仅支付层测试，不冒充效果完成。
+	payment_actions.clear()
 	check(owner.hand == [spare] and game.deck._discard == [disarm], "即时锦囊将原实例入弃牌堆，不误扣末尾牌")
-	check(not await game._consume_trick(owner, CardData.CardSubType.SNATCH), "缺少声明类型时拒绝锦囊支付")
+	check(not await game._consume_trick(owner, CardData.CardSubType.SNATCH, payment_actions), "缺少声明类型时拒绝锦囊支付")
 	check(owner.hand == [spare] and game.deck._discard == [disarm], "失败不会生成弃牌或消耗杀")
 
 	for sub in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.INDULGENCE,
@@ -115,7 +118,8 @@ func _run():
 	owner.hand.append(spare)
 	var hp_before := owner.hp
 	game._yes_ah_active = true
-	check(await game._consume_trick(owner, CardData.CardSubType.DUEL), "是啊采用独立失血费用")
+	check(await game._consume_trick(owner, CardData.CardSubType.DUEL, payment_actions), "是啊采用独立失血费用")
+	game._abandon_card_actions(payment_actions)
 	check(owner.hp == hp_before - 1 and owner.hand == [spare], "技能视为使用不强制匹配或消耗物理手牌")
 	check(game.deck.discard_count() == 0, "技能即时锦囊沿用不生成实体弃牌的约定")
 	game._yes_ah_active = true

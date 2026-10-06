@@ -63,7 +63,9 @@ func run(host):
 	game._yes_ah_active = true
 	var close = func(): game._choice_prompt_stack.back().overlay.queue_free()
 	close.call_deferred()
-	suite.check(not await game._consume_trick(game.players[0], CardData.CardSubType.BARBARIAN_INVASION) and game.players[0].hp == 0 and game.deck._discard.is_empty() and game.players[0].hand.size() == 2, "E03e-22c：技能费用失效不生成虚拟锦囊/用牌事件或另扣手牌")
+	var actions: Array[CardActionEvent] = []
+	suite.check(not await game._consume_trick(game.players[0], CardData.CardSubType.BARBARIAN_INVASION, actions) and game.players[0].hp == 0 and game.deck._discard.is_empty() and game.players[0].hand.size() == 2, "E03e-22c：技能费用失效不生成虚拟锦囊/用牌事件或另扣手牌")
+	game._abandon_card_actions(actions)
 	await suite.process_frame
 	for route in ["nullification", "sacrifice"]:
 		prepare(TurnManager.Phase.PLAY)

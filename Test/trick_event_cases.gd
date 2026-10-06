@@ -69,7 +69,9 @@ func run(suite):
 	game._yes_ah_active = true
 	var invalidate = func(_hp): tm.current_phase = TurnManager.Phase.END
 	p.hp_changed.connect(invalidate)
-	var used = await game._consume_trick(p, CardData.CardSubType.PEACH_GARDEN)
+	var actions: Array[CardActionEvent] = []
+	var used = await game._consume_trick(p, CardData.CardSubType.PEACH_GARDEN, actions)
+	game._abandon_card_actions(actions)
 	p.hp_changed.disconnect(invalidate)
 	suite.check(not used and events.is_empty() and p.hp == 2,
 		"E02d2：虚拟支付后上下文失效不发布使用，流失费用不回滚")

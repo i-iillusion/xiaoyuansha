@@ -17,6 +17,7 @@ var sacrifice_offered: bool = false
 var transfer_target: Player
 var transfer_amount: int = 0
 var transferred_damage: DamageRecord
+var transfer_action: CardActionEvent
 
 var source_modifiers_applied: bool = false
 var target_modifiers_applied: bool = false

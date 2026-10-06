@@ -118,7 +118,7 @@ func run(suite):
 	var actor: Player = game.players[0]
 	actor.general_name = "里奥·普利威尔"
 	var pending = game._record_card_action(actor, CardBase.create(CardData.CardSubType.WINE),
-		CardActionEvent.Kind.USE, true, false, true)
+		CardActionEvent.Kind.USE, true, false)
 	var forged = CardActionEvent.new(pending.id, tm, actor, pending.card, CardActionEvent.Kind.USE, true, false)
 	game._complete_card_actions([forged])
 	suite.check(actor.prep_tokens == 0 and not pending.settlement_completed

@@ -797,6 +797,8 @@ func _run():
 	await prep_single_trick_completion_cases.run(self)
 	var prep_nullification_completion_cases = load("res://Test/prep_nullification_completion_cases.gd").new()
 	await prep_nullification_completion_cases.run(self)
+	var prep_sacrifice_completion_cases = load("res://Test/prep_sacrifice_completion_cases.gd").new()
+	await prep_sacrifice_completion_cases.run(self)
 	var choutai_draw_cases = load("res://Test/choutai_draw_cases.gd").new()
 	await choutai_draw_cases.run(self)
 	var prep_trick_baseline_cases = load("res://Test/prep_trick_baseline_cases.gd").new()

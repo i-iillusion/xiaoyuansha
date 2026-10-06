@@ -37,6 +37,7 @@ try {
         worktree_status = @(& git -c core.quotepath=false status --short)
         godot_executable = $godotExecutable
         godot_sha256 = (Get-FileHash -LiteralPath $godotExecutable -Algorithm SHA256).Hash
+        disable_render_loop = $true
         snapshot = $snapshot
         files = @($manifest)
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $logDir 'manifest.json') -Encoding UTF8
@@ -50,7 +51,9 @@ try {
         foreach ($value in @($godotExecutable, $snapshot, $stdout, $stderr)) {
             if ($value -match '[%"\r\n]') { throw "Unsupported command path: $value" }
         }
-        $arguments = @('--headless', '--path', ('"' + $snapshot + '"')) + $ExtraArgs
+        # No visual QA in these suites: retain the scene tree, real timers and all
+        # input/lifecycle assertions, but avoid dummy-renderer drawing work.
+        $arguments = @('--headless', '--disable-render-loop', '--path', ('"' + $snapshot + '"')) + $ExtraArgs
         $startInfo = New-Object Diagnostics.ProcessStartInfo
         $startInfo.FileName = $godotExecutable
         $startInfo.Arguments = $arguments -join ' '

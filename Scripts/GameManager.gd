@@ -1746,7 +1746,7 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	if removed != null:
 		deck.discard(removed)
-	var action = _record_card_action(p, incoming, CardActionEvent.Kind.USE, true, false, true)
+	var action = _record_card_action(p, incoming, CardActionEvent.Kind.USE, true, false)
 	_claim_equipment_name(sub, incoming)
 	_complete_card_actions([action])
 	return true
@@ -1756,15 +1756,10 @@ func _clear_pending_determined_card():
 
 # 仅在具体规则入口确认使用/打出后调用，不能放进通用取牌/弃牌函数。
 func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind = CardActionEvent.Kind.USE,
-		from_hand: bool = true, is_virtual: bool = false, defer_completion: bool = false) -> CardActionEvent:
+		from_hand: bool = true, is_virtual: bool = false) -> CardActionEvent:
 	_card_action_serial += 1
 	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
-	if defer_completion:
-		_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
-	else:
-		# F02b-1迁移过渡：尚未迁移的入口仍有已登记的早累计缺口。
-		# 不为这些入口伪造完成事实；后续逐链迁移并删除此兼容分支。
-		_apply_prep_card_action(p, event)
+	_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
 	card_action_committed.emit(event)
 	return event
 
@@ -1822,7 +1817,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += _rage_bonus(p)
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
-			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false)
 			_record_strike_played(p)
 			_sync_all_ui()
 
@@ -1875,7 +1870,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
-			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, true)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -2042,7 +2037,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
-	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, true)
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false)
 	_record_strike_played(p)
 	_sync_all_ui()
 
@@ -2100,7 +2095,13 @@ func _new_damage_chain(source: Player, target: Player, card: CardBase, amount: i
 # TIME-02/C04-Q1：原记录先结束，继承来源/渠道/属性和数值，来源修正不重放。
 func _resolve_transferred_damage(original: EffectChain) -> void:
 	var record = original.damage
-	if record.transfer_target == null or _game_over or record.transfer_target.is_dead():
+	if record.transfer_target == null:
+		return
+	if _game_over or original.continuation_invalid:
+		_abandon_card_actions([record.transfer_action])
+		return
+	if record.transfer_target.is_dead():
+		_complete_card_actions([record.transfer_action])
 		return
 	record.refresh_source()
 	var next = _new_damage_chain(record.source, record.transfer_target, record.card,
@@ -2116,9 +2117,17 @@ func _resolve_transferred_damage(original: EffectChain) -> void:
 	await _finish_damage_chain(next)
 	if next.continuation_invalid:
 		original.continuation_invalid = true
+		_abandon_card_actions([record.transfer_action])
+	elif _game_over:
+		_abandon_card_actions([record.transfer_action])
+	else:
+		_complete_card_actions([record.transfer_action])
+		_sync_all_ui()
 
 # 伤害提交及濒死/死亡已经完成；此处不再补扣体力或重新套用武器修正。
 func _finish_damage_chain(chain: EffectChain):
+	if chain.continuation_invalid:
+		_abandon_card_actions([chain.damage.transfer_action])
 	if _game_over or chain.continuation_invalid or not chain.damage.committed:
 		return
 	var revision = turn_manager.get_context_revision()
@@ -2209,7 +2218,7 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			turn_manager.use_card("wine")
-			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false)
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
@@ -2227,7 +2236,7 @@ func play_card(sub: CardData.CardSubType):
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
-			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false)
 			var healed = _heal_with_staff(p)
 			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
@@ -2327,7 +2336,7 @@ func play_card(sub: CardData.CardSubType):
 				return
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
-			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, true)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
 			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
 			_sync_all_ui()
@@ -2405,7 +2414,7 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("weapon", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
-			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
 			_complete_card_actions([action])
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
@@ -2457,7 +2466,7 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("armor", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
-			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
 			_complete_card_actions([action])
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
@@ -2479,7 +2488,7 @@ func play_card(sub: CardData.CardSubType):
 				if not p.equip_mount_card(equipped_card):
 					_restore_equipment_payment(receipt, equipped_card)
 					return
-				var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+				var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 				_complete_card_actions([action])
 				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -2544,7 +2553,7 @@ func play_card(sub: CardData.CardSubType):
 				return
 			if result.replaced_card != null:
 				deck.discard(result.replaced_card)
-			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_complete_card_actions([action])
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
@@ -2682,7 +2691,7 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 	if used_card == null:
 		return BasicResponseOutcome.DECLINED
 	deck.discard(used_card)
-	var action = _record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE, true, false, true)
+	var action = _record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE, true, false)
 	if expected == CardData.CardSubType.STRIKE:
 		_record_strike_played(p)
 	if expected == CardData.CardSubType.DODGE:
@@ -4408,7 +4417,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 					continue
 				deck.discard(used_card)
 				action_card = used_card
-			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill", true)
+			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -4848,12 +4857,15 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					and subject.is_alive() and chain.target_player == subject
 			var reply = await _maybe_sacrifice_result(source, subject, data["value"], chain.damage_element, valid)
 			if reply.invalidated or not valid.call():
+				_abandon_card_actions([reply.get("card_action")])
+				chain.continuation_invalid = true
 				chain.is_cancelled = true
 				return true
 			var substitute: Player = reply.player
 			if substitute != null:
 				record.transfer_target = substitute
 				record.transfer_amount = data["value"]
+				record.transfer_action = reply.get("card_action")
 				_update_debug("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
 				return true
 
@@ -5534,17 +5546,16 @@ func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	return card
 
 # 即时锦囊消耗入口：支付成功才记入弃牌；技能视为使用沿用原有不生成实体弃牌的约定。
-func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Variant = null) -> bool:
+func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Array) -> bool:
 	var virtual_use := _yes_ah_active
 	var card = await _take_trick_card(p, sub)
 	if card == null:
 		return false
 	if not virtual_use:
 		deck.discard(card)
-	# 尚未迁移的调用者暂保留明确的早累计兼容；新调用者持有本张原事实。
-	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, completion_actions != null)
-	if completion_actions != null:
-		completion_actions.append(action)
+	# 支付只成立；调用者须持有本张原事件直到全部结算完成。
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+	completion_actions.append(action)
 	return true
 
 # ============================
@@ -5648,7 +5659,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	p.equipment_cards[slot] = source
 	p.hidden_equip_slot = slot
 	p.hidden_equip_card = source
-	var action = _record_card_action(p, source, CardActionEvent.Kind.USE, true, false, true)
+	var action = _record_card_action(p, source, CardActionEvent.Kind.USE, true, false)
 	_discard_exhausted_hidden_category(etype)
 	_complete_card_actions([action])
 	if p.get_hidden_equipment_card(slot) == source:
@@ -6818,14 +6829,21 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
 	var card = CardBase.create(CardData.CardSubType.STRIKE)
-	_record_card_action(p, card, CardActionEvent.Kind.USE, false, true)
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, false, true)
 	_record_strike_played(p)
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
 	if p.wine_stacks > 0:
 		base_damage += p.consume_wine_bonus()
 		_update_debug("%s 的【酒】加成：神速杀伤害 +%d" % [p.player_name, base_damage - 1])
-	await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
+	var result = await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
+	if (result is int and result == CHOICE_INVALID) or _game_over or revision != turn_manager.get_context_revision() \
+			or generation != _dying_lifecycle_generation:
+		_abandon_card_actions([action])
+		return
+	_complete_card_actions([action])
 	_sync_all_ui()
 
 # ============================
@@ -8537,6 +8555,8 @@ func _show_soul_blade_discard_prompt(victim_name: String, need: int, allowed: Ca
 # 规则：受伤者本人不能使用；AI 暂不主动打出（与无懈一致）；玩家0有手牌时弹窗询问
 func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Player:
 	var reply = await _maybe_sacrifice_result(_source, target, amount, _element, allowed)
+	# 兼容支付报告没有实际转移伤害，不发布虚假完成。
+	_abandon_card_actions([reply.get("card_action")])
 	return null if reply.invalidated else reply.player
 
 # 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
@@ -8603,10 +8623,10 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			_sync_all_ui()
 			if not valid.call() or not p.is_alive():
 				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
-			_record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
+			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			if not valid.call():
-				return {"invalidated": true, "player": null}
-			return {"invalidated": false, "player": p}
+				return {"invalidated": true, "player": null, "card_action": action}
+			return {"invalidated": false, "player": p, "card_action": action}
 	return {"invalidated": false, "player": null}
 
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
@@ -9208,7 +9228,7 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if card == null:
 		return false
 	deck.discard(card)
-	var action = _record_card_action(rescuer, card, CardActionEvent.Kind.USE, true, false, true)
+	var action = _record_card_action(rescuer, card, CardActionEvent.Kind.USE, true, false)
 	var healed = 1
 	if sub == CardData.CardSubType.PEACH:
 		healed = _heal_with_staff(rescuer, dying)
