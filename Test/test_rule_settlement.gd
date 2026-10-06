@@ -42,6 +42,7 @@ func reset_players():
 	game._sacrifice_override = func(): return false
 	game._sacrifice_actor_override = Callable()
 	game._ai_response_override = func(_view, _kind, _options): return -1
+	game._prep_replace_override = func(_leo, _user, _target, _sub, _options): return -1
 	game._dodge_override = func(): return false
 	game._dying_peach_override = func(): return false
 	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
@@ -785,20 +786,8 @@ func _run():
 	await equipment_event_cases.run(self)
 	var prep_token_cases = load("res://Test/prep_token_cases.gd").new()
 	await prep_token_cases.run(self)
-	var prep_completion_cases = load("res://Test/prep_completion_cases.gd").new()
-	await prep_completion_cases.run(self)
-	var prep_strike_completion_cases = load("res://Test/prep_strike_completion_cases.gd").new()
-	await prep_strike_completion_cases.run(self)
-	var prep_equipment_completion_cases = load("res://Test/prep_equipment_completion_cases.gd").new()
-	await prep_equipment_completion_cases.run(self)
-	var prep_global_completion_cases = load("res://Test/prep_global_completion_cases.gd").new()
-	await prep_global_completion_cases.run(self)
-	var prep_single_trick_completion_cases = load("res://Test/prep_single_trick_completion_cases.gd").new()
-	await prep_single_trick_completion_cases.run(self)
-	var prep_nullification_completion_cases = load("res://Test/prep_nullification_completion_cases.gd").new()
-	await prep_nullification_completion_cases.run(self)
-	var prep_sacrifice_completion_cases = load("res://Test/prep_sacrifice_completion_cases.gd").new()
-	await prep_sacrifice_completion_cases.run(self)
+	# F02完成事实回归完整转入test_confirmed_rules，保留所有原模块/断言。
+	reset_players()
 	var choutai_draw_cases = load("res://Test/choutai_draw_cases.gd").new()
 	await choutai_draw_cases.run(self)
 	var prep_trick_baseline_cases = load("res://Test/prep_trick_baseline_cases.gd").new()

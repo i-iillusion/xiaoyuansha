@@ -14,6 +14,43 @@ func check(ok: bool, message: String):
 		failures += 1
 	print(("PASS: " if ok else "FAIL: ") + message)
 
+func reset_players():
+	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
+	game.reset_game_over_state()
+	game._sacrifice_override = func(): return false
+	game._sacrifice_actor_override = Callable()
+	game._ai_response_override = func(_view, _kind, _options): return -1
+	game._prep_replace_override = func(_leo, _user, _target, _sub, _options): return -1
+	game._dodge_override = func(): return false
+	game._dying_peach_override = func(): return false
+	game._rescue_choice_override = func(_rescuer, _dying, _options): return -1
+	game._nullify_override = func(): return false
+	game._yes_ah_override = Callable()
+	game._aoe_override = func(): return false
+	game._duel_respond_override = func(): return false
+	game._duel_second_override = func(): return false
+	game.turn_manager.current_player_idx = 0
+	game.turn_manager.play_actor_idx = -1
+	game.turn_manager._reset_turn_counts()
+	game.turn_manager._phase_skill_uses.clear()
+	for p in game.players:
+		p.reset_death_state()
+		p.general_name = "稻草人"
+		p.max_hp = 10
+		p.hp = 10
+		p.hand.clear()
+		p.determined_cards.clear() # 两个手牌存储区均须隔离，避免前例牌参与后例救援。
+		p.equipment.clear()
+		p.equipment_cards.clear()
+		p.chained = false
+		p.kneeling = false
+		p.consume_wine_bonus()
+		p.heal_staff_peach_used = false
+		p.awoken = false
+		p.awake_choice = 0
+		p.prep_tokens = 0
+		p.capture_game_start_state()
+
 func _run():
 	GameManager.random_identity = false
 	GameManager.random_general = false
@@ -175,5 +212,22 @@ func _run():
 	GameManager.selected_players = previous_count
 	GameManager.selected_mode = previous_mode
 	GameManager.random_general = false
+	# 独立换牌回归归入本组，仍保留七组及各组60秒门槛。
+	var prep_completion_cases = load("res://Test/prep_completion_cases.gd").new()
+	await prep_completion_cases.run(self)
+	var prep_strike_completion_cases = load("res://Test/prep_strike_completion_cases.gd").new()
+	await prep_strike_completion_cases.run(self)
+	var prep_equipment_completion_cases = load("res://Test/prep_equipment_completion_cases.gd").new()
+	await prep_equipment_completion_cases.run(self)
+	var prep_global_completion_cases = load("res://Test/prep_global_completion_cases.gd").new()
+	await prep_global_completion_cases.run(self)
+	var prep_single_trick_completion_cases = load("res://Test/prep_single_trick_completion_cases.gd").new()
+	await prep_single_trick_completion_cases.run(self)
+	var prep_nullification_completion_cases = load("res://Test/prep_nullification_completion_cases.gd").new()
+	await prep_nullification_completion_cases.run(self)
+	var prep_sacrifice_completion_cases = load("res://Test/prep_sacrifice_completion_cases.gd").new()
+	await prep_sacrifice_completion_cases.run(self)
+	var prep_single_replace_cases = load("res://Test/prep_single_replace_cases.gd").new()
+	await prep_single_replace_cases.run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

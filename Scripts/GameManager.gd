@@ -128,6 +128,7 @@ var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
 var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
+var _prep_replace_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -2926,12 +2927,56 @@ func _play_disarm():
 # ============================
 
 # is_snatch = true → 顺手牵羊（获取），false → 过河拆桥（弃置）
+# F02b-2a只接固定拆/顺→决斗；不是其他已确认候选的规则禁用。
+# 原实体/成立事件由调用者持有；此处只选择本次效果，不再付手牌。
+func _prep_single_duel_legal(attacker: Player, target: Player) -> bool:
+	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2) \
+		and get_trick_targets(attacker, CardData.CardSubType.DUEL).has(target)
+
+func _maybe_prep_single_duel(attacker: Player, target: Player, original_sub: int, allowed: Callable) -> int:
+	var generation = _dying_lifecycle_generation
+	if not allowed.call() or not _prep_single_duel_legal(attacker, target):
+		return original_sub
+	var leo: Player = null
+	for p in players:
+		if p.general_name == "里奥·普利威尔" and p.is_alive() and not _is_kneeling(p) and p.prep_tokens > 0:
+			leo = p
+			break
+	if leo == null:
+		return original_sub
+	var valid = func():
+		return generation == _dying_lifecycle_generation and allowed.call() \
+			and attacker.is_alive() and not _is_kneeling(attacker) \
+			and players.has(leo) and leo.is_alive() and not _is_kneeling(leo) \
+			and leo.general_name == "里奥·普利威尔" and leo.prep_tokens > 0
+	var candidates: Array = [CardData.CardSubType.DUEL]
+	var selected: int = -1
+	if _prep_replace_override.is_valid():
+		selected = await _prep_replace_override.call(leo, attacker, target, original_sub, candidates.duplicate())
+	elif leo.seat_index == 0:
+		var choice = await _show_choice_popup("【预习】是否消耗1个已有标记，将 %s 的【%s】更换为【决斗】？目标仍为 %s。" \
+			% [attacker.player_name, CardData.get_type_name(original_sub), target.player_name], ["更换为决斗"], valid)
+		selected = CardData.CardSubType.DUEL if choice == 0 else choice
+	else:
+		selected = await _choose_ai_response(leo, "prep_replace", candidates,
+			{"user": attacker.seat_index, "target": target.seat_index, "original_sub": original_sub})
+	if selected == CHOICE_INVALID or not valid.call():
+		return CHOICE_INVALID
+	# 窗口期间限额/目标合法性可能改变；非法选项不扣标记。
+	if selected != CardData.CardSubType.DUEL or not _prep_single_duel_legal(attacker, target):
+		return original_sub
+	leo.prep_tokens -= 1
+	_sync_all_ui()
+	return CardData.CardSubType.DUEL
+
 func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
 	var action = "获取" if is_snatch else "弃置"
 	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation \
 			and players.has(attacker) and players.has(target) \
 			and target.is_alive() and not _is_kneeling(target)
 	if not valid.call():
@@ -2964,6 +3009,21 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(attacker, sub, actions):
+		return
+	var effect_sub = await _maybe_prep_single_duel(attacker, target, sub, valid)
+	if effect_sub == CHOICE_INVALID:
+		_abandon_card_actions(actions)
+		return
+	if effect_sub == CardData.CardSubType.DUEL:
+		turn_manager.use_card("duel")
+		_reset_play_countdown_if_p0()
+		var result = await _play_duel(attacker, target)
+		if (result is int and result == CHOICE_INVALID) or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+		else:
+			_complete_card_actions(actions)
+		_sync_all_ui()
 		return
 	turn_manager.use_card("steal")
 	_reset_play_countdown_if_p0()
