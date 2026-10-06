@@ -787,6 +787,8 @@ func _run():
 	await prep_token_cases.run(self)
 	var choutai_draw_cases = load("res://Test/choutai_draw_cases.gd").new()
 	await choutai_draw_cases.run(self)
+	var prep_trick_baseline_cases = load("res://Test/prep_trick_baseline_cases.gd").new()
+	await prep_trick_baseline_cases.run(self)
 	var play_skill_actor_cases = load("res://Test/play_skill_actor_cases.gd").new()
 	await play_skill_actor_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
