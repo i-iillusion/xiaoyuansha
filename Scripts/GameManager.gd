@@ -3063,6 +3063,16 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 			_complete_card_actions(actions)
 		_sync_all_ui()
 		return
+	await _resolve_paid_steal(attacker, target, is_snatch, zone, actions, valid)
+
+# 已支付的拆/顺效果入口：不再取手牌、不重发使用事实。
+# 原入口仍在支付前选区域；替换后的强制选牌政策另行接入。
+func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable):
+	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
+	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
+	if not valid.call():
+		_abandon_card_actions(actions)
+		return
 	turn_manager.use_card("steal")
 	_reset_play_countdown_if_p0()
 	_update_debug("%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name])
