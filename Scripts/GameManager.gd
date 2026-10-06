@@ -2572,7 +2572,8 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 		card_sub = CardData.CardSubType.BARBARIAN_INVASION
 	else:
 		card_sub = CardData.CardSubType.VOLLEY_OF_ARROWS
-	if not await _consume_trick(p, card_sub):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(p, card_sub, actions):
 		return
 	_sync_all_ui()
 	turn_manager.use_card("aoe")
@@ -2589,7 +2590,8 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
 		if _game_over or response_revision != turn_manager.get_context_revision():
-			break
+			_abandon_card_actions(actions)
+			return
 
 		# 【仁王盾】：南蛮入侵和万箭齐发对你无效（锁定技；判定在无懈询问之前，青釭剑只对杀生效不例外）
 		if target.get_armor() == CardData.CardSubType.RENWANG_DUN:
@@ -2608,26 +2610,32 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 		# 无懈可击：效果即将对目标生效前，询问所有角色
 		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name])
 		if nullified == NullificationOutcome.INVALIDATED:
-			break
+			_abandon_card_actions(actions)
+			return
 		if nullified == NullificationOutcome.NULLIFIED:
 			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
 		var responded = await _ask_basic_card_response_result(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
 		if _game_over or response_revision != turn_manager.get_context_revision():
-			break
+			_abandon_card_actions(actions)
+			return
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 
 		if responded == BasicResponseOutcome.INVALIDATED:
-			break
+			_abandon_card_actions(actions)
+			return
 		if responded == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 			var damage = await _deal_damage_result(p, target, 1, EffectChain.DamageType.PHYSICAL)
-			if damage.invalidated: break
+			if damage.invalidated:
+				_abandon_card_actions(actions)
+				return
 
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # 杀/决斗/AOE共用物理响应，不消耗主动杀次数和酒，也不创建新出牌阶段。
@@ -2736,7 +2744,8 @@ func _play_peach_garden():
 	var revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 
-	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN, actions):
 		return
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
@@ -2758,7 +2767,8 @@ func _play_peach_garden():
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
-			break
+			_abandon_card_actions(actions)
+			return
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
@@ -2770,6 +2780,7 @@ func _play_peach_garden():
 		target.heal(1)
 		_update_debug("%s 回复 1 点体力（%d/%d）" % [target.player_name, target.hp, target.max_hp])
 
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # ============================
@@ -2780,7 +2791,8 @@ func _play_harvest():
 	var revision = turn_manager.get_context_revision()
 	var p = players[turn_manager.get_play_actor_idx()]
 
-	if not await _consume_trick(p, CardData.CardSubType.HARVEST):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(p, CardData.CardSubType.HARVEST, actions):
 		return
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
@@ -2806,7 +2818,8 @@ func _play_harvest():
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
-			break
+			_abandon_card_actions(actions)
+			return
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
@@ -2822,6 +2835,7 @@ func _play_harvest():
 		_draw_blank_cards(target, draw_count)
 		_update_debug("%s 已损失 %d 点体力，摸 %d 张牌（手牌 %d 张）" % [target.player_name, lost, draw_count, target.hand_size()])
 
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # ============================
@@ -2835,7 +2849,8 @@ func _play_disarm():
 		_update_debug("本回合已使用【卸甲归田】")
 		return
 
-	if not await _consume_trick(p, CardData.CardSubType.DISARM):
+	var actions: Array[CardActionEvent] = []
+	if not await _consume_trick(p, CardData.CardSubType.DISARM, actions):
 		return
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
@@ -2861,7 +2876,8 @@ func _play_disarm():
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
-			break
+			_abandon_card_actions(actions)
+			return
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
@@ -2888,6 +2904,7 @@ func _play_disarm():
 			_draw_blank_cards(target, removed_count)
 		_update_debug("%s 弃置 %d 件装备，摸 %d 张牌（手牌 %d 张）" % [target.player_name, removed_count, removed_count, target.hand_size()])
 
+	_complete_card_actions(actions)
 	_sync_all_ui()
 
 # ============================
@@ -5481,14 +5498,17 @@ func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	return card
 
 # 即时锦囊消耗入口：支付成功才记入弃牌；技能视为使用沿用原有不生成实体弃牌的约定。
-func _consume_trick(p: Player, sub: CardData.CardSubType) -> bool:
+func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Variant = null) -> bool:
 	var virtual_use := _yes_ah_active
 	var card = await _take_trick_card(p, sub)
 	if card == null:
 		return false
 	if not virtual_use:
 		deck.discard(card)
-	_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+	# 尚未迁移的调用者暂保留明确的早累计兼容；新调用者持有本张原事实。
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, completion_actions != null)
+	if completion_actions != null:
+		completion_actions.append(action)
 	return true
 
 # ============================
