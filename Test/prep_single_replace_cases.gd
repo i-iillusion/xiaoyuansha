@@ -87,6 +87,7 @@ func run(suite):
 						else [CardData.CardSubType.DUEL, CardData.CardSubType.IRON_CHAIN]
 					if sub != CardData.CardSubType.SNATCH and mode != "distance": expected.append(CardData.CardSubType.SNATCH)
 					if sub != CardData.CardSubType.DISMANTLE: expected.append(CardData.CardSubType.DISMANTLE)
+					expected.append_array(game.GLOBAL_TRICKS)
 					suite.check(owner == leo and actor == user and fixed == target and original_sub == sub
 						and candidates == expected,
 						"F02b-2a：候选保持原使用者/目标，非法决斗不入候选且无舍己")

@@ -150,7 +150,7 @@ func run(suite):
 	game.players[1].hand.append(null)
 	game.players[2].chained = true
 	game._prep_replace_override = func(_owner, _actor, _fixed, _current, _options):
-		suite.check(false, "F02b-2b-1：两目标铁索不进入固定单体候选")
+		suite.check(_options == game.GLOBAL_TRICKS, "F02b-3b：两目标铁索只有已确认群体候选，不含固定单体")
 		return CardData.CardSubType.DUEL
 	var targets: Array[Player] = [game.players[2], game.players[3]]
 	await game._execute_iron_chain(targets)
