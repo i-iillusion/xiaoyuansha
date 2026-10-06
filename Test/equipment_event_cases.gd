@@ -26,13 +26,17 @@ func run(host):
 	game = host.game
 	var old_phase = game.turn_manager.current_phase
 	var collect = func(event): events.append(event)
+	var completed: Array[CardActionEvent] = []
+	var finish = func(event): completed.append(event)
 	game.card_action_committed.connect(collect)
+	game.card_action_completed.connect(finish)
 	for sub in [CardData.CardSubType.LIANNU, CardData.CardSubType.RENWANG_DUN,
 		CardData.CardSubType.MOUNT_PLUS, CardData.CardSubType.MOUNT_MINUS,
 		CardData.CardSubType.MULE_PLUS, CardData.CardSubType.MULE_MINUS]:
 		for concrete in [false, true]:
 			for replacing in [false, true]:
 				reset()
+				completed.clear()
 				var p: Player = game.players[0]
 				var category = CardData.get_equipment_slot_type(sub)
 				var slot = "mount_1" if category == "mount" else category
@@ -71,6 +75,8 @@ func run(host):
 				game._mount_replace_override = func(): return slot
 				await game.play_card(sub)
 				var installed = p.get_equipment_card(slot)
+				suite.check(completed == events and completed.size() == 1 and completed[0].settlement_completed,
+					"F02b-1c：六类装备空槽/替换均有唯一完成事实")
 				suite.check(events.size() == 1 and p.hand_size() == 0 and installed != null,
 					"E02d3：六类装备空槽/替换、任意/具体来源成功只发一次")
 				if events.size() == 1:
@@ -85,6 +91,7 @@ func run(host):
 	for category in ["weapon", "armor", "mount"]:
 		for concrete in [false, true]:
 			reset()
+			completed.clear()
 			var p: Player = game.players[0]
 			p.general_name = "安普提·斯丢皮得"
 			var sub = CardData.CardSubType.LIANNU if category == "weapon" else (
@@ -100,6 +107,8 @@ func run(host):
 			game._sao_type_override = func(): return category
 			await game._do_sao_hide(p, false)
 			var hidden = p.hidden_equip_card
+			suite.check(completed == events and completed.size() == 1 and completed[0].settlement_completed,
+				"F02b-1c：暗置完成唯一，明置不另计使用")
 			suite.check(events.size() == 1 and p.hand_size() == 0 and hidden != null,
 				"E02d3：三类装备实际暗置只发一次使用事件")
 			if events.size() == 1:
@@ -154,5 +163,6 @@ func run(host):
 	game._sao_type_override = Callable()
 	game._sao_reveal_sub_override = Callable()
 	game.card_action_committed.disconnect(collect)
+	game.card_action_completed.disconnect(finish)
 	reset()
 	game.turn_manager.current_phase = old_phase

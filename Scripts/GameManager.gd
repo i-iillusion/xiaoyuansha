@@ -1746,8 +1746,9 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		return false
 	if removed != null:
 		deck.discard(removed)
-	_record_card_action(p, incoming)
+	var action = _record_card_action(p, incoming, CardActionEvent.Kind.USE, true, false, true)
 	_claim_equipment_name(sub, incoming)
+	_complete_card_actions([action])
 	return true
 
 func _clear_pending_determined_card():
@@ -1869,7 +1870,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
-			_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, true)
+			_complete_card_actions([action])
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 
@@ -2320,7 +2322,8 @@ func play_card(sub: CardData.CardSubType):
 				return
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
-			_record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, true)
+			_complete_card_actions([action])
 			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -2397,8 +2400,9 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("weapon", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
-			_record_card_action(p, equipped_card)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
 			_claim_equipment_name(sub, equipped_card)
+			_complete_card_actions([action])
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -2448,8 +2452,9 @@ func play_card(sub: CardData.CardSubType):
 			if not p.equip_card_to_slot("armor", equipped_card):
 				_restore_equipment_payment(receipt, equipped_card)
 				return
-			_record_card_action(p, equipped_card)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
 			_claim_equipment_name(sub, equipped_card)
+			_complete_card_actions([action])
 			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
@@ -2469,7 +2474,8 @@ func play_card(sub: CardData.CardSubType):
 				if not p.equip_mount_card(equipped_card):
 					_restore_equipment_payment(receipt, equipped_card)
 					return
-				_record_card_action(p, equipped_card)
+				var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+				_complete_card_actions([action])
 				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
 				])
@@ -2533,7 +2539,8 @@ func play_card(sub: CardData.CardSubType):
 				return
 			if result.replaced_card != null:
 				deck.discard(result.replaced_card)
-			_record_card_action(p, equipped_card)
+			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false, true)
+			_complete_card_actions([action])
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
 				CardData.get_type_name(old_sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -5585,8 +5592,9 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	p.equipment_cards[slot] = source
 	p.hidden_equip_slot = slot
 	p.hidden_equip_card = source
-	_record_card_action(p, source)
+	var action = _record_card_action(p, source, CardActionEvent.Kind.USE, true, false, true)
 	_discard_exhausted_hidden_category(etype)
+	_complete_card_actions([action])
 	if p.get_hidden_equipment_card(slot) == source:
 		_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
 	_sync_all_ui()
