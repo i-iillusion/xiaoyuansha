@@ -72,6 +72,7 @@ enum CardSubType {
 	MULE_MINUS,   # -1劣马（坐骑）：距离判定时视作其他玩家额外装备了-1马
 	MULE_PLUS,    # +1劣马（坐骑）：距离判定时视作其他玩家额外装备了+1马
 	HIDDEN_EQUIPMENT,  # 暗置装备（【苕】占位，明置后变为具体装备）
+	BORROWED_SWORD,    # 借刀杀人；追加以保持已有枚举ID，真实入口另行接入验收
 }
 
 # 卡牌中文名映射
@@ -140,6 +141,7 @@ const CARD_NAMES = {
 	CardSubType.MULE_MINUS: "-1劣马",
 	CardSubType.MULE_PLUS: "+1劣马",
 	CardSubType.HIDDEN_EQUIPMENT: "一件装备",
+	CardSubType.BORROWED_SWORD: "借刀杀人",
 }
 
 # 卡牌效果描述（详情弹窗显示）
@@ -159,6 +161,7 @@ const CARD_DESCRIPTIONS = {
 	CardSubType.DISARM: "每回合限一次，出牌阶段使用，所有有装备的角色弃置所有装备牌，然后摸相同数量的牌",
 	CardSubType.SNATCH: "出牌阶段，对距离 1 内的角色使用，获得其一张牌（与过河拆桥合计每回合限两张）",
 	CardSubType.DISMANTLE: "出牌阶段，对任意角色使用，弃置其一张牌（无距离限制，与顺手牵羊合计每回合限两张）",
+	CardSubType.BORROWED_SWORD: "每回合限使用两次。先确认一名持武器的其他角色，再由使用者选择其合法出杀目标；第二目标不可取消，基础读条超时随机合法目标。第一目标可对第二目标使用杀，拒绝则将武器交给使用者。借刀要求的杀一律不限次数、不占普通主动杀次数",
 	CardSubType.BURNING_CAMP: "延时锦囊：出牌阶段对距离 1 的角色使用，置入其判定区；判定生效时，其与左右相邻角色各受 1 点火焰伤害，并在左右相邻角色判定区各生成一张【火烧连营】",
 	CardSubType.NULLIFICATION: "响应牌：抵消一张锦囊牌的效果（不能主动打出，可连续响应）",
 	CardSubType.SACRIFICE: "响应牌：其他角色受到伤害时，防止其此次伤害；原伤害结束后，你承受继承来源、渠道、属性和连环性质的独立新伤害。以转移前数值为基数，不重复来源修正，不提供原杀的闪窗口（原目标本人不能用）",
@@ -224,6 +227,7 @@ const CARD_TYPE_MAP = {
 	CardSubType.DISARM: CardType.STRATAGEM,
 	CardSubType.SNATCH: CardType.STRATAGEM,
 	CardSubType.DISMANTLE: CardType.STRATAGEM,
+	CardSubType.BORROWED_SWORD: CardType.STRATAGEM,
 	CardSubType.BURNING_CAMP: CardType.STRATAGEM,
 	CardSubType.NULLIFICATION: CardType.STRATAGEM,
 	CardSubType.SACRIFICE: CardType.STRATAGEM,

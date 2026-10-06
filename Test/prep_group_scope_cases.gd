@@ -100,6 +100,7 @@ func run(suite):
 			user.determined_cards.append(null_card)
 			game._ai_response_override = func(_view, response_kind, options): return CardData.CardSubType.NULLIFICATION if response_kind == "nullification" and options.has(CardData.CardSubType.NULLIFICATION) else -1
 		if kind == "immune":
+			game.players[0].general_name = "布鲁斯·萨维奇"
 			game.players[0].kneeling = true
 			game.players[3].equip_card_to_slot("armor", CardBase.create(CardData.CardSubType.RENWANG_DUN))
 			game.players[4].general_name = "史蒂芬·彼特先斯"
@@ -131,7 +132,7 @@ func run(suite):
 		if invalid: suite.check(game.players[2].hp == 9 and game.players[3].hp == 10, "F02b-3b-1b prior damage retained, no later stale damage")
 		elif kind == "nullified": suite.check(game.players[2].hp == 10 and game.players[3].hp == 9 and game.deck._discard.count(null_card) == 1, "F02b-3b-1b actual null card paid once, cancels only one final target")
 		elif kind == "conditions": suite.check(game.players[3].hand_size() == 3 and tm.harvest_count_this_turn == 1, "F02b-3b-1b condition checked after change, not cached draw amount")
-		else: suite.check(game.players[2].hp == 9 and game.players[3].hp == 10 and game._prep_other_single(user) == null, "F02b-3b-1b one affected actor still five-player AOE")
+		else: suite.check(game.players[2].hp == 9 and game.players[0].hp == 10 and game.players[3].hp == 10 and game.players[4].hp == 10 and game._prep_other_single(user) == null, "F02b-3b-1b one affected actor still five-player AOE")
 	resetter._reset(suite)
 	game._aoe_override = Callable()
 	game.game_mode = mode

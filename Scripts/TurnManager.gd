@@ -79,6 +79,10 @@ var harvest_count_this_turn: int:
 var disarm_count_this_turn: int:
 	get: return _get_turn_count("disarm")
 	set(value): _set_turn_count("disarm", value)
+# CARD-04最新Q16：限制的是借刀牌本身，按实际使用者每回合两次。
+var borrowed_sword_count_this_turn: int:
+	get: return _get_turn_count("borrowed_sword")
+	set(value): _set_turn_count("borrowed_sword", value)
 # 酒状态已改为按玩家存（Player.wine_stacks）：狂暴战斧可叠加且跨回合保留，普通玩家每回合最多 1 层
 
 # 判定效果标志
@@ -288,6 +292,7 @@ func can_use(card_key: String, limit: int = -1) -> bool:
 		"peach_garden": return peach_garden_count_this_turn < 1
 		"harvest": return harvest_count_this_turn < 1
 		"disarm": return disarm_count_this_turn < 1
+		"borrowed_sword": return borrowed_sword_count_this_turn < 2
 	return true
 
 # 记录当前出牌操作者的一次使用（回合开始重置）
@@ -300,6 +305,7 @@ func use_card(card_key: String):
 		"peach_garden": peach_garden_count_this_turn += 1
 		"harvest": harvest_count_this_turn += 1
 		"disarm": disarm_count_this_turn += 1
+		"borrowed_sword": borrowed_sword_count_this_turn += 1
 
 # ---- 响应链 ----
 
