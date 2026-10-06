@@ -2608,6 +2608,9 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, card_sub, actions):
 		return
+	await _resolve_paid_aoe(p, required_sub, card_name, required_name, actions, response_revision)
+
+func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int):
 	_sync_all_ui()
 	turn_manager.use_card("aoe")
 	_reset_play_countdown_if_p0()
@@ -2780,6 +2783,9 @@ func _play_peach_garden():
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN, actions):
 		return
+	await _resolve_paid_peach_garden(p, actions, revision)
+
+func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int):
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
 	_reset_play_countdown_if_p0()
@@ -2827,6 +2833,9 @@ func _play_harvest():
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.HARVEST, actions):
 		return
+	await _resolve_paid_harvest(p, actions, revision)
+
+func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int):
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
 	_reset_play_countdown_if_p0()
@@ -2885,6 +2894,9 @@ func _play_disarm():
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.DISARM, actions):
 		return
+	await _resolve_paid_disarm(p, actions, revision)
+
+func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int):
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
