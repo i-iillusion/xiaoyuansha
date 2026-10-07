@@ -130,6 +130,54 @@ func run(suite):
 	await game._resolve_dying(leo, null, "F03 nested rescue")
 	suite.check(leo.hp == 1 and child.hp == 1 and game.players[4].is_dead() and game.yudaxi.results[0].deaths == 1 and game.deck._discard.count(peach) == 1, "F03a negative HP parent awaits real child rescue, only direct final deaths enter X")
 	suite.check(game._dying_contexts.is_empty() and not game.yudaxi.is_active(), "F03a legal parent/child windows both release")
+	# DY-07: rotate A/B to seats 4/0 so B really activates the existing self UI
+	# on a legal out-of-turn empty hand, rather than injecting a kneeling flag.
+	_reset(suite)
+	game.deck._discard.clear()
+	tm.current_phase = TurnManager.Phase.PLAY
+	tm.current_player_idx = 4
+	var identities_before: Array = []
+	var roles = ["忠臣", "反贼", "反贼", "内奸", "主公"]
+	for i in game.players.size():
+		var p = game.players[i]
+		identities_before.append([p.identity, p.identity_revealed, p.identity_max_hp_bonus])
+		p.identity_max_hp_bonus = 0
+		p.identity = roles[i]
+		p.identity_revealed = i == 4
+		p.max_hp = 5
+		p.hp = 5
+	leo = game.players[4]
+	leo.general_name = "里奥·普利威尔"
+	leo.identity_max_hp_bonus = 1
+	leo.capture_game_start_state()
+	leo.hp = 1
+	leo.hand.append(null)
+	var armor = CardBase.create(CardData.CardSubType.SILVER_LION)
+	var judgment = CardBase.create(CardData.CardSubType.INDULGENCE)
+	leo.equip_card_to_slot("armor", armor)
+	leo.judgment_cards.append(judgment)
+	var bruce: Player = game.players[0]
+	bruce.general_name = "布鲁斯·萨维奇"
+	bruce.max_hp = 5
+	bruce.hp = 1
+	bruce.kneel_used = false
+	game._kneel_override = func(): return true
+	await game._on_kneel_skill_clicked(bruce)
+	suite.check(bruce.kneeling and bruce.kneel_used and bruce.is_alive() and not game._get_all_alive_targets(leo).has(bruce), "F03c Q1 Bruce really enters legal kneeling; ordinary effect protection remains")
+	await game._deal_damage_result(game.players[2], leo, 1, EffectChain.DamageType.PHYSICAL)
+	suite.check(bruce.is_dead() and bruce.hp == -1 and game.yudaxi.results.size() == 1 and game.yudaxi.results[0].deaths == 1,
+		"F03c Q1 kneeling Bruce deducts two and his final death enters direct X")
+	suite.check(leo.is_alive() and leo.hp == 1 and leo.hand == [null, null] and leo.get_equipment_card("armor") == armor and leo.judgment_cards == [judgment],
+		"F03c Q1 Leo restores to one, draws one arbitrary card and preserves all original zones")
+	suite.check(game.players[1].hp == 3 and game.players[2].hp == 3 and game.players[3].hp == 3 and game._dying_contexts.is_empty() and not game.yudaxi.is_active() and not game._game_over,
+		"F03c Q1 continues remaining targets and releases whole real damage/dying flow")
+	suite.check(leo.identity == "主公" and leo.identity_revealed and leo.max_hp == 6 and bruce.identity == "忠臣" and bruce.identity_revealed,
+		"F03c Q1 uses complete legal five-player identities and real base/lord HP; only final victim reveals")
+	for i in game.players.size():
+		game.players[i].identity = identities_before[i][0]
+		game.players[i].identity_revealed = identities_before[i][1]
+		game.players[i].identity_max_hp_bonus = identities_before[i][2]
+	game._kneel_override = Callable()
 	game._sage_save_override = Callable()
 	game._zone_pick_override = Callable()
 	suite.reset_players()

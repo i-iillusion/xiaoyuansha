@@ -20,7 +20,7 @@ grow_horizontal = 2
 grow_vertical = 2
 color = Color(0.1, 0.09, 0.14, 1)
 
-[node name="Center" type="CenterContainer" parent="."]
+[node name="Center" type="ScrollContainer" parent="."]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -29,7 +29,10 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Box" type="VBoxContainer" parent="Center"]
+custom_minimum_size = Vector2(640, 0)
 layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
 theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="Center/Box"]

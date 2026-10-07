@@ -4,15 +4,23 @@ extends SceneTree
 var game: GameManager
 var failures := 0
 var checks := 0
+var _check_log_buffer: Array[String] = []
 
 func _init():
 	_run()
+
+func _flush_check_log():
+	if _check_log_buffer.is_empty(): return
+	print("\n".join(_check_log_buffer))
+	_check_log_buffer.clear()
 
 func check(ok: bool, message: String):
 	checks += 1
 	if not ok:
 		failures += 1
-	print(("PASS: " if ok else "FAIL: ") + message)
+	# Keep every line and flush failures immediately, as in the core suite.
+	_check_log_buffer.append(("PASS: " if ok else "FAIL: ") + message)
+	if not ok or _check_log_buffer.size() >= 256: _flush_check_log()
 
 func reset_players():
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
@@ -149,16 +157,16 @@ func _run():
 	check(owner.judgment_cards.size() == 1 and game.players[2].judgment_cards.size() == 1, "判定生效后才向相邻判定区蔓延")
 	# GEN-01：抽将池只含可用武将；随机分配无放回，不拿稻草人补足。
 	var pool = GeneralData.get_available_random_generals()
-	check(pool.size() == 7 and not pool.has("稻草人"), "随机池仅含当前七名非占位武将")
-	for count in [2, 3, 5, 7]:
+	check(pool.size() == 8 and pool.has("里奥·普利威尔") and not pool.has("稻草人"), "随机池含当前八名非占位武将，里奥已开放")
+	for count in [2, 3, 5, 7, 8]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}
 		for name in draw:
 			unique[name] = true
 		check(draw.size() == count and unique.size() == count, "%d人随机选将无重复" % count)
-	check(GeneralData.METADATA_ONLY_GENERALS.size() == 24
+	check(GeneralData.METADATA_ONLY_GENERALS.size() == 23
 		and GeneralData.get_implementation_status("安迪·沃费尔") == "deferred",
-		"手册其余24将均有资料状态，安迪仍暂缓")
+		"手册其余23将均有资料状态，安迪仍暂缓")
 	for count in [8, 10]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}
@@ -182,7 +190,7 @@ func _run():
 		and GeneralData.get_gender("里奥·普利威尔") == "male",
 		"手册女性武将资料不再沿用全员男性默认")
 	var metadata_player = Player.new()
-	metadata_player.general_name = "里奥·普利威尔"
+	metadata_player.general_name = "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹"
 	metadata_player.max_hp = GeneralData.get_max_hp(metadata_player.general_name, 5)
 	root.add_child(metadata_player)
 	var metadata_popup = PlayerDetailPopup.create(root, metadata_player)
@@ -190,9 +198,10 @@ func _run():
 	var skill_rows = metadata_popup.get_node("Panel/Content/SkillsSection/SkillsList").get_children()
 	var warning_found = false
 	for row in skill_rows:
-		if row is Label and row.text.contains("技能尚未实装") and row.text.contains("6.7"):
+		if row is Label and row.text.contains("技能尚未实装") and row.text.contains("6.8"):
 			warning_found = true
 	check(warning_found, "资料武将详情明确显示技能未实装及手册章节，而非没有技能")
+	check(GeneralData.get_implementation_status(metadata_player.general_name) == "metadata_only", "资料警告仍以未实装武将验收，不把已开放里奥当资料将")
 	metadata_popup.queue_free()
 	metadata_player.queue_free()
 	var previous_count = GameManager.selected_players
@@ -270,10 +279,7 @@ func _run():
 	await awaken_lifecycle_cases.run(self)
 	var awaken_default_cases = load("res://Test/awaken_default_cases.gd").new()
 	await awaken_default_cases.run(self)
-	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
-	await basic_prompt_cases.run(self)
-	var nullification_prompt_cases = load("res://Test/nullification_prompt_cases.gd").new()
-	await nullification_prompt_cases.run(self)
+	# F03c: two complete response modules moved to core to balance fixed 60s suites.
 	var sacrifice_prompt_cases = load("res://Test/sacrifice_prompt_cases.gd").new()
 	await sacrifice_prompt_cases.run(self)
 	var liehuo_prompt_cases = load("res://Test/liehuo_prompt_cases.gd").new()
@@ -298,8 +304,7 @@ func _run():
 	await gou_lian_hidden_cases.run(self)
 	var bloodthirsty_prompt_cases = load("res://Test/bloodthirsty_prompt_cases.gd").new()
 	await bloodthirsty_prompt_cases.run(self)
-	var bloodthirsty_rps_cases = load("res://Test/bloodthirsty_rps_cases.gd").new()
-	await bloodthirsty_rps_cases.run(self)
+	# F03c: complete bloodthirsty RPS regression now runs once in core.
 	var calamity_prompt_cases = load("res://Test/calamity_prompt_cases.gd").new()
 	await calamity_prompt_cases.run(self)
 	var calamity_combination_cases = load("res://Test/calamity_combination_cases.gd").new()
@@ -322,5 +327,6 @@ func _run():
 	await soul_blade_rps_cases.run(self)
 	var soul_blade_activation_cases = load("res://Test/soul_blade_activation_cases.gd").new()
 	await soul_blade_activation_cases.run(self)
+	_flush_check_log()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

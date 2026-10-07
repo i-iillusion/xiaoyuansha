@@ -63,6 +63,16 @@ const GENERALS = {
 			"【校园霸主】出牌阶段，你可以选择一名除你以外的有手牌的角色，你与该角色各弃置一张手牌并进行拼点，赢者对输者造成一点伤害",
 		],
 	},
+	"里奥·普利威尔": {
+		"max_hp": 5,
+		"section": "6.7",
+		"avatar": "📚",
+		"skills": [
+			"【丑态】锁定技：摸牌阶段基础摸一张牌；额外摸牌不受影响",
+			"【预习】在你的回合内，每使用或打出一张手牌，在该张牌全部结算完成后获得一个标记；非延时锦囊（除无懈可击与舍己为人）使用时，可弃一个已有标记更换锦囊，不能换成舍己为人，保留原实体与使用者，单体不换目标；新牌限额生效，目标范围依现行手册补充裁决",
+			"【预大习】锁定技：正常求救及既定保命未救回时，在最终死亡前，从下家起其他角色依次扣2点体力（下跪亦扣除）；本帧直接扣血造成X人最终死亡，则回复至X并额外摸X，保留手牌、装备、判定区且不翻身份；X=0则继续死亡结算",
+		],
+	},
 	"麦克斯·欧尼斯特": {
 		"max_hp": 4,
 		"avatar": "🤠",
@@ -76,7 +86,6 @@ const GENERALS = {
 # 手册第6章资料索引；以下武将的技能尚未完整接入，不进入自选菜单。
 # 安迪整组暂缓；泰瑞的体力上限 X = 开局其他玩家数，需在开局时给出人数。
 const METADATA_ONLY_GENERALS = {
-	"里奥·普利威尔": {"max_hp": 5, "section": "6.7"},
 	"彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹": {"max_hp": 3, "section": "6.8"},
 	"大卫·法米尔": {"max_hp": 4, "section": "6.9"},
 	"卢卡斯·托克": {"max_hp": 5, "section": "6.11"},
@@ -125,7 +134,7 @@ static func get_implementation_status(general_name: String) -> String:
 	return "unknown"
 
 static func get_handbook_section(general_name: String) -> String:
-	return METADATA_ONLY_GENERALS.get(general_name, {}).get("section", "")
+	return GENERALS.get(general_name, METADATA_ONLY_GENERALS.get(general_name, {})).get("section", "")
 
 static func get_avatar(general_name: String) -> String:
 	var data = GENERALS.get(general_name)

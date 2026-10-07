@@ -107,6 +107,7 @@ func _show_general_select():
 	_add_general_btn("史蒂芬·彼特先斯")
 	_add_general_btn("杰基·斯特朗")
 	_add_general_btn("麦克斯·欧尼斯特")
+	_add_general_btn("里奥·普利威尔")
 	_add_general_btn("比尔·盖伊")
 	_add_btn("← 返回", _show_test, "")
 
@@ -117,6 +118,9 @@ func _add_general_btn(general_name: String):
 		skills_text = "\n".join(data["skills"])
 	var btn = Button.new()
 	btn.text = "%s %s — 体力 %d\n%s" % [data["avatar"], general_name, data["max_hp"], skills_text]
+	btn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	btn.clip_text = true
+	btn.tooltip_text = skills_text
 	btn.custom_minimum_size = Vector2(420, 96)
 	btn.add_theme_font_size_override("font_size", 16)
 	btn.pressed.connect(_select_general.bind(general_name))
