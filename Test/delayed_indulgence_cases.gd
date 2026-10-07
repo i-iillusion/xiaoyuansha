@@ -15,6 +15,8 @@ func run(suite):
 func run_limits(suite, sub: CardData.CardSubType, key: String, label: String):
 	var game = await new_game(suite, 5)
 	var a = game.players[0]
+	if sub == CardData.CardSubType.SUPPLY_SHORTAGE:
+		a.equip_card_to_slot("mount_1", CardBase.create(CardData.CardSubType.MOUNT_MINUS))
 	a.hand.assign([null, null, null])
 	await game.execute_card_on_target(game.players[1], sub)
 	var original = game.players[1].judgment_cards[0]
@@ -122,3 +124,18 @@ func run_delayed(suite, sub: CardData.CardSubType, label: String):
 		suite.check(game.turn_manager.current_phase == TurnManager.Phase.JUDGE and game.turn_manager.skip_judge_phase and game.deck._discard.is_empty() and game.players[0].judgment_cards.has(original) == not empty, label + " terminal entry preserves stage/flags/original even with empty judgment")
 		game.queue_free()
 		await suite.process_frame
+	# A loyalist can place the delayed card, then finally die before its judgment.
+	var game = await new_game(suite, 5)
+	game.turn_manager.current_player_idx = 1
+	game.players[1].hand.append(null)
+	await game.execute_card_on_target(game.players[0], sub)
+	var original = game.players[0].judgment_cards[0]
+	game.players[1].hp = 1
+	await game._deal_damage_result(game.players[2], game.players[1], 1, EffectChain.DamageType.PHYSICAL)
+	suite.check(game.players[1].is_dead() and not game._game_over and game.players[0].judgment_cards == [original] and original.source_seat == 1, label + " real final source death does not remove target's original delayed card")
+	game.turn_manager.current_player_idx = 0
+	game.turn_manager.current_phase = TurnManager.Phase.JUDGE
+	await game._do_judge(0)
+	suite.check(game.deck._discard.count(original) == 1 and game.players[0].judgment_cards.is_empty() and (game.turn_manager.skip_play_phase if sub == CardData.CardSubType.INDULGENCE else game.turn_manager.supply_shortage_active), label + " surviving target still judges original after source final death")
+	game.queue_free()
+	await suite.process_frame

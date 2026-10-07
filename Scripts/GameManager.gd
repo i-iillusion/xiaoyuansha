@@ -1107,7 +1107,7 @@ func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
 			continue
-		if sub == CardData.CardSubType.INDULGENCE and _has_delayed_card(target, sub):
+		if sub in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE] and _has_delayed_card(target, sub):
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and p.attack_distance_to(target) > 1:
 			continue
@@ -1141,6 +1141,8 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 			return turn_manager.can_use("borrowed_sword")
 		CardData.CardSubType.INDULGENCE:
 			return turn_manager.can_use("indulgence")
+		CardData.CardSubType.SUPPLY_SHORTAGE:
+			return turn_manager.can_use("supply_shortage")
 	return sub in TARGET_TRICKS
 
 func _ai_play_candidates(observation: Dictionary) -> Array:
@@ -1919,6 +1921,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
 			if sub == CardData.CardSubType.INDULGENCE: turn_manager.use_card("indulgence")
+			elif sub == CardData.CardSubType.SUPPLY_SHORTAGE: turn_manager.use_card("supply_shortage")
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
@@ -2411,8 +2414,8 @@ func play_card(sub: CardData.CardSubType):
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.SUPPLY_SHORTAGE:
-			# 兵粮寸断：只能对攻击距离 1 内的角色使用（与杀一致）
-			var ss_targets = _get_attackable_targets(p)
+			# 兵粮只检自己的距离/延时牌合法性，不借用杀的免疫目标过滤。
+			var ss_targets = get_trick_targets(p, sub)
 			if ss_targets.is_empty():
 				_update_debug("攻击距离 1 内没有可用的目标！")
 				return
