@@ -990,14 +990,14 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 				else:
 					_update_debug("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
 					# G02d-Q3：火烧连营始终为无来源火焰伤害。
-					if await _resolve_burning_camp_damage(null, p, 1) == CHOICE_INVALID or _game_over:
+					var burning = await _resolve_burning_camp_result(p, 1)
+					if burning.outcome == CHOICE_INVALID or _game_over:
 						deck.discard(card)
 						return false
 					# 蔓延：判定者左右判定区各生成一张火烧连营（已有则不重复）
-					var bc_left = players[(p.seat_index + 1) % player_count]
-					var bc_right = players[(p.seat_index - 1 + player_count) % player_count]
-					_spawn_burning_camp(bc_left, card.source_seat)
-					_spawn_burning_camp(bc_right, card.source_seat)
+					# Q4：沿本次选定的邻居，仅向其中仍存活者放牌，不再补位。
+					for neighbor in burning.neighbors:
+						_spawn_burning_camp(neighbor, card.source_seat)
 			_:
 				_update_debug("%s 的判定牌【%s】无效果" % [p.player_name, card.card_name])
 		deck.discard(card)
@@ -1130,7 +1130,7 @@ func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
 			continue
-		if sub in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE] and _has_delayed_card(target, sub):
+		if sub in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and _has_delayed_card(target, sub):
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and p.attack_distance_to(target) > 1:
 			continue
@@ -2449,7 +2449,7 @@ func play_card(sub: CardData.CardSubType):
 
 		CardData.CardSubType.BURNING_CAMP:
 			# 火烧连营：只能对攻击距离 1 内的角色使用
-			var bc_targets = _get_attackable_targets(p)
+			var bc_targets = get_trick_targets(p, sub)
 			if bc_targets.is_empty():
 				_update_debug("攻击距离 1 内没有可用的目标！")
 				return
@@ -4894,38 +4894,67 @@ func _show_duel_second_strike_prompt() -> int:
 #  火烧连营
 # ============================
 
-# 火烧连营伤害结算：中心角色 → 左侧（下家 seat+1）→ 右侧（上家 seat-1），各受 amount 点火焰伤害
-# 每个受伤者独立濒死检查 + 铁索传导（火焰伤害）
+# Q2：中心伤害及其传导/濒死结束后，按存活圆桌选下家、上家。
+# 即使中心最终死亡，也以其原空间位置为锚；不修改固定座号。
+func _burning_camp_neighbors(center: Player) -> Array[Player]:
+	var circle = LivingTable.ordered(players)
+	circle.erase(center)
+	var result: Array[Player] = []
+	if circle.is_empty(): return result
+	var next = circle[0]
+	var previous = circle.back()
+	for p in circle:
+		if p.seat_index > center.seat_index:
+			next = p
+			break
+	for i in range(circle.size() - 1, -1, -1):
+		if circle[i].seat_index < center.seat_index:
+			previous = circle[i]
+			break
+	result.append(next)
+	if previous != next: result.append(previous)
+	return result
+
+# 兼容入口也始终无来源；生产调用使用局部结果携带邻居快照，避免异步共享状态。
 func _resolve_burning_camp_damage(_source: Player, center: Player, amount: int) -> int:
+	var result = await _resolve_burning_camp_result(center, amount)
+	return result.outcome
+
+func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
-	var left = players[(center.seat_index + 1) % player_count]
-	var right = players[(center.seat_index - 1 + player_count) % player_count]
-
-	# G02d-Q1：上下家是同一角色时只受一次，不重复执行其伤害链。
-	var victims: Array[Player] = [center]
-	for neighbor in [left, right]:
-		if not victims.has(neighbor): victims.append(neighbor)
-	var victim_names: Array[String] = []
-	for victim in victims: victim_names.append(victim.player_name)
-	_update_debug("火焰蔓延：%s（顺序：%s）" % [victim_names[0], "、".join(victim_names)])
-
-	for victim in victims:
-		if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation: return CHOICE_INVALID
-		if not victim.is_alive():
+	var result = {"outcome": 0, "neighbors": []}
+	var valid = func(): return revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation and players.has(center)
+	if not valid.call():
+		result.outcome = CHOICE_INVALID
+		return result
+	if _game_over or _is_kneeling(center): return result
+	var center_damage = await _deal_damage_result(null, center, amount, EffectChain.DamageType.FIRE)
+	if center_damage.invalidated or not valid.call():
+		result.outcome = CHOICE_INVALID
+		return result
+	if _game_over: return result
+	result.neighbors = _burning_camp_neighbors(center)
+	for victim in result.neighbors:
+		if not valid.call():
+			result.outcome = CHOICE_INVALID
+			return result
+		if not victim.is_alive() or _is_kneeling(victim):
 			continue
 		# 胜负已分：不再结算后续伤害
 		if _game_over:
 			break
 		var damage = await _deal_damage_result(null, victim, amount, EffectChain.DamageType.FIRE)
-		if damage.invalidated: return CHOICE_INVALID
+		if damage.invalidated or not valid.call():
+			result.outcome = CHOICE_INVALID
+			return result
 
 	_sync_all_ui()
-	return 0
+	return result
 
 # 在目标判定区生成一张火烧连营（判定区已有火烧连营则不重复，防止无限蔓延）
 func _spawn_burning_camp(target: Player, source_seat: int):
-	if not target.is_alive():
+	if not target.is_alive() or _is_kneeling(target):
 		return
 	for c in target.judgment_cards:
 		if c.sub_type == CardData.CardSubType.BURNING_CAMP:
