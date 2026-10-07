@@ -132,6 +132,7 @@ var _prep_replace_override: Callable = Callable()
 var _prep_steal_pick_override: Callable = Callable()
 var _borrowed_second_target_override: Callable = Callable()
 var _borrowed_strike_override: Callable = Callable()
+var _borrowed_extra_targets_override: Callable = Callable()
 
 # AOE 响应测试钩子（正常游戏不设置，南蛮/万箭）：返回 true = 玩家0打出响应牌
 var _aoe_override: Callable = Callable()
@@ -3050,8 +3051,76 @@ func _choose_borrowed_strike(first: Player, second: Player, allowed: Callable) -
 	if selected == -1: return -1
 	return selected if options.has(selected) and HandPayment.has_card(first, selected) else CHOICE_INVALID
 
+# Q19/Q21：只选择本次杀的目标，不支付；固定目标不可取消。
+func _choose_borrowed_strike_targets(first: Player, second: Player, sub: int, allowed: Callable) -> Variant:
+	if first == null or second == null or not players.has(first): return CHOICE_INVALID
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var weapon = _equipment_resource_for_pick(first, "weapon")
+	var snapshot = HandSelection.new(first)
+	var candidates = _get_strike_targets(first)
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+			and players.has(first) and first.is_alive() and candidates == _get_strike_targets(first) \
+			and _equipment_resource_for_pick(first, "weapon") == weapon \
+			and first.hand == snapshot.hand and first.determined_cards == snapshot.determined \
+			and HandPayment.has_card(first, sub) and (not allowed.is_valid() or allowed.call())
+	if not valid.call() or not candidates.has(second): return CHOICE_INVALID
+	if first.get_weapon() != CardData.CardSubType.FANGTIAN_HALBERD: return [second]
+	var selected: Variant = [second]
+	if _borrowed_extra_targets_override.is_valid():
+		selected = await _borrowed_extra_targets_override.call(first, second, candidates.duplicate())
+	elif first.seat_index == 0:
+		selected = await _show_borrowed_extra_targets(second, candidates, valid)
+	# AI暂沿保守策略只杀指定目标，不限制真人合法追加能力。
+	if not valid.call() or not selected is Array or not selected.has(second): return CHOICE_INVALID
+	var seen: Array = []
+	for target in selected:
+		if not candidates.has(target) or seen.has(target): return CHOICE_INVALID
+		seen.append(target)
+	# 固定目标保留；追加目标沿既有多目标杀的选择顺序。
+	var result: Array = [second]
+	for target in seen:
+		if target != second: result.append(target)
+	return result
+
+func _show_borrowed_extra_targets(second: Player, candidates: Array, allowed: Callable) -> Variant:
+	var answer = ChoicePromptAnswer.new()
+	var selected: Array = [second]
+	var overlay = ColorRect.new()
+	overlay.color = Color(0, 0, 0, 0.55)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	$UI.add_child(overlay)
+	var box = VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	overlay.add_child(box)
+	var label = Label.new()
+	label.text = "【借刀·方天】固定目标：%s；可勾选追加目标，超时按当前选择出杀" % second.player_name
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(label)
+	for target in candidates:
+		var button = CheckButton.new()
+		button.text = target.player_name
+		button.button_pressed = target == second
+		button.disabled = target == second
+		button.toggled.connect(func(on):
+			if answer.settled or not allowed.call(): return
+			if on and not selected.has(target): selected.append(target)
+			elif not on and target != second: selected.erase(target))
+		box.add_child(button)
+	var confirm = Button.new()
+	confirm.text = "确认出杀"
+	confirm.pressed.connect(answer.submit.bind(0), CONNECT_ONE_SHOT)
+	box.add_child(confirm)
+	var choice = await _wait_choice_prompt(overlay, answer, allowed)
+	if choice == CHOICE_INVALID: return CHOICE_INVALID
+	return selected.duplicate() if choice in [0, -1] else CHOICE_INVALID
+
 # 已支付借刀效果；Q20第二目标确认后，原使用者最终死亡不截断结算。
-# Q19方天选择尚待Q21超时默认，效果层已独立验收。
+# Q19/Q21：方天保留固定目标，追加选择超时按当前勾选集合出杀。
 # 菜单/替换入口仍未开放，不把范围验收当作整张牌已完成。
 func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
 	var revision = turn_manager.get_context_revision()
@@ -3084,10 +3153,6 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_complete_card_actions(actions)
 		_sync_all_ui()
 		return
-	# 尚未接方天追加目标窗口，不能临时按只能杀指定目标处理。
-	if first.get_weapon() == CardData.CardSubType.FANGTIAN_HALBERD:
-		_abandon_card_actions(actions)
-		return
 	var strike_sub = await _choose_borrowed_strike(first, second, valid)
 	if strike_sub == CHOICE_INVALID or not valid.call():
 		_abandon_card_actions(actions)
@@ -3114,7 +3179,11 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_complete_card_actions(actions)
 		_sync_all_ui()
 		return
-	var result = await _resolve_borrowed_strike(first, [second], strike_sub, valid)
+	var targets = await _choose_borrowed_strike_targets(first, second, strike_sub, valid)
+	if not targets is Array or not valid.call():
+		_abandon_card_actions(actions)
+		return
+	var result = await _resolve_borrowed_strike(first, targets, strike_sub, valid)
 	if result == CHOICE_INVALID:
 		_abandon_card_actions(actions)
 		return
