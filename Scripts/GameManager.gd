@@ -1085,7 +1085,7 @@ func can_declare_basic(p: Player, sub: int) -> bool:
 
 const TARGET_TRICKS = [CardData.CardSubType.DUEL, CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE,
 	CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP,
-	CardData.CardSubType.IRON_CHAIN]
+	CardData.CardSubType.IRON_CHAIN, CardData.CardSubType.BORROWED_SWORD]
 const GLOBAL_TRICKS = [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS,
 	CardData.CardSubType.PEACH_GARDEN, CardData.CardSubType.HARVEST, CardData.CardSubType.DISARM]
 
@@ -1100,6 +1100,8 @@ func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 			continue
 		if sub == CardData.CardSubType.DUEL and (not _get_duel_targets(p).has(target)
 				or target.get_armor() == CardData.CardSubType.ZHANQI or _awake_blocks(target, 2)):
+			continue
+		if sub == CardData.CardSubType.BORROWED_SWORD and (_equipment_resource_for_pick(target, "weapon") == null or _get_strike_targets(target).is_empty()):
 			continue
 		result.append(target)
 	return result
@@ -1122,6 +1124,8 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 			return turn_manager.can_use("harvest")
 		CardData.CardSubType.DISARM:
 			return turn_manager.can_use("disarm")
+		CardData.CardSubType.BORROWED_SWORD:
+			return turn_manager.can_use("borrowed_sword")
 	return sub in TARGET_TRICKS
 
 func _ai_play_candidates(observation: Dictionary) -> Array:
@@ -1863,6 +1867,20 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, valid, replacements, false, roster)
 			await _resolve_prep_effect(p, [target], effect_sub, actions, replacements, valid, action_revision, "", roster)
 
+		CardData.CardSubType.BORROWED_SWORD:
+			var generation = _dying_lifecycle_generation
+			var weapon = _equipment_resource_for_pick(target, "weapon")
+			var actions: Array[CardActionEvent] = []
+			if not await _consume_trick(p, sub, actions): return
+			# Q20：第二目标确认后允许原使用者最终死亡，不能用外层存活门槛截断。
+			var valid = func():
+				return not _game_over and generation == _dying_lifecycle_generation \
+					and action_revision == turn_manager.get_context_revision() \
+					and players.has(p) and players.has(target) and weapon != null \
+					and _equipment_resource_for_pick(target, "weapon") == weapon
+			# 预习进出借刀留下一子项；本项只接原版支付及效果。
+			await _resolve_paid_borrowed_sword(p, target, actions, valid)
+
 		CardData.CardSubType.DISMANTLE:
 			await _play_steal_card(p, target, false)
 
@@ -2271,6 +2289,10 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的目标！")
 				return
 			if not await _choose_yes_ah_for_play(p, "决斗"): return
+			_enter_targeting_mode(sub)
+
+		CardData.CardSubType.BORROWED_SWORD:
+			if not await _choose_yes_ah_for_play(p, "借刀杀人"): return
 			_enter_targeting_mode(sub)
 
 		CardData.CardSubType.BARBARIAN_INVASION:
@@ -10072,6 +10094,7 @@ func _on_target_click(target: Player):
 	var no_distance_sub_types = [
 		CardData.CardSubType.DISMANTLE,
 		CardData.CardSubType.INDULGENCE,
+		CardData.CardSubType.BORROWED_SWORD,
 	]
 	var qiling_bow = is_strike_target and attacker.get_weapon() == CardData.CardSubType.QILING_BOW
 	# 【决斗】距离限制 2（含马修正）：与杀的距离规则一致，只是上限为 2
@@ -10093,13 +10116,15 @@ func _on_target_click(target: Player):
 	var revision = turn_manager.get_context_revision()
 	var selected_sub = _targeting_card_sub
 	var pending_card = _pending_determined_card
+	var borrowed_weapon = _equipment_resource_for_pick(target, "weapon") if selected_sub == CardData.CardSubType.BORROWED_SWORD else null
 	var valid = func():
 		return _can_use_play_skill(attacker) and generation == _card_target_generation \
 			and revision == turn_manager.get_context_revision() and _is_targeting \
 			and _targeting_card_sub == selected_sub and _pending_determined_card == pending_card \
 			and players.has(target) and target.is_alive() and not _is_kneeling(target) \
 			and (not is_strike_target or _get_strike_targets(attacker).has(target)) \
-			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target))
+			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target)) \
+			and (selected_sub != CardData.CardSubType.BORROWED_SWORD or _equipment_resource_for_pick(target, "weapon") == borrowed_weapon)
 	_card_target_confirm_owner = generation
 	var confirmed = await _show_target_confirm(attacker.player_name, target.player_name, selected_sub, valid)
 	if _card_target_confirm_owner == generation: _card_target_confirm_owner = -1

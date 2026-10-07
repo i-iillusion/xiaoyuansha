@@ -5,7 +5,7 @@ func run(suite):
 	var card = CardBase.create(sub)
 	suite.check(sub == CardData.CardSubType.HIDDEN_EQUIPMENT + 1 and CardData.CardSubType.STRIKE == 0 and CardData.CardSubType.DUEL == 8 and CardData.CardSubType.DISARM == 12, "F02b-3b-2a borrowed appended without shifting old enum IDs")
 	suite.check(card.sub_type == sub and card.card_name == "借刀杀人" and CardData.CARD_TYPE_MAP[sub] == CardData.CardType.STRATAGEM and card.description == CardData.CARD_DESCRIPTIONS[sub], "F02b-3b-2a original borrowed entity metadata")
-	suite.check(not CardData.get_playable_sub_types().has(sub) and not suite.game.TARGET_TRICKS.has(sub), "F02b-3b-2a incomplete borrowed runtime not advertised")
+	suite.check(CardData.get_playable_sub_types().has(sub) and suite.game.TARGET_TRICKS.has(sub) and CardSelector.STRATAGEM_NORMAL.has(sub), "F02b-3b-2b-3 verified original borrowed runtime advertised by shared menus")
 	var tm = TurnManager.new()
 	tm.player_count = 5
 	tm.debug_log = false

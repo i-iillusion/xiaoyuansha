@@ -37,6 +37,7 @@ const STRATAGEM_NORMAL = [
 	CardData.CardSubType.BARBARIAN_INVASION,
 	CardData.CardSubType.VOLLEY_OF_ARROWS,
 	CardData.CardSubType.DUEL,
+	CardData.CardSubType.BORROWED_SWORD,
 	CardData.CardSubType.IRON_CHAIN,
 	CardData.CardSubType.PEACH_GARDEN,
 	CardData.CardSubType.HARVEST,

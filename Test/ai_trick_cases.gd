@@ -21,6 +21,7 @@ func reset_case():
 	game.turn_manager.harvest_count_this_turn = 0
 	game.turn_manager.peach_garden_count_this_turn = 0
 	game.turn_manager.disarm_count_this_turn = 0
+	game.turn_manager.borrowed_sword_count_this_turn = 0
 	for p in game.players:
 		p.mount_minus = 0
 		p.mount_plus = 0
@@ -51,6 +52,9 @@ func run(host):
 				b.hp = 9
 			if sub == CardData.CardSubType.DISARM:
 				b.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.LIANNU))
+			if sub == CardData.CardSubType.BORROWED_SWORD:
+				b.equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.LIANNU))
+				game._borrowed_second_target_override = func(options): return options.find(game.players[3])
 			var selected: Array = []
 			game.ai_driver.chooser = func(_view, options):
 				if not selected.is_empty():
@@ -86,6 +90,9 @@ func run(host):
 					check(b.equipment.is_empty() and b.hand == [null], "卸甲弃原装备并摸同数量任意牌")
 				CardData.CardSubType.IRON_CHAIN:
 					check(b.chained, "铁索真实单目标执行不进入真人选人窗口")
+				CardData.CardSubType.BORROWED_SWORD:
+					check(b.equipment.is_empty() and a.determined_cards.size() == 1 and a.determined_cards[0].sub_type == CardData.CardSubType.LIANNU, "原版借刀AI无杀交原武器入使用者手牌")
+	game._borrowed_second_target_override = Callable()
 	reset_case()
 	var actor: Player = game.players[1]
 	actor.hand.append(CardBase.create(CardData.CardSubType.SNATCH))

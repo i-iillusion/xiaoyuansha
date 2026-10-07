@@ -12,7 +12,8 @@ func run(suite):
 	game.game_mode = GameManager.MODE_CLASSIC_IDENTITY
 	var resetter = load("res://Test/prep_single_replace_cases.gd").new()
 	for concrete in [false, true]:
-		for mode in ["odd", "even_refuse", "even_kill", "even_empty", "invalid_after_cost", "restart_cost"]:
+		for case_name in ["odd", "even_refuse", "even_kill", "even_empty", "invalid_after_cost", "restart_cost", "original_odd", "original_even_refuse", "original_even_kill"]:
+			var mode: String = case_name.trim_prefix("original_")
 			resetter._reset(suite)
 			game.deck._discard.clear()
 			tm.current_phase = TurnManager.Phase.PLAY
@@ -54,16 +55,28 @@ func run(suite):
 			else: user.hand.append(null)
 			var spare = CardBase.create(CardData.CardSubType.DODGE)
 			user.determined_cards.append(spare)
-			var actual = HandPayment.take_card(user, CardData.CardSubType.BORROWED_SWORD)
-			game.deck.discard(actual)
+			var actual: CardBase
 			var events: Array[CardActionEvent] = []
 			var completed: Array[CardActionEvent] = []
 			var commit = func(event): events.append(event)
 			var finish = func(event): completed.append(event)
 			game.card_action_committed.connect(commit)
 			game.card_action_completed.connect(finish)
-			var action = game._record_card_action(user, actual, CardActionEvent.Kind.USE, true, false)
-			await game._resolve_paid_borrowed_sword(user, first, [action], func(): return valid[0])
+			var action: CardActionEvent
+			if case_name.begins_with("original_"):
+				await game.execute_card_on_target(first, CardData.CardSubType.BORROWED_SWORD)
+				suite.check(not events.is_empty(), "F02 Q20 original entry commits actual paid Borrow before lethal nullification")
+				if events.is_empty():
+					game.card_action_committed.disconnect(commit)
+					game.card_action_completed.disconnect(finish)
+					continue
+				action = events[0]
+				actual = action.card
+			else:
+				actual = HandPayment.take_card(user, CardData.CardSubType.BORROWED_SWORD)
+				game.deck.discard(actual)
+				action = game._record_card_action(user, actual, CardActionEvent.Kind.USE, true, false)
+				await game._resolve_paid_borrowed_sword(user, first, [action], func(): return valid[0])
 			var invalid = mode in ["invalid_after_cost", "restart_cost"]
 			suite.check((user.is_dying() and not user.is_dead() and user.hand_size() == 1 if mode == "restart_cost" else user.is_dead() and user.hand_size() == 0) and not game._game_over, "F02 Q20 final death clears cards; technical restart never fabricates final death")
 			suite.check(actual.sub_type == CardData.CardSubType.BORROWED_SWORD and game.deck._discard.count(actual) == 1 and (not concrete or actual == parent) and game.deck._discard.count(spare) == (0 if mode == "restart_cost" else 1), "F02 Q20 original paid borrow and final death discard preserve physical originals")

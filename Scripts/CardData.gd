@@ -291,6 +291,7 @@ static func get_playable_sub_types() -> Array[CardSubType]:
 		CardSubType.BARBARIAN_INVASION,
 		CardSubType.VOLLEY_OF_ARROWS,
 		CardSubType.DUEL,
+		CardSubType.BORROWED_SWORD,
 		CardSubType.IRON_CHAIN,
 		CardSubType.PEACH_GARDEN,
 		CardSubType.HARVEST,
