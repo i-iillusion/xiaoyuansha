@@ -87,6 +87,19 @@ jobs:
           done
           exit "$failed"
 
+      - name: Package playtest source
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output="$RUNNER_TEMP/playtest-source.zip" HEAD -- Scripts Scenes Docs project.godot README.md
+
+      - name: Upload playtest source
+        uses: actions/upload-artifact@v7
+        with:
+          name: playtest-source
+          path: ${{ runner.temp }}/playtest-source.zip
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload Godot logs
         if: always()
         uses: actions/upload-artifact@v7

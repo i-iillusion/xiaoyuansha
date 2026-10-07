@@ -27,6 +27,8 @@
 
 ## 运行与测试
 
+[源码试玩基础包：下载、启动、操作与人工验收清单](Docs/HumanAgent/试玩基础包.md)。需要 Godot 4.7.2，不是免安装 EXE；当前为单人控制玩家0、其余AI的本地原型，无网络联机。
+
 使用 Godot 4.7.x 导入 `project.godot`，运行主场景。测试模式当前可进入 2/3 人无身份乱斗和 5 人标准身份局；6～10 人模式与正式单人/多人入口仍未开放。美术资源当前不在开发范围内。
 
 里奥·普利威尔现进入自选菜单和八名非占位武将的随机池，基础5体力（经典五人主公另加1）；丑态、预习、预大习已接现有真实流程。选将列表可滚动，技能详情保留完整牌文；AI目前保守选择不替换锦囊，这属于策略，不限制真人合法替换。开放范围与未覆盖组合见[F03验收记录](Docs/HumanAgent/F03执行与开放验收-2026-10-07.md)，不表示其他23名资料将或未来玩法已实装。
@@ -50,4 +52,4 @@ godot --headless --path . --script Test/test_free_for_all_victory.gd
 
 CI 先以 headless 模式导入项目，再依次执行 `Test/test_rule_settlement.gd`、`Test/test_confirmed_rules.gd`、`Test/test_bill.gd`、`Test/test_hand_payment.gd`、`Test/test_card_transfer.gd`、`Test/test_identity_victory.gd` 和 `Test/test_free_for_all_victory.gd`。每组测试限时 60 秒，必须正常退出、输出非零断言数且零失败的完整 `RESULT`，并且没有脚本或引擎错误。某组失败后仍继续收集其余各组结果；导入失败则不进入测试步骤。
 
-运行日志通过 `godot-ci-logs` artifact 保存 7 天。其余测试和诊断脚本尚未纳入 CI；增加测试时需确认它可无人值守运行，并满足相同的结果汇总约定。CI 不负责导出或发布游戏。
+运行日志通过 `godot-ci-logs` artifact 保存 7 天。只有导入及七组测试全部成功，CI才打包该提交的 `playtest-source` 源码试玩下载物（保存14天），不导出独立程序或发布 Release。其余测试和诊断脚本尚未纳入 CI；增加测试时需确认它可无人值守运行，并满足相同的结果汇总约定。

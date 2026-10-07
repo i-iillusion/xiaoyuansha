@@ -14,8 +14,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 [application]
 
-config/name="三国杀"
-config/description="A card game inspired by 三国杀"
+config/name="校园杀"
+config/description="校园杀本地规则试玩原型"
 run/main_scene="res://Scenes/MainMenu.tscn"
 config/features=PackedStringArray("4.7")
 
