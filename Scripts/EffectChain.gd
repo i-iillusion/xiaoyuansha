@@ -65,6 +65,8 @@ var current_phase: Phase = Phase.RESPONSE
 var is_cancelled: bool = false
 # 交互过期只停止后续动作，不等于规则防止原伤害（例如舍己）。
 var continuation_invalid: bool = false
+# Normal victory stops continuation without cancelling already committed damage.
+var terminal_complete: bool = false
 var continuation_allowed: Callable
 var response_result: ResponseResult = ResponseResult.NONE
 # true → 跳过目标响应阶段（【贯石斧】强制命中用：杀被闪抵消后重新结算伤害）
@@ -99,6 +101,7 @@ func _sync_record():
 	source_player = damage.source
 
 func _trigger(event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
+	if terminal_complete: return true
 	if not _continuation_is_current(): return true
 	if is_cancelled:
 		return true
@@ -124,6 +127,7 @@ func _trigger(event_name: String, subject: Player, source: Player, data: Diction
 	var handled = false
 	if trigger_callback.is_valid():
 		handled = await trigger_callback.call(self, event_name, subject, source, data)
+	if terminal_complete: return true
 	if not _continuation_is_current(): return true
 	if is_cancelled:
 		return true
@@ -162,7 +166,7 @@ func start() -> ResponseResult:
 	if not is_cancelled:
 		await _phase_resolution()
 	_finish()
-	if _continuation_is_current() and completion_callback.is_valid():
+	if not terminal_complete and _continuation_is_current() and completion_callback.is_valid():
 		await completion_callback.call(self)
 	return response_result
 
@@ -258,6 +262,7 @@ func _apply_effect():
 # ============================
 func _phase_resolution():
 	current_phase = Phase.RESOLUTION
+	if terminal_complete: return
 
 	if not trigger_callback.is_valid():
 		return

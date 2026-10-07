@@ -796,6 +796,12 @@ func _run():
 	await leo_mode_cases.run(self)
 	var leo_opening_cases = load("res://Test/leo_opening_cases.gd").new()
 	await leo_opening_cases.run(self)
+	var terminal_boundary_cases = load("res://Test/terminal_boundary_cases.gd").new()
+	await terminal_boundary_cases.run(self)
+	var terminal_lifecycle_cases = load("res://Test/terminal_lifecycle_cases.gd").new()
+	await terminal_lifecycle_cases.run(self)
+	var terminal_prompt_cases = load("res://Test/terminal_prompt_cases.gd").new()
+	await terminal_prompt_cases.run(self)
 	# Same modules/fixtures/assertions, each executed once across the seven groups.
 	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
 	await basic_prompt_cases.run(self)

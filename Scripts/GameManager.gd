@@ -1445,6 +1445,7 @@ func _exit_targeting_mode():
 
 # 取消按钮统一处理（普通目标模式 / 铁索连环模式 / 方天画戟多目标模式）
 func _on_cancel_target_pressed():
+	if _game_over: return
 	_card_target_generation += 1
 	_play_skill_selection_generation += 1
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
@@ -1580,6 +1581,7 @@ func _on_multi_target_click(target: Player):
 
 # 方天画戟：确认出牌
 func _on_confirm_multi_target():
+	if _game_over: return
 	if _is_zhuangbi_targeting:
 		await _on_confirm_zhuangbi()
 		return
@@ -1808,6 +1810,7 @@ func _apply_prep_card_action(p: Player, event: CardActionEvent):
 	_update_debug("%s 获得1个【预习】标记（共%d个）" % [p.player_name, p.prep_tokens])
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
+	if _game_over: return
 	var p = players[turn_manager.get_play_actor_idx()]
 	var action_revision = turn_manager.get_context_revision()
 	if sub in TARGET_TRICKS and (not can_declare_trick(p, sub, _yes_ah_active) or not get_trick_targets(p, sub).has(target)):
@@ -1917,7 +1920,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 # 返回 true = 本次结算对目标造成了伤害（供【灾厄剑】转移判定：全部处理完成后再转移）
 # 已提交伤害后的选择失效须通知多目标调用者；普通命中/闪仍为bool。
 func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> Variant:
-	if target == null or not target.is_alive():
+	if _game_over or target == null or not target.is_alive():
 		return false
 	# “无论是否合法”只越过选目标限制，不跳过响应和伤害防止。
 	if not ignore_target_restrictions and (target.get_armor() == CardData.CardSubType.TENGJIA \
@@ -2053,6 +2056,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 # 【方天画戟】多目标杀：一次打出、逐目标结算。
 
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
+	if _game_over: return
 	var action_revision = turn_manager.get_context_revision()
 	if targets.is_empty():
 		return
@@ -2170,7 +2174,11 @@ func _finish_damage_chain(chain: EffectChain):
 	if not chain.damage.is_chain and actual.chained and chain.damage_element != EffectChain.DamageType.PHYSICAL:
 		if await _resolve_chain_propagation(source, actual, chain.effect_value, chain.damage_element, chain.damage.from_strike) == CHOICE_INVALID:
 			chain.continuation_invalid = true
-	if _game_over or chain.continuation_invalid or revision != turn_manager.get_context_revision():
+	# A normally committed terminal result stops subsequent effects; it is not
+	# a stale choice or a restart invalidation of already committed damage.
+	if _game_over:
+		return
+	if chain.continuation_invalid or revision != turn_manager.get_context_revision():
 		chain.continuation_invalid = true
 		return
 	if await _try_calamity_robe_transfer(actual) == CHOICE_INVALID:
@@ -2185,6 +2193,7 @@ func _finish_damage_chain(chain: EffectChain):
 	_sync_all_ui()
 
 func play_card(sub: CardData.CardSubType):
+	if _game_over: return
 	var p = players[turn_manager.get_play_actor_idx()]
 
 	# 【下跪】：无法使用或打出任何牌
@@ -5286,6 +5295,9 @@ func _show_target_confirm(attacker_name: String, target_name: String, sub: CardD
 	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
+	if _game_over:
+		chain.terminal_complete = true
+		return true
 	var record = chain.damage
 	if event_name == "on_being_targeted":
 		return not await _prepare_strike_target(source, subject, chain.ignore_target_restrictions)
@@ -5438,6 +5450,9 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			await _resolve_dying(subject, source, "damage", chain)
 		# before_death checkpoint 也可能救回目标；重查被普通救援延后的终局。
 		_check_win_condition(null, null)
+		if _game_over:
+			chain.terminal_complete = true # G-01: committed damage is not cancelled.
+			return true
 		return false
 
 	if event_name == "after_deal_damage" and subject != null and subject.is_alive():
@@ -5644,7 +5659,7 @@ func _deal_damage(source: Player, target: Player, amount: int, element: EffectCh
 
 # 需要继续判定/多目标结算的调用者必须使用显式结果，不能把失效当普通受伤。
 func _deal_damage_result(source: Player, target: Player, amount: int, element: EffectChain.DamageType) -> Dictionary:
-	if target == null or target.is_dead() or amount <= 0:
+	if _game_over or target == null or target.is_dead() or amount <= 0:
 		return {"target": target, "invalidated": false}
 	var chain = _new_damage_chain(source, target, null, amount, element)
 	var revision = turn_manager.get_context_revision()
@@ -9295,7 +9310,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 		return _invalidate_dying_context(victim, context)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.BEFORE_DEATH
-		# 锁定规则先于普通检查点；里奥尚未加入选将表，完整武将仍待开发。
+		# 锁定规则先于普通检查点；成功后仍保留三个牌区及身份状态。
 		if victim.general_name == "里奥·普利威尔":
 			await yudaxi.resolve(victim, _yudaxi_targets, _settle_yudaxi_target,
 				_draw_blank_cards, func(): return not valid.call(), _on_yudaxi_limit)
@@ -9572,6 +9587,28 @@ func _finish_game(winner_identity: String, reason: String):
 		return
 	_game_over = true
 	_halt_countdown()
+	_card_target_generation += 1
+	_play_skill_selection_generation += 1
+	for button in [_play_btn, _end_play_btn, _cancel_target_btn, _confirm_target_btn]:
+		if is_instance_valid(button): button.visible = false
+	# Own terminal cleanup here: expired target coroutines must not restore UI.
+	_is_targeting = false
+	_is_iron_chain_targeting = false
+	_iron_chain_targets.clear()
+	_is_multi_targeting = false
+	_multi_targets.clear()
+	_is_sage_targeting = false
+	_is_zhuangbi_targeting = false
+	_zhuangbi_targets.clear()
+	_is_campus_targeting = false
+	_is_shensu_targeting = false
+	_is_gay_targeting = false
+	_is_lanzhonghou_targeting = false
+	_lanzhonghou_selected.clear()
+	_lanzhonghou_pending.clear()
+	_is_meiyong_targeting = false
+	_yes_ah_active = false
+	_clear_pending_determined_card()
 	if winner_identity == "平局":
 		_update_debug("游戏结束！平局（%s）" % reason)
 	else:
@@ -9929,6 +9966,7 @@ func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int], al
 	return await _wait_choice_prompt(overlay, answer, allowed)
 
 func end_play_phase():
+	if _game_over: return
 	if turn_manager.current_phase == TurnManager.Phase.PLAY:
 		_play_btn.visible = false
 		_end_play_btn.visible = false
@@ -9953,7 +9991,7 @@ func end_play_phase():
 # ---- UI 回调 ----
 
 func _on_play_btn_pressed():
-	if turn_manager.current_phase != TurnManager.Phase.PLAY:
+	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
 	var p = players[turn_manager.get_play_actor_idx()]
 	if p.hand_size() <= 0 and p.determined_cards.is_empty():
@@ -9966,11 +10004,13 @@ func _on_play_btn_pressed():
 	selector.confirmed.connect(_on_selector_confirmed)
 	selector.cancelled.connect(_on_selector_cancelled)
 	selector.determined_card_clicked.connect(_on_determined_card_clicked)
+	game_over.connect(selector.queue_free.unbind(1), CONNECT_ONE_SHOT)
 
 func _on_end_play_pressed():
 	end_play_phase()
 
 func _on_selector_confirmed(sub: CardData.CardSubType):
+	if _game_over: return
 	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	_clear_pending_determined_card()
@@ -9981,10 +10021,11 @@ func _on_selector_confirmed(sub: CardData.CardSubType):
 	await _maybe_ask_reveal()
 
 func _on_selector_cancelled():
+	if _game_over: return
 	_update_debug("取消出牌")
 
 func _on_determined_card_clicked(card: CardBase):
-	if turn_manager.current_phase != TurnManager.Phase.PLAY:
+	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
 	var p = players[turn_manager.get_play_actor_idx()]
 	if p.seat_index != 0 or not p.determined_cards.has(card):
@@ -10006,6 +10047,7 @@ func _on_determined_card_clicked(card: CardBase):
 # ============================
 
 func _on_player_panel_click(event: InputEvent, panel: Control):
+	if _game_over: return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var player: Player = panel.get_meta("player")
 		if not player:
