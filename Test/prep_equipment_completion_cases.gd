@@ -12,6 +12,8 @@ func run(suite):
 			CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE,
 			CardData.CardSubType.BURNING_CAMP]:
 			suite.reset_players()
+			# 每例是独立用牌局面，不能继承上例留在目标区的同名延时牌。
+			for p in game.players: p.judgment_cards.clear()
 			game.equipment_pool.clear()
 			tm.current_phase = TurnManager.Phase.PLAY
 			var actor: Player = game.players[0]

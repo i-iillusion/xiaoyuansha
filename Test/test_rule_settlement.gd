@@ -802,6 +802,8 @@ func _run():
 	await terminal_lifecycle_cases.run(self)
 	var terminal_prompt_cases = load("res://Test/terminal_prompt_cases.gd").new()
 	await terminal_prompt_cases.run(self)
+	var delayed_indulgence_cases = load("res://Test/delayed_indulgence_cases.gd").new()
+	await delayed_indulgence_cases.run(self)
 	# Same modules/fixtures/assertions, each executed once across the seven groups.
 	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
 	await basic_prompt_cases.run(self)

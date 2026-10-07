@@ -867,6 +867,8 @@ func _reset_turn_flags():
 # 判定阶段：结算判定区的延时锦囊（后放置的先判定）
 # 无花色点数 → 判定必定生效
 func _do_judge(pid: int):
+	# 已终局的迟到阶段入口不能消费跳过标记或继续推进阶段。
+	if _game_over: return
 	var p = players[pid]
 	# 【神速】（比尔·盖伊）选项1：跳过判定阶段（判定区延时锦囊保留，下回合再判）
 	if turn_manager.skip_judge_phase:
@@ -1093,12 +1095,19 @@ const TARGET_TRICKS = [CardData.CardSubType.DUEL, CardData.CardSubType.SNATCH, C
 const GLOBAL_TRICKS = [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS,
 	CardData.CardSubType.PEACH_GARDEN, CardData.CardSubType.HARVEST, CardData.CardSubType.DISARM]
 
+func _has_delayed_card(p: Player, sub: int) -> bool:
+	for card in p.judgment_cards:
+		if card.sub_type == sub: return true
+	return false
+
 func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 	var result: Array[Player] = []
 	for target in players:
 		if not target.is_alive() or _is_kneeling(target) or (target == p and sub != CardData.CardSubType.IRON_CHAIN):
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
+			continue
+		if sub == CardData.CardSubType.INDULGENCE and _has_delayed_card(target, sub):
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and p.attack_distance_to(target) > 1:
 			continue
@@ -1130,6 +1139,8 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 			return turn_manager.can_use("disarm")
 		CardData.CardSubType.BORROWED_SWORD:
 			return turn_manager.can_use("borrowed_sword")
+		CardData.CardSubType.INDULGENCE:
+			return turn_manager.can_use("indulgence")
 	return sub in TARGET_TRICKS
 
 func _ai_play_candidates(observation: Dictionary) -> Array:
@@ -1907,6 +1918,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 				return
 			card.source_seat = p.seat_index
 			target.judgment_cards.append(card)
+			if sub == CardData.CardSubType.INDULGENCE: turn_manager.use_card("indulgence")
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
 			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
@@ -2391,7 +2403,7 @@ func play_card(sub: CardData.CardSubType):
 
 		CardData.CardSubType.INDULGENCE:
 			# 乐不思蜀：对其他存活角色使用，无距离限制
-			var delay_targets = _get_all_alive_targets(p)
+			var delay_targets = get_trick_targets(p, sub)
 			if delay_targets.is_empty():
 				_update_debug("没有可用的目标！")
 				return
