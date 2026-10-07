@@ -262,6 +262,8 @@ func _run():
 	await borrowed_original_entry_cases.run(self)
 	var prep_borrowed_replace_cases = load("res://Test/prep_borrowed_replace_cases.gd").new()
 	await prep_borrowed_replace_cases.run(self)
+	var prep_integration_cases = load("res://Test/prep_integration_cases.gd").new()
+	await prep_integration_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
