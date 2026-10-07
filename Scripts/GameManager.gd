@@ -3106,10 +3106,29 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_complete_card_actions(actions)
 		_sync_all_ui()
 		return
-	var card = HandPayment.take_card(first, strike_sub)
-	if card == null:
+	var result = await _resolve_borrowed_strike(first, [second], strike_sub, valid)
+	if result == CHOICE_INVALID:
 		_abandon_card_actions(actions)
 		return
+	_complete_card_actions(actions)
+	_sync_all_ui()
+
+# 借刀要求的杀：固定目标及方天附加目标共用一次支付和完整结算。
+# targets是已确认的合法目标集合，本层不决定追加选择、超时或重新选人。
+func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, allowed: Callable) -> int:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	if first == null or not players.has(first) or not first.is_alive() or _game_over: return CHOICE_INVALID
+	if not allowed.call() or targets.is_empty() or not strike_sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]: return CHOICE_INVALID
+	if targets.size() > 1 and first.get_weapon() != CardData.CardSubType.FANGTIAN_HALBERD: return CHOICE_INVALID
+	var seen: Array = []
+	var legal = _get_strike_targets(first)
+	for target in targets:
+		if not target is Player or not legal.has(target) or seen.has(target): return CHOICE_INVALID
+		seen.append(target)
+	var card = HandPayment.take_card(first, strike_sub)
+	if card == null:
+		return CHOICE_INVALID
 	deck.discard(card)
 	var strike_action = _record_card_action(first, card, CardActionEvent.Kind.USE, true, false)
 	var damage = 1 + first.consume_wine_bonus() + _rage_bonus(first)
@@ -3117,19 +3136,24 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 	var element = EffectChain.DamageType.PHYSICAL
 	if strike_sub == CardData.CardSubType.FIRE_STRIKE: element = EffectChain.DamageType.FIRE
 	elif strike_sub == CardData.CardSubType.THUNDER_STRIKE: element = EffectChain.DamageType.THUNDER
-	var dealt = await _execute_single_strike(first, second, card, strike_sub, element, damage)
-	if (typeof(dealt) == TYPE_INT and dealt == CHOICE_INVALID) or _game_over \
-			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+	var dealt_any = false
+	for target in seen:
+		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions([strike_action])
+			return CHOICE_INVALID
+		if not target.is_alive(): continue
+		var dealt = await _execute_single_strike(first, target, card, strike_sub, element, damage)
+		if (typeof(dealt) == TYPE_INT and dealt == CHOICE_INVALID) or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions([strike_action])
+			return CHOICE_INVALID
+		if dealt: dealt_any = true
+	if dealt_any and await _try_calamity_transfer(first) == CHOICE_INVALID:
 		_abandon_card_actions([strike_action])
-		_abandon_card_actions(actions)
-		return
-	if dealt and await _try_calamity_transfer(first) == CHOICE_INVALID:
-		_abandon_card_actions([strike_action])
-		_abandon_card_actions(actions)
-		return
+		return CHOICE_INVALID
 	_complete_card_actions([strike_action])
-	_complete_card_actions(actions)
 	_sync_all_ui()
+	return 1 if dealt_any else 0
 
 func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], revision: int):
 	var generation = _dying_lifecycle_generation
