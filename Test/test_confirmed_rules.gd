@@ -323,14 +323,8 @@ func _run():
 	await mule_combination_cases.run(self)
 	var mule_full_slot_cases = load("res://Test/mule_full_slot_cases.gd").new()
 	await mule_full_slot_cases.run(self)
-	var soul_blade_prompt_cases = load("res://Test/soul_blade_prompt_cases.gd").new()
-	await soul_blade_prompt_cases.run(self)
-	var soul_blade_discard_cases = load("res://Test/soul_blade_discard_cases.gd").new()
-	await soul_blade_discard_cases.run(self)
-	var soul_blade_rps_cases = load("res://Test/soul_blade_rps_cases.gd").new()
-	await soul_blade_rps_cases.run(self)
-	var soul_blade_activation_cases = load("res://Test/soul_blade_activation_cases.gd").new()
-	await soul_blade_activation_cases.run(self)
+	# G03: four whole unchanged soul-blade modules now run exactly once in the
+	# identity suite's isolated host, preserving every old assertion and timeout.
 	_flush_check_log()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

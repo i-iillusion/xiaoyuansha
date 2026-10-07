@@ -9725,10 +9725,17 @@ func _on_game_over(winner_identity: String):
 	var btn = Button.new()
 	btn.text = "返回主菜单"
 	btn.custom_minimum_size = Vector2(200, 52)
-	btn.pressed.connect(func():
-		get_tree().change_scene_to_file("res://Scenes/MainMenu.tscn")
-	)
+	btn.pressed.connect(_return_to_main_menu.bind(btn))
 	hbox.add_child(btn)
+
+# SceneTree移除旧场景后get_tree已为空；重复点击不能再导航或影响新菜单。
+func _return_to_main_menu(button: Button):
+	if not _game_over or not is_inside_tree() or button.disabled: return
+	button.disabled = true
+	var error = get_tree().change_scene_to_file("res://Scenes/MainMenu.tscn")
+	if error != OK:
+		button.disabled = false
+		_update_debug("返回主菜单失败：%s" % error_string(error))
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():

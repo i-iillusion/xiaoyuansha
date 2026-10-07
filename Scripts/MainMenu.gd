@@ -12,6 +12,7 @@ const GAME_SCENE = preload("res://Scenes/Game.tscn")
 static var random_mode: bool = true
 
 var _tip_remaining: float = 0.0
+var _launch_pending: bool = false
 # 待进入的对局人数与模式
 var _pending_players: int = 5
 var _pending_mode: String = GameManager.MODE_CLASSIC_IDENTITY
@@ -83,6 +84,7 @@ func _toggle_mode():
 
 # 测试模式开始对局：随机模式直接进游戏；自选武将先进入武将选择页
 func _start_test_game(players: int, mode: String):
+	if _launch_pending or not is_inside_tree(): return
 	_pending_players = players
 	_pending_mode = mode
 	GameManager.selected_players = players
@@ -127,6 +129,7 @@ func _add_general_btn(general_name: String):
 	_page.add_child(btn)
 
 func _select_general(general_name: String):
+	if _launch_pending or not is_inside_tree(): return
 	GameManager.selected_general = general_name
 	GameManager.selected_players = _pending_players
 	GameManager.selected_mode = _pending_mode
@@ -138,8 +141,13 @@ func _select_general(general_name: String):
 # ---- 动作 ----
 
 func _start_game_5p():
-	# 5人标准：进入现有游戏场景（玩家0 = 你，其余 AI）
-	get_tree().change_scene_to_packed(GAME_SCENE)
+	# 当前开放人数共用场景；防止同一帧重复点击再次切场景/改开局设置。
+	if _launch_pending or not is_inside_tree(): return
+	_launch_pending = true
+	var error = get_tree().change_scene_to_packed(GAME_SCENE)
+	if error != OK:
+		_launch_pending = false
+		_show_tip("进入对局失败：%s" % error_string(error))
 
 func _not_implemented(name: String):
 	_show_tip("「%s」尚未实现" % name)
