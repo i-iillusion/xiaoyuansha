@@ -12,8 +12,8 @@ func run(suite):
 	game.game_mode = GameManager.MODE_CLASSIC_IDENTITY
 	var resetter = load("res://Test/prep_single_replace_cases.gd").new()
 	for concrete in [false, true]:
-		for case_name in ["odd", "even_refuse", "even_kill", "even_empty", "invalid_after_cost", "restart_cost", "original_odd", "original_even_refuse", "original_even_kill"]:
-			var mode: String = case_name.trim_prefix("original_")
+		for case_name in ["odd", "even_refuse", "even_kill", "even_empty", "invalid_after_cost", "restart_cost", "original_odd", "original_even_refuse", "original_even_kill", "prep_odd", "prep_even_refuse", "prep_even_kill"]:
+			var mode: String = case_name.trim_prefix("original_").trim_prefix("prep_")
 			resetter._reset(suite)
 			game.deck._discard.clear()
 			tm.current_phase = TurnManager.Phase.PLAY
@@ -50,7 +50,12 @@ func run(suite):
 			game._rescue_choice_override = func(_rescuer, _victim, _options):
 				if mode == "restart_cost": game.reset_game_over_state()
 				return -1
-			var parent = CardBase.create(CardData.CardSubType.BORROWED_SWORD) if concrete else null
+			var parent_sub = CardData.CardSubType.DUEL if case_name.begins_with("prep_") else CardData.CardSubType.BORROWED_SWORD
+			if case_name.begins_with("prep_"):
+				game.players[3].general_name = "里奥·普利威尔"
+				game.players[3].prep_tokens = 1
+				game._prep_replace_override = func(_leo, _user, _fixed, _sub, _options): return CardData.CardSubType.BORROWED_SWORD
+			var parent = CardBase.create(parent_sub) if concrete else null
 			if concrete: user.determined_cards.append(parent)
 			else: user.hand.append(null)
 			var spare = CardBase.create(CardData.CardSubType.DODGE)
@@ -63,8 +68,8 @@ func run(suite):
 			game.card_action_committed.connect(commit)
 			game.card_action_completed.connect(finish)
 			var action: CardActionEvent
-			if case_name.begins_with("original_"):
-				await game.execute_card_on_target(first, CardData.CardSubType.BORROWED_SWORD)
+			if case_name.begins_with("original_") or case_name.begins_with("prep_"):
+				await game.execute_card_on_target(first, parent_sub)
 				suite.check(not events.is_empty(), "F02 Q20 original entry commits actual paid Borrow before lethal nullification")
 				if events.is_empty():
 					game.card_action_committed.disconnect(commit)
@@ -79,10 +84,11 @@ func run(suite):
 				await game._resolve_paid_borrowed_sword(user, first, [action], func(): return valid[0])
 			var invalid = mode in ["invalid_after_cost", "restart_cost"]
 			suite.check((user.is_dying() and not user.is_dead() and user.hand_size() == 1 if mode == "restart_cost" else user.is_dead() and user.hand_size() == 0) and not game._game_over, "F02 Q20 final death clears cards; technical restart never fabricates final death")
-			suite.check(actual.sub_type == CardData.CardSubType.BORROWED_SWORD and game.deck._discard.count(actual) == 1 and (not concrete or actual == parent) and game.deck._discard.count(spare) == (0 if mode == "restart_cost" else 1), "F02 Q20 original paid borrow and final death discard preserve physical originals")
+			suite.check(actual.sub_type == parent_sub and game.deck._discard.count(actual) == 1 and (not concrete or actual == parent) and game.deck._discard.count(spare) == (0 if mode == "restart_cost" else 1), "F02 Q20 original paid entity and final death discard preserve physical originals even after prep")
 			suite.check(first.get_equipment_card("weapon") == weapon and not game.deck._discard.has(weapon) and not user.determined_cards.has(weapon), "F02 Q20 dead caster never receives/discards weapon, first target keeps equipped original")
 			suite.check(second.hp == (9 if mode == "even_kill" else 10) and choices[0] == (1 if mode in ["even_refuse", "even_kill"] else 0), "F02 Q20 odd cancels, even asks strike, empty refuses without choosing")
 			suite.check(action.settlement_completed == not invalid and tm.borrowed_sword_count_this_turn == 1 and tm.strike_count_this_turn == 0, "F02 Q20 valid completion versus technical abandonment, only borrowed quota")
+			if case_name.begins_with("prep_"): suite.check(tm.duel_count_this_turn == 0 and game.players[3].prep_tokens == 0, "F02 Q20 prep dispatcher preserves death continuation and counts final Borrow only")
 			if not invalid:
 				suite.check(events.size() == (2 if mode == "odd" else 4 if mode == "even_kill" else 3) and events[1].is_virtual and not events[1].from_hand and events[1].sub_type == CardData.CardSubType.NULLIFICATION, "F02 Q20 lethal virtual nullification is real use fact, no invented physical response")
 				suite.check(events[1].settlement_completed and not game.deck._discard.has(events[1].card) and completed.back() == action, "F02 Q20 virtual response completed in whole chain before parent")

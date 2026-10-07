@@ -1872,14 +1872,18 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			var weapon = _equipment_resource_for_pick(target, "weapon")
 			var actions: Array[CardActionEvent] = []
 			if not await _consume_trick(p, sub, actions): return
-			# Q20：第二目标确认后允许原使用者最终死亡，不能用外层存活门槛截断。
+			# 第一目标确认时先提供预习；最终借刀才选择第二目标和计数。
 			var valid = func():
 				return not _game_over and generation == _dying_lifecycle_generation \
 					and action_revision == turn_manager.get_context_revision() \
-					and players.has(p) and players.has(target) and weapon != null \
-					and _equipment_resource_for_pick(target, "weapon") == weapon
-			# 预习进出借刀留下一子项；本项只接原版支付及效果。
-			await _resolve_paid_borrowed_sword(p, target, actions, valid)
+					and players.has(p) and players.has(target) and p.is_alive() and target.is_alive() \
+					and not _is_kneeling(p) and not _is_kneeling(target)
+			var prep_valid = func():
+				return valid.call() and weapon != null and _equipment_resource_for_pick(target, "weapon") == weapon
+			var replacements: Array = []
+			var roster: Array[Player] = []
+			var effect_sub = await _maybe_prep_fixed_effect(p, target, sub, prep_valid, replacements, false, roster)
+			await _resolve_prep_effect(p, [target], effect_sub, actions, replacements, valid, action_revision, "", roster)
 
 		CardData.CardSubType.DISMANTLE:
 			await _play_steal_card(p, target, false)
@@ -2956,7 +2960,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 # ============================
 
 # is_snatch = true → 顺手牵羊（获取），false → 过河拆桥（弃置）
-# 固定单体接决斗/铁索/拆顺；群体与借刀按后续关卡迁移，不是规则禁用。
+# 固定单体接决斗/铁索/拆顺/借刀；群体分类另由声明范围判断。
 # 原实体/成立事件由调用者持有；此处只选择本次效果，不再付手牌。
 func _prep_single_duel_legal(attacker: Player, target: Player) -> bool:
 	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2) \
@@ -2972,6 +2976,9 @@ func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) 
 		for sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
 			if sub != current_sub and get_trick_targets(attacker, sub).has(target):
 				candidates.append(sub)
+	if current_sub != CardData.CardSubType.BORROWED_SWORD and turn_manager.can_use("borrowed_sword") \
+			and get_trick_targets(attacker, CardData.CardSubType.BORROWED_SWORD).has(target):
+		candidates.append(CardData.CardSubType.BORROWED_SWORD)
 	return candidates
 
 # Q14：群体互换后按新牌条件生效，合条件目标为空也可更换。
@@ -3143,7 +3150,7 @@ func _show_borrowed_extra_targets(second: Player, candidates: Array, allowed: Ca
 
 # 已支付借刀效果；Q20第二目标确认后，原使用者最终死亡不截断结算。
 # Q19/Q21：方天保留固定目标，追加选择超时按当前勾选集合出杀。
-# 菜单/替换入口仍未开放，不把范围验收当作整张牌已完成。
+# 原版及预习替换共用；原牌实体和事件不改写。
 func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
@@ -3301,6 +3308,14 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		return allowed.call() and target != null and players.has(target) and target.is_alive() and not _is_kneeling(target)
 	if not fixed_valid.call():
 		_abandon_card_actions(actions)
+		return
+	if sub == CardData.CardSubType.BORROWED_SWORD:
+		# 替换阶段已检查allowed。之后由借刀自身分阶段复核人物/武器：
+		# Q20确认第二目标后允许原使用者最终死亡；交武器后不能再要求其留原槽。
+		var borrowed_valid = func():
+			return not _game_over and generation == _dying_lifecycle_generation \
+				and revision == turn_manager.get_context_revision() and players.has(p) and players.has(target)
+		await _resolve_paid_borrowed_sword(p, target, actions, borrowed_valid)
 		return
 	if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
 		await _resolve_paid_steal(p, target, sub == CardData.CardSubType.SNATCH, zone, actions, fixed_valid, not replacements.is_empty())

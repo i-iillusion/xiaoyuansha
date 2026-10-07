@@ -260,6 +260,8 @@ func _run():
 	await borrowed_extra_targets_cases.run(self)
 	var borrowed_original_entry_cases = load("res://Test/borrowed_original_entry_cases.gd").new()
 	await borrowed_original_entry_cases.run(self)
+	var prep_borrowed_replace_cases = load("res://Test/prep_borrowed_replace_cases.gd").new()
+	await prep_borrowed_replace_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
