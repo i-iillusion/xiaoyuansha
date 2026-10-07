@@ -3050,8 +3050,8 @@ func _choose_borrowed_strike(first: Player, second: Player, allowed: Callable) -
 	if selected == -1: return -1
 	return selected if options.has(selected) and HandPayment.has_card(first, selected) else CHOICE_INVALID
 
-# 已支付借刀效果；当前仅已明确的单目标且原使用者仍在场的分支。
-# Q19已按原版明确可追加目标，留下一子任务接方天选择；Q20死亡分支待答。
+# 已支付借刀效果；Q20第二目标确认后，原使用者最终死亡不截断结算。
+# Q19方天选择尚待Q21超时默认，效果层已独立验收。
 # 菜单/替换入口仍未开放，不把范围验收当作整张牌已完成。
 func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
 	var revision = turn_manager.get_context_revision()
@@ -3060,9 +3060,11 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_abandon_card_actions(actions)
 		return
 	var weapon = _equipment_resource_for_pick(first, "weapon")
+	var second_confirmed: Array[bool] = [false]
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
-			and players.has(user) and players.has(first) and user != first and user.is_alive() and first.is_alive() \
+			and players.has(user) and players.has(first) and user != first \
+			and (user.is_alive() or (second_confirmed[0] and user.is_dead())) and first.is_alive() \
 			and not _is_kneeling(user) and not _is_kneeling(first) and weapon != null \
 			and _equipment_resource_for_pick(first, "weapon") == weapon and (not allowed.is_valid() or allowed.call())
 	if not valid.call() or not turn_manager.can_use("borrowed_sword"):
@@ -3073,6 +3075,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 	if not second is Player or not valid.call():
 		_abandon_card_actions(actions)
 		return
+	second_confirmed[0] = true
 	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid)
 	if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 		_abandon_card_actions(actions)
@@ -3090,6 +3093,11 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_abandon_card_actions(actions)
 		return
 	if strike_sub == -1:
+		if user.is_dead():
+			# Q20：已死亡原使用者不能接收武器，第一目标仍装备原牌。
+			_complete_card_actions(actions)
+			_sync_all_ui()
+			return
 		var taken = first.remove_equipment("weapon")
 		if taken != weapon:
 			_abandon_card_actions(actions)
@@ -4848,7 +4856,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 				return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 			var action_card: CardBase
 			if yes_ah == "skill":
-				var paid = await _pay_yes_ah_cost_result(p)
+				var paid = await _pay_yes_ah_cost_result(p, true)
 				if paid == CHOICE_INVALID or not valid.call():
 					return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 				if paid == 0:
@@ -5960,7 +5968,7 @@ func _pay_yes_ah_cost(p: Player) -> bool:
 	# 兼容旧布尔检查；生产调用者使用显式结果，不能隐藏技术失效。
 	return await _pay_yes_ah_cost_result(p) == 1
 
-func _pay_yes_ah_cost_result(p: Player) -> int:
+func _pay_yes_ah_cost_result(p: Player, allow_final_death: bool = false) -> int:
 	if p == null or not p.is_alive():
 		return 0
 	var revision = turn_manager.get_context_revision()
@@ -5971,7 +5979,9 @@ func _pay_yes_ah_cost_result(p: Player) -> int:
 		if await _resolve_dying(p, null, "yes_ah") == CHOICE_INVALID: return CHOICE_INVALID
 	if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation \
 			or not players.has(p): return CHOICE_INVALID
-	return 1 if p.is_alive() else 0
+	# Q20仅已明确虚拟无懈：完整支付后最终死亡不撤销这张响应。
+	# 其他虚拟锦囊/舍己费用沿原分支，不能借此自动扩大裁决范围。
+	return 1 if p.is_alive() or (allow_final_death and p.is_dead()) else 0
 
 # 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
 func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:

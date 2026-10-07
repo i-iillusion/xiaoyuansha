@@ -254,6 +254,8 @@ func _run():
 	await borrowed_paid_effect_cases.run(self)
 	var borrowed_multi_effect_cases = load("res://Test/borrowed_multi_effect_cases.gd").new()
 	await borrowed_multi_effect_cases.run(self)
+	var borrowed_death_nullification_cases = load("res://Test/borrowed_death_nullification_cases.gd").new()
+	await borrowed_death_nullification_cases.run(self)
 	var choice_prompt_cases = load("res://Test/choice_prompt_cases.gd").new()
 	await choice_prompt_cases.run(self)
 	var awaken_lifecycle_cases = load("res://Test/awaken_lifecycle_cases.gd").new()
