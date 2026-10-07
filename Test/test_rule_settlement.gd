@@ -790,6 +790,8 @@ func _run():
 	reset_players()
 	var choutai_draw_cases = load("res://Test/choutai_draw_cases.gd").new()
 	await choutai_draw_cases.run(self)
+	var leo_lifecycle_cases = load("res://Test/leo_lifecycle_cases.gd").new()
+	await leo_lifecycle_cases.run(self)
 	var prep_trick_baseline_cases = load("res://Test/prep_trick_baseline_cases.gd").new()
 	await prep_trick_baseline_cases.run(self)
 	var play_skill_actor_cases = load("res://Test/play_skill_actor_cases.gd").new()
