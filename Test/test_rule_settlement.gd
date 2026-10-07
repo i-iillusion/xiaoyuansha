@@ -806,6 +806,8 @@ func _run():
 	await delayed_indulgence_cases.run(self)
 	var delayed_supply_cases = load("res://Test/delayed_supply_cases.gd").new()
 	await delayed_supply_cases.run(self)
+	var delayed_lightning_cases = load("res://Test/delayed_lightning_cases.gd").new()
+	await delayed_lightning_cases.run(self)
 	# Same modules/fixtures/assertions, each executed once across the seven groups.
 	var basic_prompt_cases = load("res://Test/basic_prompt_cases.gd").new()
 	await basic_prompt_cases.run(self)

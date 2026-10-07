@@ -908,9 +908,29 @@ func _do_judge(pid: int):
 
 # 判定结算循环（抽取公用）：结算角色 p 判定区的全部延时锦囊（后放置的先判定）
 # granted=true = 【烂忠厚】授予的判定阶段：乐不思蜀/兵粮寸断失效（不触发效果）；闪电/火烧连营正常生效
+func _last_pending_judgment(p: Player, deferred: Array[CardBase]) -> CardBase:
+	for i in range(p.judgment_cards.size() - 1, -1, -1):
+		if not deferred.has(p.judgment_cards[i]): return p.judgment_cards[i]
+	return null
+
+func _move_lightning(p: Player, card: CardBase) -> Player:
+	var circle = LivingTable.ordered(players)
+	var start = circle.find(p)
+	for offset in range(1, circle.size()):
+		var target = circle[(start + offset) % circle.size()]
+		if not target.is_alive() or _is_kneeling(target) or _has_delayed_card(target, card.sub_type): continue
+		target.judgment_cards.append(card)
+		_update_debug("【闪电】原牌移至 %s 的判定区，等待其判定" % target.player_name)
+		return target
+	# G02c-Q1：绕回当前判定者，只留到下次判定，不立即重新判。
+	p.judgment_cards.append(card)
+	_update_debug("【闪电】绕回 %s，留待下次判定" % p.player_name)
+	return p
+
 func _run_judgment(p: Player, granted: bool) -> bool:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
+	var deferred: Array[CardBase] = []
 	if granted:
 		_update_debug("%s 进行（授予的）判定阶段：判定区 %d 张牌（乐不思蜀/兵粮寸断失效）" % [p.player_name, p.judgment_cards.size()])
 	else:
@@ -920,23 +940,26 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not players.has(p):
 			return false
 		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
-		var card = p.judgment_cards.back()
+		var card = _last_pending_judgment(p, deferred)
+		if card == null: break
 		var nullified = NullificationOutcome.PASSED
 		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
-			var valid = func(): return generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and not p.judgment_cards.is_empty() and p.judgment_cards.back() == card
+			var valid = func(): return generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
 			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
-			if nullified == NullificationOutcome.INVALIDATED:
+			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
-		p.judgment_cards.pop_back()
+		p.judgment_cards.erase(card)
 		match card.sub_type:
 			CardData.CardSubType.LIGHTNING:
 				if nullified == NullificationOutcome.NULLIFIED:
 					_update_debug("【闪电】的效果被【无懈可击】抵消")
+					if _move_lightning(p, card) == p: deferred.append(card)
+					continue
 				else:
 					_update_debug("【闪电】判定：必定命中！即将对 %s 造成 3 点雷电伤害" % p.player_name)
-					# 规则（朋友设定）：闪电造成的属性伤害无伤害来源（铁索传导随之为无来源）
+					# 授权经典基础：闪电及其连环传导均为无来源雷电伤害。
 					var damage = await _deal_damage_result(null, p, 3, EffectChain.DamageType.THUNDER)
 					if damage.invalidated:
 						deck.discard(card)
@@ -1143,6 +1166,8 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 			return turn_manager.can_use("indulgence")
 		CardData.CardSubType.SUPPLY_SHORTAGE:
 			return turn_manager.can_use("supply_shortage")
+		CardData.CardSubType.LIGHTNING:
+			return not _has_delayed_card(p, sub)
 	return sub in TARGET_TRICKS
 
 func _ai_play_candidates(observation: Dictionary) -> Array:
@@ -2229,7 +2254,7 @@ func play_card(sub: CardData.CardSubType):
 			CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE] and not can_declare_basic(p, sub):
 		_update_debug("当前不能使用【%s】：检查牌源、次数、体力及合法目标" % CardData.get_type_name(sub))
 		return
-	if (sub in TARGET_TRICKS or sub in GLOBAL_TRICKS) and not can_declare_trick(p, sub, p.general_name == "安普提·斯丢皮得"):
+	if (sub in TARGET_TRICKS or sub in GLOBAL_TRICKS or sub == CardData.CardSubType.LIGHTNING) and not can_declare_trick(p, sub, p.general_name == "安普提·斯丢皮得"):
 		_update_debug("当前不能使用【%s】：检查牌源、次数与合法目标" % CardData.get_type_name(sub))
 		return
 	# 每张牌从干净状态开始（【是~啊~】激活标记：选锦囊时设置，消耗锦囊时消费；取消/中止路径由下次出牌重置）
