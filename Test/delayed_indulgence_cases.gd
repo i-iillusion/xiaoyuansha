@@ -23,9 +23,9 @@ func run_limits(suite, sub: CardData.CardSubType, key: String, label: String):
 	await game.execute_card_on_target(game.players[1], sub)
 	suite.check(a.hand_size() == 2 and game.players[1].judgment_cards == [original] and game.turn_manager._get_turn_count(key, 0) == 1 and not game.get_trick_targets(a, sub).has(game.players[1]), label + " duplicate original name is illegal before payment/count; UI and execution agree")
 	await game.execute_card_on_target(game.players[4], sub)
-	suite.check(a.hand_size() == 1 and game.turn_manager._get_turn_count(key, 0) == 2 and not game.can_declare_trick(a, sub, true), label + " two uses reached even with virtual payment")
+	suite.check(a.hand_size() == 1 and game.turn_manager._get_turn_count(key, 0) == 2 and game.can_declare_trick(a, sub, true), label + " unmarked delayed trick remains legal after two uses, including virtual declaration")
 	await game.execute_card_on_target(game.players[2], sub)
-	suite.check(a.hand_size() == 1 and game.players[2].judgment_cards.is_empty() and game.deck._discard.is_empty(), label + " third use cannot pay or place")
+	suite.check(a.hand_size() == 0 and game.players[2].judgment_cards.size() == 1 and game.turn_manager._get_turn_count(key, 0) == 3 and game.deck._discard.is_empty(), label + " explicit unlimited unmarked trick permits third legal placement/payment")
 	game.turn_manager.current_player_idx = 1
 	game.players[1].hand.append(null)
 	suite.check(game.can_declare_trick(game.players[1], sub) and game.turn_manager._get_turn_count(key, 1) == 0, label + " delayed use quota belongs to actual actor, not global")

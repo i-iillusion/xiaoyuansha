@@ -293,7 +293,6 @@ func can_use(card_key: String, limit: int = -1) -> bool:
 		"harvest": return harvest_count_this_turn < 1
 		"disarm": return disarm_count_this_turn < 1
 		"borrowed_sword": return borrowed_sword_count_this_turn < 2
-		"indulgence", "supply_shortage": return _get_turn_count(card_key) < 2
 	return true
 
 # 记录当前出牌操作者的一次使用（回合开始重置）
