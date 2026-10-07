@@ -56,7 +56,8 @@ func replay_state() -> Dictionary:
 		var equipment: Array = []
 		for slot in p.get_equip_slots():
 			equipment.append(p.get_equipment_card(slot))
-		roster.append({"seat": p.seat_index, "hp": p.hp, "dead": p.is_dead(),
+		roster.append({"seat": p.seat_index, "general": p.general_name,
+			"max_hp": p.max_hp, "prep_tokens": p.prep_tokens, "hp": p.hp, "dead": p.is_dead(),
 			"hand": card_ids(p.hand), "determined": card_ids(p.determined_cards),
 			"equipment": card_ids(equipment), "judgment": card_ids(p.judgment_cards)})
 	return {"phase": turn_manager.current_phase, "turn_owner": turn_manager.current_player_idx,

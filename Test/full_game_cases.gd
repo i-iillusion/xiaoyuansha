@@ -1,12 +1,14 @@
 extends RefCounted
 
 var suite
+var case_label: String = "D04"
 
 func check(ok: bool, label: String):
-	suite.check(ok, "D04：" + label)
+	suite.check(ok, case_label + "：" + label)
 
-func run(host):
+func run(host, selected: String = "稻草人", label: String = "D04"):
 	suite = host
+	case_label = label
 	var previous = [GameManager.selected_players, GameManager.selected_mode,
 		GameManager.selected_general, GameManager.random_general, GameManager.random_identity]
 	for count in [2, 3, 5]:
@@ -14,7 +16,7 @@ func run(host):
 		for repeat in 2:
 			GameManager.selected_players = count
 			GameManager.selected_mode = GameManager.MODE_CLASSIC_IDENTITY if count == 5 else GameManager.MODE_FREE_FOR_ALL
-			GameManager.selected_general = "稻草人"
+			GameManager.selected_general = selected
 			GameManager.random_general = false
 			GameManager.random_identity = false
 			var game = load("res://Scenes/Game.tscn").instantiate()
@@ -32,6 +34,10 @@ func run(host):
 			game._sacrifice_override = func(): return false
 			game._hand_discard_override = func(snapshot, amount, _mandatory): return snapshot.defaults(amount)
 			game._zone_pick_override = func(): return "hand"
+			# The self-player's legal decision is to keep the current trick. This
+			# automated smoke test does not claim to validate a replacement policy.
+			if selected == "里奥·普利威尔":
+				game._prep_replace_override = func(_l, _u, _t, _sub, _options): return -1
 			game._rescue_choice_override = func(rescuer, dying, options): return game._choose_ai_rescue(rescuer, dying, options)
 			var winners: Array = []
 			game.game_over.connect(func(winner): winners.append(winner))
@@ -45,6 +51,12 @@ func run(host):
 			check(game.replay_violations.is_empty(), "%d人完整对局没有非法候选或实体牌重复归属" % count)
 			var outcome = IdentityVictory.evaluate(game.players) if count == 5 else FreeForAllVictory.evaluate(game.players)
 			check(not outcome.is_empty() and winners == [outcome.get("winner", "")], "%d人实际终局符合独立判胜器" % count)
+			if selected == "里奥·普利威尔":
+				check(game.players[0].general_name == selected and game.players[0].max_hp == (6 if count == 5 else 5)
+					and game.players.slice(1).all(func(p): return p.general_name == "稻草人")
+					and game.replay_logs.any(func(entry): return "发动【丑态】" in entry), "%d人真实里奥默认行动局保留合法阵容并执行丑态" % count)
+				check(game._pending_card_actions.is_empty() and game._dying_contexts.is_empty()
+					and game._choice_prompt_stack.is_empty() and not game.yudaxi.is_active(), "%d人里奥自动终局后所有响应/父子帧已收尾" % count)
 			var terminal_state = game.replay_state()
 			var terminal_actions = game.replay_actions.size()
 			await suite.process_frame
@@ -59,7 +71,7 @@ func run(host):
 			var trace = {"actions": game.replay_actions, "logs": game.replay_logs,
 				"final": game.replay_state(), "winners": winners}
 			traces.append(trace)
-			var folder = "res://.git/local-ci/D04"
+			var folder = "res://.git/local-ci/" + case_label
 			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(folder))
 			var file = FileAccess.open(folder + "/%d-%d.json" % [count, repeat], FileAccess.WRITE)
 			file.store_string(JSON.stringify(trace))

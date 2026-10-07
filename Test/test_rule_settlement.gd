@@ -792,6 +792,8 @@ func _run():
 	await choutai_draw_cases.run(self)
 	var leo_lifecycle_cases = load("res://Test/leo_lifecycle_cases.gd").new()
 	await leo_lifecycle_cases.run(self)
+	var leo_mode_cases = load("res://Test/leo_mode_cases.gd").new()
+	await leo_mode_cases.run(self)
 	var prep_trick_baseline_cases = load("res://Test/prep_trick_baseline_cases.gd").new()
 	await prep_trick_baseline_cases.run(self)
 	var play_skill_actor_cases = load("res://Test/play_skill_actor_cases.gd").new()

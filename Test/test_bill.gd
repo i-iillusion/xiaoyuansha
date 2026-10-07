@@ -62,7 +62,9 @@ func _run() -> void:
 	_check(GeneralData.get_max_hp("比尔·盖伊") == 3, "比尔·盖伊 3 血")
 	_check(GeneralData.get_skills("比尔·盖伊").size() == 3, "三个技能: %d" % GeneralData.get_skills("比尔·盖伊").size())
 	_check(p0.general_name == "比尔·盖伊", "玩家0 = 比尔·盖伊")
-	_check(p0.max_hp == 3, "玩家0 体力上限 3")
+	_check(p0.max_hp == 4, "五人经典主公：比尔基础3+身份1，体力上限4")
+	_check(p0.identity == "主公" and p0.identity_max_hp_bonus == 1 and p0.hp == 4,
+		"主公开局加成独立登记且以新上限满血开始")
 
 	# ---- 用例2：【英姿】摸牌阶段多摸一张（2+1=3）----
 	_env()
@@ -211,7 +213,7 @@ func _run() -> void:
 	game._gay_x_override = func(): return 2
 	await game._execute_gay(p0, p1)
 	_check(p0.hand_size() == 1, "Gay 弃 2 张（3->1）: %d" % p0.hand_size())
-	_check(p0.hp == 3, "自己回复 2 点（1->3 封顶）: %d" % p0.hp)
+	_check(p0.hp == 3, "自己回复 2 点（1->3，未达主公上限4）: %d" % p0.hp)
 	_check(p1.hp == 3, "目标回复 2 点（1->3）: %d" % p1.hp)
 	_check(game._gay_used, "Gay 已标记使用")
 	# 已使用后不能再发动（执行入口拒绝）
