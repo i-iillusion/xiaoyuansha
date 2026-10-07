@@ -989,7 +989,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 					_update_debug("【火烧连营】的效果被【无懈可击】抵消")
 				else:
 					_update_debug("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
-					# 规则（朋友设定）：火烧连营造成的属性伤害无伤害来源（与闪电一致）
+					# G02d-Q3：火烧连营始终为无来源火焰伤害。
 					if await _resolve_burning_camp_damage(null, p, 1) == CHOICE_INVALID or _game_over:
 						deck.discard(card)
 						return false
@@ -4896,14 +4896,18 @@ func _show_duel_second_strike_prompt() -> int:
 
 # 火烧连营伤害结算：中心角色 → 左侧（下家 seat+1）→ 右侧（上家 seat-1），各受 amount 点火焰伤害
 # 每个受伤者独立濒死检查 + 铁索传导（火焰伤害）
-func _resolve_burning_camp_damage(source: Player, center: Player, amount: int) -> int:
+func _resolve_burning_camp_damage(_source: Player, center: Player, amount: int) -> int:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var left = players[(center.seat_index + 1) % player_count]
 	var right = players[(center.seat_index - 1 + player_count) % player_count]
 
-	var victims = [center, left, right]
-	var victim_names = [center.player_name, left.player_name, right.player_name]
+	# G02d-Q1：上下家是同一角色时只受一次，不重复执行其伤害链。
+	var victims: Array[Player] = [center]
+	for neighbor in [left, right]:
+		if not victims.has(neighbor): victims.append(neighbor)
+	var victim_names: Array[String] = []
+	for victim in victims: victim_names.append(victim.player_name)
 	_update_debug("火焰蔓延：%s（顺序：%s）" % [victim_names[0], "、".join(victim_names)])
 
 	for victim in victims:
@@ -4913,7 +4917,7 @@ func _resolve_burning_camp_damage(source: Player, center: Player, amount: int) -
 		# 胜负已分：不再结算后续伤害
 		if _game_over:
 			break
-		var damage = await _deal_damage_result(source, victim, amount, EffectChain.DamageType.FIRE)
+		var damage = await _deal_damage_result(null, victim, amount, EffectChain.DamageType.FIRE)
 		if damage.invalidated: return CHOICE_INVALID
 
 	_sync_all_ui()

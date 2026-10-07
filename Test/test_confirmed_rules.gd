@@ -227,6 +227,8 @@ func _run():
 	GameManager.selected_mode = previous_mode
 	GameManager.random_general = false
 	# 独立换牌回归归入本组，仍保留七组及各组60秒门槛。
+	var delayed_fire_basic_cases = load("res://Test/delayed_fire_basic_cases.gd").new()
+	await delayed_fire_basic_cases.run(self)
 	var prep_completion_cases = load("res://Test/prep_completion_cases.gd").new()
 	await prep_completion_cases.run(self)
 	var prep_strike_completion_cases = load("res://Test/prep_strike_completion_cases.gd").new()
