@@ -664,15 +664,17 @@ func _update_player_panel(panel: Control, player: Player):
 	name_label.text = "%s · %s" % [player.player_name, player.general_name]
 	hp_label.text = "❤ %d/%d" % [player.hp, player.max_hp]
 	hand_label.text = "手牌：%d 张" % player.hand_size()
-	# 身份显示：主公开局公开；其他身份阵亡（翻开）后显示，否则隐藏为【?】
+	# 本人始终知道自己的身份；他人只显示已公开身份。
+	var viewer: Player = _local_player() if not players.is_empty() else null
+	var visible_identity := PlayerObservation.visible_identity(player, viewer)
 	if player.identity == "":
 		identity_label.text = ""
-	elif player.identity_revealed:
-		identity_label.text = "【%s】" % player.identity
+	elif visible_identity != "":
+		identity_label.text = "【%s】" % visible_identity
 	else:
 		identity_label.text = "【?】"
 	# 身份颜色：主公金 / 忠臣绿 / 反贼红 / 内奸紫（未公开灰色）
-	match player.identity:
+	match visible_identity:
 		"主公":
 			_set_label_font_color(identity_label, Color(1, 0.85, 0.3))
 		"忠臣":
@@ -10402,7 +10404,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks)
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player())
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)

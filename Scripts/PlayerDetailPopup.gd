@@ -11,6 +11,7 @@ signal equip_clicked(sub: CardData.CardSubType)
 signal skill_clicked(skill_key: String)
 
 var _player: Player
+var _viewer: Player
 var _wine_stacks: int = 0
 # 悬停效果描述浮层
 var _tooltip: PanelContainer
@@ -28,18 +29,20 @@ var _tooltip_label: Label
 @onready var _close_btn: Button = $Panel/CloseBtn
 
 # 静态方法：创建一个新的详情弹窗
-static func create(parent: Node, player: Player, wine_stacks: int = 0) -> PlayerDetailPopup:
+static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null) -> PlayerDetailPopup:
 	var scene = load("res://Scenes/PlayerDetailPopup.tscn")
 	if scene == null:
 		# 代码兜底：直接实例化
 		var popup = PlayerDetailPopup.new()
 		popup._player = player
+		popup._viewer = viewer
 		popup._wine_stacks = wine_stacks
 		parent.add_child(popup)
 		return popup
 
 	var popup = scene.instantiate()
 	popup._player = player
+	popup._viewer = viewer
 	popup._wine_stacks = wine_stacks
 	parent.add_child(popup)
 	return popup
@@ -60,11 +63,11 @@ func _populate():
 	_name_label.text = _player.player_name
 	_general_label.text = "武将：%s" % _player.general_name
 	_hp_label.text = "体力：%d/%d" % [_player.hp, _player.max_hp]
-	# 身份显示：主公开局公开；其他身份阵亡（翻开）后显示，否则隐藏为？
+	var visible_identity := PlayerObservation.visible_identity(_player, _viewer)
 	if _player.identity == "":
 		_identity_label.text = "身份：无"
-	elif _player.identity_revealed:
-		_identity_label.text = "身份：%s" % _player.identity
+	elif visible_identity != "":
+		_identity_label.text = "身份：%s" % visible_identity
 	else:
 		_identity_label.text = "身份：？"
 

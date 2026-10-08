@@ -2,6 +2,10 @@
 class_name PlayerObservation
 extends RefCounted
 
+# Knowing one's own role is independent of revealing it to other players.
+static func visible_identity(player: Player, viewer: Player = null) -> String:
+	return player.identity if player == viewer or player.identity_revealed else ""
+
 static func capture(players: Array, actor: Player, phase: int, revision: int) -> Dictionary:
 	var visible: Array = []
 	for p in players:
@@ -13,7 +17,7 @@ static func capture(players: Array, actor: Player, phase: int, revision: int) ->
 			judgments.append(card.sub_type)
 		visible.append({"seat": p.seat_index, "hp": p.hp, "max_hp": p.max_hp,
 			"dead": p.is_dead(), "dying": p.is_dying(), "general": p.general_name,
-			"identity": p.identity if p == actor or p.identity_revealed else "",
+			"identity": visible_identity(p, actor),
 			"hand_count": p.hand_size(), "equipment": equipment,
 			"judgments": judgments, "chained": p.chained, "facedown": p.facedown})
 	var own_cards: Array = []
