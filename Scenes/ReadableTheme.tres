@@ -1,0 +1,9 @@
+[gd_resource type="Theme" format=3]
+
+[resource]
+default_font_size = 18
+Button/font_sizes/font_size = 18
+Label/font_sizes/font_size = 18
+LineEdit/font_sizes/font_size = 18
+CheckBox/font_sizes/font_size = 18
+OptionButton/font_sizes/font_size = 18

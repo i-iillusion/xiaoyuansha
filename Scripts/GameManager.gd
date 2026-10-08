@@ -449,14 +449,14 @@ func _create_ui():
 	# 底栏 - 中间：出牌区
 	_play_btn = Button.new()
 	_play_btn.text = "出牌"
-	_play_btn.size = Vector2(120, 40)
+	_play_btn.custom_minimum_size = Vector2(120, 40)
 	_play_btn.pressed.connect(_on_play_btn_pressed)
 	_play_btn.visible = false
 	_play_area_container.add_child(_play_btn)
 
 	_end_play_btn = Button.new()
 	_end_play_btn.text = "结束出牌"
-	_end_play_btn.size = Vector2(120, 40)
+	_end_play_btn.custom_minimum_size = Vector2(120, 40)
 	_end_play_btn.pressed.connect(_on_end_play_pressed)
 	_end_play_btn.visible = false
 	_play_area_container.add_child(_end_play_btn)
@@ -464,7 +464,7 @@ func _create_ui():
 	# 取消目标选择按钮（平时隐藏）
 	_cancel_target_btn = Button.new()
 	_cancel_target_btn.text = "取消选择"
-	_cancel_target_btn.size = Vector2(120, 40)
+	_cancel_target_btn.custom_minimum_size = Vector2(120, 40)
 	_cancel_target_btn.pressed.connect(_on_cancel_target_pressed)
 	_cancel_target_btn.visible = false
 	_play_area_container.add_child(_cancel_target_btn)
@@ -472,7 +472,7 @@ func _create_ui():
 	# 多目标确认按钮（方天画戟，平时隐藏）
 	_confirm_target_btn = Button.new()
 	_confirm_target_btn.text = "确认出牌（0 名目标）"
-	_confirm_target_btn.size = Vector2(160, 40)
+	_confirm_target_btn.custom_minimum_size = Vector2(160, 40)
 	_confirm_target_btn.pressed.connect(_on_confirm_multi_target)
 	_confirm_target_btn.visible = false
 	_confirm_target_btn.disabled = true
