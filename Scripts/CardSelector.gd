@@ -18,6 +18,7 @@ signal determined_card_clicked(card: CardBase)
 var player: Player = null
 
 var _selected_sub: CardData.CardSubType = -1
+var _confirm_pending := false
 # 返回栈：当前页面的「上一页重建函数」
 var _back_fn: Callable = Callable()
 # 悬停效果描述浮层
@@ -335,8 +336,9 @@ func _on_variant_chosen(sub: CardData.CardSubType):
 	_on_confirm()
 
 func _on_confirm():
-	if _selected_sub < 0:
+	if _selected_sub < 0 or _confirm_pending:
 		return
+	_confirm_pending = true
 	_hide_tooltip()
 	var tween = create_tween()
 	tween.tween_property(self, "modulate", Color(1, 1, 1, 0), 0.1)

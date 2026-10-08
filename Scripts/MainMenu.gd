@@ -23,6 +23,8 @@ var _pending_mode: String = GameManager.MODE_CLASSIC_IDENTITY
 
 func _ready():
 	_show_main()
+	# Optional shortcut also lets the packaged release exercise the LAN scene.
+	if "--lan" in OS.get_cmdline_user_args(): _start_lan.call_deferred()
 
 func _process(delta: float):
 	if _tip_remaining > 0.0:
@@ -55,7 +57,7 @@ func _show_start():
 	_clear()
 	_page_title.text = "选择模式"
 	_add_btn("单人游戏", func(): _not_implemented("单人游戏"))
-	_add_btn("多人游戏", func(): _not_implemented("多人游戏"))
+	_add_btn("多人游戏 · 局域网", _start_lan)
 	_add_btn("设置", func(): _not_implemented("设置"))
 	_add_btn("测试模式", _show_test)
 	_add_btn("← 返回", _show_main, "")
@@ -151,6 +153,14 @@ func _start_game_5p():
 
 func _not_implemented(name: String):
 	_show_tip("「%s」尚未实现" % name)
+
+func _start_lan():
+	if _launch_pending or not is_inside_tree(): return
+	_launch_pending = true
+	var error = get_tree().change_scene_to_file("res://Scenes/LanRoom.tscn")
+	if error != OK:
+		_launch_pending = false
+		_show_tip("进入联机房间失败：%s" % error_string(error))
 
 func _show_tip(msg: String):
 	_tip.text = msg

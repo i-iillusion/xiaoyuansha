@@ -1,0 +1,206 @@
+extends Control
+
+var session: LanSession
+var body: VBoxContainer
+var message: Label
+var clock_label: Label
+var _screen := ""
+var _game_shape := ""
+var _submitted := ""
+var _name := "玩家"
+
+func _ready() -> void:
+	session = LanSession.new()
+	session.name = "Session" # RPC path is identical on host and clients.
+	add_child(session)
+	session.lobby_changed.connect(_lobby_changed)
+	session.state_received.connect(_state_changed)
+	session.notice.connect(func(text): message.text = text)
+	var bg = ColorRect.new()
+	bg.color = Color("18212b")
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+	var margin = MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]: margin.add_theme_constant_override("margin_" + side, 18)
+	add_child(margin)
+	var box = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	margin.add_child(box)
+	var top = HBoxContainer.new()
+	box.add_child(top)
+	var title = _label(top, "校园杀 · 局域网试玩")
+	title.add_theme_font_size_override("font_size", 25)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	clock_label = _label(top, "")
+	_button(top, "离开房间 / 返回主菜单", _leave)
+	message = _label(box, "仅用于信任的局域网；请所有成员使用同一个试玩包。")
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(scroll)
+	body = VBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 12)
+	scroll.add_child(body)
+	_show_connection()
+	print("[LAN] room ready · ", LanSession.PROTOCOL)
+
+func _clear() -> void:
+	for child in body.get_children():
+		body.remove_child(child)
+		child.queue_free()
+
+func _label(parent: Node, text: String) -> Label:
+	var label = Label.new()
+	label.text = text
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(label)
+	return label
+
+func _button(parent: Node, text: String, callback: Callable) -> Button:
+	var button = Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(180, 42)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.pressed.connect(callback)
+	parent.add_child(button)
+	return button
+
+func _edit(parent: Node, hint: String, value: String) -> LineEdit:
+	var input = LineEdit.new()
+	input.placeholder_text = hint
+	input.text = value
+	input.custom_minimum_size = Vector2(320, 42)
+	parent.add_child(input)
+	return input
+
+func _show_connection() -> void:
+	_screen = "connect"
+	_clear()
+	_label(body, "连接方式：一人创建房间，其余人在同一局域网输入房主IP加入。无需安装Godot。")
+	var name_input = _edit(body, "你的昵称", _name)
+	name_input.max_length = 24
+	var address = _edit(body, "房主的局域网IPv4地址，例如192.168.1.20", "127.0.0.1")
+	var port = _edit(body, "UDP端口", str(LanSession.DEFAULT_PORT))
+	port.max_length = 5
+	var mode = OptionButton.new()
+	for text in ["2人无身份乱斗", "3人无身份乱斗", "5人经典身份局"]: mode.add_item(text)
+	body.add_child(mode)
+	_button(body, "创建房间（我是房主）", func():
+		_name = name_input.text
+		var error = session.host(_name, [2, 3, 5][mode.selected], int(port.text))
+		if error != OK: message.text = "创建失败：%s。检查端口是否被占用。" % error_string(error))
+	_button(body, "加入房间", func():
+		_name = name_input.text
+		var error = session.join_room(address.text.strip_edges(), _name, int(port.text))
+		message.text = "正在连接……" if error == OK else "连接参数错误：%s" % error_string(error))
+	var addresses: Array[String] = []
+	for ip in IP.get_local_addresses():
+		if ":" not in ip and not ip.begins_with("127.") and not ip.begins_with("169.254."): addresses.append(ip)
+	_label(body, "本机候选局域网地址：" + " / ".join(addresses))
+	_label(body, "127.0.0.1仅供同一台电脑多开测试。其他电脑必须填写房主的局域网地址。\n若Windows询问网络权限，仅允许你信任的私有网络；不需要关闭防火墙或设置公网端口转发。")
+
+func _lobby_changed(state: Dictionary) -> void:
+	if state.is_empty():
+		_show_connection()
+		return
+	if state.playing: return
+	_screen = "lobby"
+	_game_shape = ""
+	clock_label.text = ""
+	_clear()
+	_label(body, "房间：%d / %d 人 · %s" % [state.members.size(), state.count, "经典身份" if state.count == 5 else "无身份乱斗"])
+	if multiplayer.is_server():
+		var addresses: Array[String] = []
+		for ip in IP.get_local_addresses():
+			if ":" not in ip and not ip.begins_with("127.") and not ip.begins_with("169.254."): addresses.append(ip)
+		_label(body, "让同伴加入：" + " / ".join(addresses) + " · UDP端口 %d" % session.port_number)
+	var mine: Dictionary = {}
+	for member in state.members:
+		_label(body, "%s%s · %s · %s" % [member.name, "（房主）" if member.peer == 1 else "", member.general, "已准备" if member.ready else "未准备"])
+		if member.peer == multiplayer.get_unique_id(): mine = member
+	if mine.is_empty(): return
+	var options = OptionButton.new()
+	var names: Array[String] = ["随机", "稻草人"]
+	names.append_array(LanSession.GENERALS)
+	for general in names: options.add_item(general)
+	options.select(names.find(mine.general))
+	body.add_child(options)
+	options.item_selected.connect(func(index): session.choose(names[index], false))
+	_button(body, "取消准备" if mine.ready else "准备", func(): session.choose(names[options.selected], not mine.ready))
+	if multiplayer.is_server():
+		var start = _button(body, "全部准备后开始", func():
+			if not session.begin_match(): message.text = "请等人数齐全、每人准备，并确保非稻草人武将不重复。")
+		start.disabled = state.members.size() != state.count
+	_label(body, "当前开放8名已实现武将；随机选将不重复，稻草人仅作为可重复测试占位。\n中途断线将中断本局，不自动托管、不判任何人获胜；支持重新准备开局。")
+
+func _send(token: String) -> void:
+	if token.is_empty() or token == _submitted: return
+	_submitted = token
+	session.act(token)
+
+func _state_changed(state: Dictionary) -> void:
+	_submitted = ""
+	clock_label.text = str(state.clock)
+	var shape = state.duplicate(true)
+	shape.erase("clock")
+	var fingerprint = var_to_str(shape)
+	if _screen == "game" and fingerprint == _game_shape: return
+	_screen = "game"
+	_game_shape = fingerprint
+	_clear()
+	var me: Dictionary = state.players[int(state.actor)]
+	_label(body, "你是 %d号 %s · %s · 身份：%s" % [int(state.actor) + 1, me.name, me.general, me.identity if me.identity != "" else "无"])
+	if not state.ended:
+		_label(body, "当前行动：%d号 · 当前窗口：%d号" % [int(state.turn) + 1, int(state.owner) + 1])
+	var board = GridContainer.new()
+	board.columns = mini(5, state.players.size())
+	body.add_child(board)
+	for player in state.players:
+		var text = "%d号 %s\n%s\n体力 %d/%d · 手牌 %d\n%s%s%s" % [int(player.seat) + 1, player.name, player.general,
+			player.hp, player.max_hp, player.hand_count, "已阵亡 " if player.dead else "", "横置 " if player.chained else "", "翻面 " if player.facedown else ""]
+		text += "\n身份：" + (player.identity if player.identity != "" else ("暗置" if state.players.size() == 5 else "无"))
+		var judgments: Array[String] = []
+		for sub in player.judgments: judgments.append(CardData.get_type_name(int(sub)))
+		text += "\n判定：" + ("、".join(judgments) if not judgments.is_empty() else "无")
+		if player.kneeling: text += "\n下跪中"
+		if player.dying: text += "\n濒死求救中"
+		if int(player.prep) > 0: text += "\n预习标记：%d" % player.prep
+		if int(player.wine) > 0: text += "\n酒：%d" % player.wine
+		var token: String = state.targets.get(str(player.seat), "")
+		var button = _button(board, text, func(): _send(token))
+		button.custom_minimum_size = Vector2(210, 140)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.disabled = token.is_empty()
+		var equipment: Array[String] = []
+		for slot in player.equipment:
+			var sub = player.equipment[slot]
+			if sub != null: equipment.append(str(slot) + ": " + CardData.get_type_name(sub))
+		button.tooltip_text = "\n".join(equipment) + "\n" + "\n".join(GeneralData.GENERALS[player.general].skills)
+	var cards: Array[String] = []
+	for card in state.own_cards:
+		cards.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))
+	_label(body, "你的手牌：" + "、".join(cards))
+	_label(body, str(state.status))
+	if not str(state.notice).is_empty(): _label(body, str(state.notice))
+	if state.ended:
+		_label(body, "本局结束：" + str(state.winner))
+		if multiplayer.is_server(): _button(body, "返回房间，再开一局", session.return_to_lobby)
+		else: _label(body, "等待房主返回房间；也可离开返回主菜单。")
+		return
+	if not str(state.kneel).is_empty(): _button(body, "下跪 / 解除下跪", func(): _send(state.kneel))
+	for text in state.labels: _label(body, str(text))
+	var actions = GridContainer.new()
+	actions.columns = 3
+	body.add_child(actions)
+	for action in state.controls:
+		var text: String = ("☑ " if action.pressed else "□ ") + action.text if action.toggle else action.text
+		var button = _button(actions, text, func(): _send(action.id))
+		button.disabled = action.disabled
+		button.tooltip_text = action.hint
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+func _leave() -> void:
+	session.close()
+	get_tree().change_scene_to_file("res://Scenes/MainMenu.tscn")

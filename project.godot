@@ -24,3 +24,8 @@ config/features=PackedStringArray("4.7")
 window/size/viewport_width=1280
 window/size/viewport_height=720
 window/size/mode=2
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

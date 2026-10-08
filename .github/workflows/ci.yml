@@ -87,6 +87,20 @@ jobs:
           done
           exit "$failed"
 
+      - name: Run LAN ownership and actual ENet process tests
+        run: |
+          set -euo pipefail
+          for spec in 'test_lan 2' 'test_lan_network 2' 'test_lan_network 3' 'test_lan_network 5' 'test_lan_network 2 --drop-case'; do
+            read -r test players extra <<< "$spec"
+            log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
+            status=0
+            timeout --kill-after=10s 60s godot --headless --disable-render-loop --path . --script "Test/$test.gd" -- --players="$players" ${extra:-} 2>&1 | tee "$log" || status=$?
+            if (( status != 0 )) || ! grep -Eq '^RESULT: [1-9][0-9]* asserts, 0 failures[[:space:]]*$' "$log" || grep -Eq 'SCRIPT ERROR|ERROR:|Parse Error|FAIL ' "$log"; then
+              echo "::error::LAN validation failed ($spec, exit $status)."
+              exit 1
+            fi
+          done
+
       - name: Package playtest source
         run: |
           set -euo pipefail

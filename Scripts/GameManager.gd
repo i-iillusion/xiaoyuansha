@@ -32,6 +32,30 @@ var _pending_card_actions: Dictionary = {}
 @export var player_count: int = 5
 @export var auto_start: bool = true
 
+# LAN keeps the existing authoritative rules; only input ownership changes.
+# Never rotate players/seat indices to make a remote player look like seat zero.
+var lan_enabled := false
+var lan_roster: Array[Dictionary] = []
+var _input_seat := 0
+var _seat_banks: Dictionary = {}
+var _bank_owner := 0
+
+func _is_human(p: Player) -> bool:
+	return p != null and (lan_enabled or p.seat_index == 0)
+
+func _local_player() -> Player:
+	return players[_input_seat if lan_enabled else 0]
+
+func _set_input_player(p: Player) -> void:
+	if lan_enabled and p != null and players.has(p):
+		_input_seat = p.seat_index
+
+func _select_time_bank(seat: int) -> void:
+	if not lan_enabled or seat == _bank_owner: return
+	_seat_banks[_bank_owner] = _bank_remaining
+	_bank_owner = seat
+	_bank_remaining = float(_seat_banks.get(seat, BANK_SECONDS))
+
 const MODE_CLASSIC_IDENTITY := "classic_identity"
 const MODE_FREE_FOR_ALL := "free_for_all"
 
@@ -707,7 +731,11 @@ func _update_player_panel(panel: Control, player: Player):
 
 func start_game():
 	var assigned_generals: Array[String] = []
-	if random_general:
+	if lan_enabled:
+		if lan_roster.size() != player_count: return
+		for entry in lan_roster:
+			assigned_generals.append(entry.general)
+	elif random_general:
 		assigned_generals = GeneralData.draw_unique_random_generals(player_count)
 		if assigned_generals.size() != player_count:
 			_update_debug("可用武将不足，无法在不重复武将的条件下开始 %d 人局" % player_count)
@@ -719,7 +747,7 @@ func start_game():
 	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
 		var full_identities = ["主公", "忠臣", "反贼", "反贼", "内奸"]
 		identities = full_identities.duplicate()
-		if random_identity:
+		if random_identity or lan_enabled:
 			identities.shuffle()
 	else:
 		identities.resize(player_count)
@@ -727,14 +755,14 @@ func start_game():
 
 	for i in player_count:
 		var p = Player.new()
-		p.player_name = "玩家 %d" % (i + 1)
+		p.player_name = str(lan_roster[i].name) if lan_enabled else "玩家 %d" % (i + 1)
 		p.seat_index = i
 		p.set_total_players(player_count)
 		p.identity = identities[i] if i < identities.size() else ""
 		# 身份公开：主公开局公开，其余身份阵亡（翻开）后才显示
 		p.identity_revealed = (p.identity == "主公")
 		# 武将分配：random_general = true 时所有玩家（含玩家0）随机；否则玩家0用主菜单选择、其余稻草人
-		if random_general:
+		if lan_enabled or random_general:
 			p.general_name = assigned_generals[i]
 		else:
 			p.general_name = GameManager.selected_general if i == 0 else "稻草人"
@@ -752,7 +780,7 @@ func start_game():
 	for p in players:
 		_draw_blank_cards(p, 4)
 
-	_update_player_panel(_self_info_panel, players[0])
+	_update_player_panel(_self_info_panel, _local_player())
 
 	for i in range(player_count - 1):
 		var seat = i + 1
@@ -781,6 +809,8 @@ func start_game():
 # ---- 阶段响应 ----
 
 func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phase, pid: int):
+	if lan_enabled and not players.is_empty() and _choice_prompt_stack.is_empty():
+		_set_input_player(players[pid])
 	# 胜负已分：不再推进任何阶段逻辑（当前结算链由各调用方的 _game_over 检查自行收尾）
 	if _game_over:
 		return
@@ -1076,12 +1106,13 @@ func _do_play(pid: int):
 		# 获赠阶段从响应返回时，授予索引已消费，仍恢复实际操作者。
 		pid = turn_manager.get_play_actor_idx()
 		p = players[pid]
-	_play_btn.visible = (pid == 0)
-	_end_play_btn.visible = (pid == 0)
+	_set_input_player(p)
+	_play_btn.visible = (_is_human(players[pid]))
+	_end_play_btn.visible = (_is_human(players[pid]))
 	_sync_all_ui()
 	_refresh_status_line()
 	_update_debug("%s 出牌阶段 — 点击「出牌」选择牌型，或「结束出牌」" % p.player_name)
-	if pid != 0:
+	if not _is_human(players[pid]):
 		await _run_ai_play(p)
 
 func _ai_observation(actor: Player) -> Dictionary:
@@ -1644,7 +1675,7 @@ func _on_detail_equip_clicked(sub: CardData.CardSubType, owner_player: Player):
 	if sub != CardData.CardSubType.SAGE_PROTECTION:
 		return
 	var p = players[turn_manager.get_play_actor_idx()]
-	if owner_player != p or p.seat_index != 0:
+	if owner_player != p or not _is_human(p):
 		_update_debug("只有装备者本人（你）能发动【贤者的加护】")
 		return
 	if turn_manager.current_phase != TurnManager.Phase.PLAY:
@@ -1987,7 +2018,8 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 					and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 			if not choice_valid.call():
 				return CHOICE_INVALID
-			var activate = 1 if p.seat_index != 0 else await _ask_guanshi(actual.player_name, choice_valid)
+			_set_input_player(p)
+			var activate = 1 if not _is_human(p) else await _ask_guanshi(actual.player_name, choice_valid)
 			# 原杀已被闪抵消；贯石未有效发动时没有可继续的余伤。
 			if activate == CHOICE_INVALID or not choice_valid.call():
 				return CHOICE_INVALID
@@ -1996,7 +2028,8 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				var originals: Dictionary = {}
 				for candidate in slots:
 					originals[candidate] = _guanshi_mount_card(p, candidate)
-				var slot: String = await _show_mount_discard_picker(p, choice_valid) if p.seat_index == 0 else slots.pick_random()
+				_set_input_player(p)
+				var slot: String = await _show_mount_discard_picker(p, choice_valid) if _is_human(p) else slots.pick_random()
 				if not choice_valid.call() or not originals.has(slot) or originals[slot] == null \
 						or _guanshi_mount_card(p, slot) != originals[slot]:
 					return CHOICE_INVALID
@@ -2074,7 +2107,8 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 				and p.get_equipment_card("weapon") == original_weapon and p.gender != target.gender \
 				and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		var activate = 1
-		if p.seat_index == 0:
+		if _is_human(p):
+			_set_input_player(p)
 			activate = await _ask_chixiong_activate(target.player_name, choice_valid)
 		if not hit_valid.call():
 			return false
@@ -2476,10 +2510,11 @@ func play_card(sub: CardData.CardSubType):
 				var weapon_context = turn_manager.get_context_revision()
 				var old_is_hidden = old_weapon == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有武器：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
-				if p.seat_index == 0 and not old_is_hidden:
+				if _is_human(p) and not old_is_hidden:
 					var valid = func():
 						return _can_use_play_skill(p) and weapon_context == turn_manager.get_context_revision() \
 							and p.get_equipment_card("weapon") == old_weapon_card and p.get_weapon() == old_weapon
+					_set_input_player(p)
 					var ok = await _show_weapon_replace_confirm(old_weapon, sub, valid)
 					if ok != 1:
 						_update_debug("替换武器确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换武器，手牌未消耗")
@@ -2528,10 +2563,11 @@ func play_card(sub: CardData.CardSubType):
 				var armor_context = turn_manager.get_context_revision()
 				var old_is_hidden = old_armor == CardData.CardSubType.HIDDEN_EQUIPMENT
 				# 已有防具：替换确认（玩家0交互 / AI 直接替换；暗置占位直接替换无需确认）
-				if p.seat_index == 0 and not old_is_hidden:
+				if _is_human(p) and not old_is_hidden:
 					var valid = func():
 						return _can_use_play_skill(p) and armor_context == turn_manager.get_context_revision() \
 							and p.get_equipment_card("armor") == old_armor_card and p.get_armor() == old_armor
+					_set_input_player(p)
 					var ok = await _show_weapon_replace_confirm(old_armor, sub, valid)
 					if ok != 1:
 						_update_debug("替换防具确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换防具，手牌未消耗")
@@ -2589,8 +2625,9 @@ func play_card(sub: CardData.CardSubType):
 			for slot in p.get_mount_slots():
 				mount_snapshot[slot] = {"sub": p.equipment[slot], "card": p.get_equipment_card(slot)}
 			var play_context = turn_manager.get_context_revision()
-			if p.seat_index == 0:
+			if _is_human(p):
 				var valid = func(): return _can_use_play_skill(p) and play_context == turn_manager.get_context_revision()
+				_set_input_player(p)
 				target_slot = await _show_mount_replace_picker(p, valid)
 				if target_slot == "cancel":
 					_update_debug("取消替换坐骑，手牌未消耗")
@@ -2760,7 +2797,8 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 		if typeof(answer) == TYPE_INT and answer == CHOICE_INVALID:
 			return BasicResponseOutcome.INVALIDATED
 		accepted = bool(answer)
-	elif p.seat_index == 0:
+	elif _is_human(p):
+		_set_input_player(p)
 		var answer = await prompt.call()
 		if typeof(answer) == TYPE_INT and answer == CHOICE_INVALID:
 			return BasicResponseOutcome.INVALIDATED
@@ -3095,9 +3133,10 @@ func _choose_borrowed_second_target(user: Player, first: Player, allowed: Callab
 	var selected: int
 	if _borrowed_second_target_override.is_valid():
 		selected = await _borrowed_second_target_override.call(candidates.duplicate())
-	elif user.seat_index == 0:
+	elif _is_human(user):
 		var labels: Array = []
 		for target in candidates: labels.append(target.player_name)
+		_set_input_player(user)
 		selected = await _show_sao_reveal_picker(labels, valid, "【借刀杀人】选择 %s 使用杀的目标（不能取消，超时随机）：" % first.player_name, false)
 	else:
 		var seats: Array = []
@@ -3122,10 +3161,11 @@ func _choose_borrowed_strike(first: Player, second: Player, allowed: Callable) -
 	if options.is_empty(): return -1
 	var selected: int
 	if _borrowed_strike_override.is_valid(): selected = await _borrowed_strike_override.call(first, second, options.duplicate())
-	elif first.seat_index == 0:
+	elif _is_human(first):
 		var labels: Array = []
 		for sub in options: labels.append("使用【%s】" % CardData.get_type_name(sub))
 		labels.append("不出杀，交出武器")
+		_set_input_player(first)
 		var index = await _show_choice_popup("【借刀杀人】对 %s 使用杀，否则交出武器：" % second.player_name, labels, valid, false)
 		selected = options[index] if index >= 0 and index < options.size() else (CHOICE_INVALID if index == CHOICE_INVALID else -1)
 	else: selected = await _choose_ai_response(first, "borrowed_strike", options, {"target": second.seat_index})
@@ -3152,7 +3192,8 @@ func _choose_borrowed_strike_targets(first: Player, second: Player, sub: int, al
 	var selected: Variant = [second]
 	if _borrowed_extra_targets_override.is_valid():
 		selected = await _borrowed_extra_targets_override.call(first, second, candidates.duplicate())
-	elif first.seat_index == 0:
+	elif _is_human(first):
+		_set_input_player(first)
 		selected = await _show_borrowed_extra_targets(second, candidates, valid)
 	# AI暂沿保守策略只杀指定目标，不限制真人合法追加能力。
 	if not valid.call() or not selected is Array or not selected.has(second): return CHOICE_INVALID
@@ -3416,9 +3457,10 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 		var selected: int = -1
 		if _prep_replace_override.is_valid():
 			selected = await _prep_replace_override.call(leo, attacker, target, current_sub, candidates.duplicate())
-		elif leo.seat_index == 0:
+		elif _is_human(leo):
 			var buttons: Array = []
 			for candidate in candidates: buttons.append("更换为" + CardData.get_type_name(candidate))
+			_set_input_player(leo)
 			var choice = await _show_choice_popup("【预习】消耗1个已有标记，更换 %s 的【%s】？当前范围：%s。" \
 				% [attacker.player_name, CardData.get_type_name(current_sub), current_target.player_name if current_target != null else "群体范围"], buttons, valid)
 			selected = candidates[choice] if choice >= 0 and choice < candidates.size() else choice
@@ -3457,7 +3499,8 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 
 	# 选择牌的区域：使用者是玩家 0 时交互，否则 AI 随机
 	var zone: String
-	if attacker.seat_index == 0:
+	if _is_human(attacker):
+		_set_input_player(attacker)
 		zone = await _show_zone_picker(action, target, valid)
 	else:
 		zone = _pick_random_zone(target)
@@ -3577,7 +3620,8 @@ func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: boo
 	var selected: int
 	if _prep_steal_pick_override.is_valid():
 		selected = await _prep_steal_pick_override.call(choices.duplicate(true))
-	elif attacker.seat_index == 0:
+	elif _is_human(attacker):
+		_set_input_player(attacker)
 		selected = await _show_sao_reveal_picker(labels, valid, "选择%s %s 的一张牌（不能取消，超时随机）：" \
 			% ["获得" if is_snatch else "弃置", target.player_name], false)
 	else:
@@ -3649,7 +3693,8 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 			and (not allowed.is_valid() or allowed.call())
 
 	var slot: String
-	if attacker.seat_index == 0:
+	if _is_human(attacker):
+		_set_input_player(attacker)
 		slot = await _show_equip_picker(target, slots, "选择要处理的装备：", valid)
 		if slot == "cancel":
 			_update_debug("取消选择装备，【%s】未生效（牌已消耗）" % card_name)
@@ -3779,10 +3824,11 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 	var chosen: int = -1
 	if _sao_transfer_declare_override.is_valid():
 		chosen = _sao_transfer_declare_override.call()
-	elif original_holder.seat_index == 0:
+	elif _is_human(original_holder):
 		var names: Array = []
 		for sub in options:
 			names.append(CardData.get_type_name(sub))
+		_set_input_player(original_holder)
 		var idx = await _show_sao_reveal_picker(names, allowed)
 		if allowed.is_valid() and idx == CHOICE_INVALID:
 			return CHOICE_INVALID
@@ -3822,10 +3868,11 @@ func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Pla
 	var chosen: int = -1
 	if _sao_transfer_declare_override.is_valid():
 		chosen = _sao_transfer_declare_override.call()
-	elif original_holder.seat_index == 0:
+	elif _is_human(original_holder):
 		var names: Array = []
 		for sub in options:
 			names.append(CardData.get_type_name(sub))
+		_set_input_player(original_holder)
 		var idx = await _show_sao_reveal_picker(names)
 		if idx >= 0 and idx < options.size():
 			chosen = options[idx]
@@ -4126,12 +4173,13 @@ func _show_weapon_replace_confirm(old_weapon: CardData.CardSubType, new_weapon: 
 # 丈八蛇矛：杀命中后、扣血前询问流失体力数（X≤3），合并伤害。
 # 返回流失的体力数（0 = 放弃，CHOICE_INVALID = 等待失效）；AI 不主动流失。
 func _ask_zhangba_extra(p: Player, allowed: Callable = Callable()) -> int:
+	_set_input_player(p)
 	# 测试钩子
 	if _zhangba_override.is_valid():
 		return await _zhangba_override.call()
 
 	# AI 不主动流失
-	if p.seat_index != 0:
+	if not _is_human(p):
 		return 0
 
 	var answer = ChoicePromptAnswer.new()
@@ -4255,7 +4303,8 @@ func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()
 	if _chixiong_target_override.is_valid():
 		var result = await _chixiong_target_override.call()
 		choice = CHOICE_INVALID if typeof(result) == TYPE_INT and result == CHOICE_INVALID else (1 if result else 0)
-	elif target.seat_index == 0:
+	elif _is_human(target):
+		_set_input_player(target)
 		choice = await _show_chixiong_target_prompt(p.player_name, valid)
 	else:
 		# AI 目标：50% 概率弃一张手牌
@@ -4529,7 +4578,7 @@ func _enter_iron_chain_mode():
 func _on_iron_chain_target_click(target: Player):
 	if not _is_iron_chain_targeting or _card_target_confirm_owner == _card_target_generation:
 		return
-	var actor = players[0]
+	var actor = _local_player()
 	if not _can_use_play_skill(actor) or not players.has(target): return
 	var generation = _card_target_generation
 	var revision = turn_manager.get_context_revision()
@@ -4556,6 +4605,7 @@ func _on_iron_chain_target_click(target: Player):
 	if _iron_chain_targets.size() == 1:
 		# 问是否继续选第二名
 		_card_target_confirm_owner = generation
+		_set_input_player(actor)
 		var more = await _show_more_target_confirm(target.player_name, valid)
 		if _card_target_confirm_owner == generation: _card_target_confirm_owner = -1
 		if more == CHOICE_INVALID or not valid.call():
@@ -5023,7 +5073,8 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			continue
 		var snapshot = HandSelection.new(p)
 		var played = "skip"
-		if p.seat_index == 0:
+		if _is_human(p):
+			_set_input_player(p)
 			played = await _show_nullification_prompt(desc, p, valid)
 		else:
 			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else []
@@ -5201,7 +5252,8 @@ func _try_liehuo_nullify_result(p: Player, sub: CardData.CardSubType, allowed: C
 func _ask_liehuo(p: Player, allowed: Callable = Callable()) -> int:
 	if _liehuo_override.is_valid():
 		return 1 if await _liehuo_override.call() else 0
-	if p.seat_index == 0:
+	if _is_human(p):
+		_set_input_player(p)
 		return await _show_liehuo_prompt(allowed)
 	return 0  # AI 暂不主动发动
 
@@ -5398,7 +5450,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ICE_SWORD \
 						and subject.get_equipment_card("weapon") == original_weapon \
 						and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
-				var chosen = 1 if subject.seat_index != 0 else await _ask_ice_sword(actual.player_name, choice_valid)
+				_set_input_player(subject)
+				var chosen = 1 if not _is_human(subject) else await _ask_ice_sword(actual.player_name, choice_valid)
 				if not hit_valid.call():
 					chain.is_cancelled = true
 					return true
@@ -5662,7 +5715,8 @@ func _ask_kaiwen(kaiwen: Player, opponent: Player, is_receive: bool, allowed: Ca
 	if _kaiwen_override.is_valid():
 		var reply = await _kaiwen_override.call()
 		return CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
-	if kaiwen.seat_index == 0:
+	if _is_human(kaiwen):
+		_set_input_player(kaiwen)
 		return await _show_kaiwen_prompt(opponent.player_name, is_receive, allowed)
 	return 1
 
@@ -5802,7 +5856,8 @@ func _try_fate_blade_save(victim: Player, amount: int, allowed: Callable = Calla
 
 # 询问是否发动命运之刃：玩家0弹窗，AI 默认发动（保命）
 func _ask_fate_blade(victim: Player, allowed: Callable = Callable()) -> int:
-	if victim.seat_index == 0:
+	if _is_human(victim):
+		_set_input_player(victim)
 		return await _show_fate_blade_prompt(victim, allowed)
 	return 1  # AI 默认发动
 
@@ -5891,7 +5946,8 @@ func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 
 	var slot: String
-	if source.seat_index == 0:
+	if _is_human(source):
+		_set_input_player(source)
 		slot = await _ask_gou_lian_slot(victim, slots, valid)
 		if slot == "":
 			return CHOICE_INVALID
@@ -6016,7 +6072,8 @@ func _rps_result(a: int, b: int) -> int:
 func _rps_choice(p: Player, other_name: String, allowed: Callable = Callable()) -> int:
 	if _rps_override.is_valid():
 		return _rps_override.call(p)
-	if p.seat_index == 0:
+	if _is_human(p):
+		_set_input_player(p)
 		return await _show_rps_prompt(p, other_name, allowed)
 	return randi() % 3
 
@@ -6127,8 +6184,9 @@ func _ask_yes_ah(p: Player, card_name: String, has_hand: bool, preserve_invalid:
 		return "card" if has_hand else "cancel"
 	if _yes_ah_override.is_valid():
 		return _yes_ah_override.call()
-	if p.seat_index != 0:
+	if not _is_human(p):
 		return "card" if has_hand else "cancel"  # AI 暂不发动
+	_set_input_player(p)
 	return await _show_yes_ah_prompt(card_name, has_hand, preserve_invalid, allowed)
 
 # 主动出牌入口：取消/失效终止本次选择，不能当作“照常付牌”。
@@ -6218,7 +6276,7 @@ func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Ar
 func _on_sao_skill_clicked(p: Player) -> void:
 	if p.general_name != "安普提·斯丢皮得":
 		return
-	if p.seat_index != 0:
+	if p != _local_player() or not _is_human(p):
 		_update_debug("只能对自己使用【苕】")
 		return
 	if p.has_hidden_equip():
@@ -6226,6 +6284,7 @@ func _on_sao_skill_clicked(p: Player) -> void:
 		if _sao_menu_override.is_valid():
 			idx = _sao_menu_override.call()
 		else:
+			_set_input_player(p)
 			idx = await _show_choice_popup("你已暗置了一件装备\n要做什么？", ["明置装备", "暂不明置"])
 		if idx == 0:
 			await _do_sao_reveal(p)
@@ -6251,6 +6310,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 			return
 		etype = ov
 	else:
+		_set_input_player(p)
 		var idx = await _show_choice_popup("选择暗置的装备类型：", ["武器", "防具", "马"])
 		if idx < 0:
 			return
@@ -6344,10 +6404,11 @@ func _do_sao_reveal(p: Player) -> int:
 		var selected: int = -1
 		if _sao_reveal_slot_override.is_valid():
 			selected = _sao_reveal_slot_override.call(hidden_slots.duplicate())
-		elif p.seat_index == 0:
+		elif _is_human(p):
 			var labels: Array = []
 			for slot in hidden_slots:
 				labels.append("武器位" if slot == "weapon" else ("防具位" if slot == "armor" else "坐骑位%s" % slot.trim_prefix("mount_")))
+			_set_input_player(p)
 			selected = await _show_choice_popup("选择要明置的暗置装备槽位：", labels, valid)
 		if selected == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if selected < 0 or selected >= hidden_slots.size():
@@ -6371,11 +6432,12 @@ func _do_sao_reveal(p: Player) -> int:
 		if not options.has(chosen):
 			return CHOICE_INVALID
 	else:
-		if p.seat_index != 0:
+		if not _is_human(p):
 			return 0
 		var texts: Array = []
 		for sub in options:
 			texts.append(CardData.get_type_name(sub))
+		_set_input_player(p)
 		var idx = await _show_sao_reveal_picker(texts, valid)
 		if idx == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if idx < 0:
@@ -6458,7 +6520,8 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 		if _sao_reveal_override.is_valid():
 			var reply = await _sao_reveal_override.call()
 			accepted = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
-		elif owner.seat_index == 0:
+		elif _is_human(owner):
+			_set_input_player(owner)
 			accepted = await _show_sao_preempt_prompt(equipper, sub, "武器" if type_key == "weapon" else "防具", choice_valid)
 		# AI 暂保守不发动；D决策可接此入口，不能把角色是否可抢先硬编码为座位0。
 		if not action_valid.call():
@@ -6485,7 +6548,12 @@ func _maybe_ask_reveal() -> int:
 	if _game_over or not _reveal_ask_pending:
 		return 0
 	_reveal_ask_pending = false
-	var owner = players[0]
+	var owner = _local_player()
+	if lan_enabled:
+		for candidate in players:
+			if candidate.general_name == "安普提·斯丢皮得":
+				owner = candidate
+				break
 	if owner.general_name != "安普提·斯丢皮得" or not owner.is_alive():
 		return 0
 	if not owner.has_hidden_equip():
@@ -6509,6 +6577,7 @@ func _maybe_ask_reveal() -> int:
 		var reply = await _sao_reveal_override.call()
 		accepted = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
+		_set_input_player(owner)
 		accepted = await _show_reveal_opportunity_prompt(owner, valid)
 	if accepted == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if accepted == 1: return await _do_sao_reveal(owner)
@@ -6527,7 +6596,7 @@ func _show_reveal_opportunity_prompt(owner: Player, allowed: Callable = Callable
 # 维护局部等待与计时归属；结束旧窗口不会停止后来窗口的倒计时。
 func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: Callable = Callable(), timed: bool = true, initial_step: float = STEP_SECONDS, remaining_out: Array = []) -> int:
 	var lifecycle_generation = _dying_lifecycle_generation
-	var actor: Player = players[0]
+	var actor: Player = _local_player()
 	var actor_ref = weakref(actor)
 	var window_ref = weakref(overlay)
 	var revision = turn_manager.get_context_revision()
@@ -6536,7 +6605,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		var current_window = window_ref.get_ref()
 		return not _game_over and current_actor != null and players.has(current_actor) \
 			and lifecycle_generation == _dying_lifecycle_generation \
-			and players[0] == current_actor and not current_actor.is_dead() \
+			and players[current_actor.seat_index] == current_actor and not current_actor.is_dead() \
 			and revision == turn_manager.get_context_revision() \
 			and current_window != null and not current_window.is_queued_for_deletion() \
 			and (not allowed.is_valid() or allowed.call())
@@ -6554,7 +6623,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		var previous = _choice_prompt_stack.back()
 		if previous.generation == _countdown_generation:
 			previous.step = _step_remaining
-	var pending = {"overlay": overlay, "answer": answer, "who": actor.player_name,
+	var pending = {"overlay": overlay, "answer": answer, "who": actor.player_name, "seat": actor.seat_index,
 		"step": maxf(0.0, initial_step), "generation": -1, "timed": timed}
 	_choice_prompt_stack.append(pending)
 	_start_choice_countdown(pending)
@@ -6569,6 +6638,8 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 		if not overlay.is_queued_for_deletion():
 			overlay.queue_free()
 	_choice_prompt_stack.erase(pending)
+	if lan_enabled:
+		_input_seat = int(_choice_prompt_stack.back().seat) if not _choice_prompt_stack.is_empty() else turn_manager.get_play_actor_idx()
 	if pending.generation == _countdown_generation:
 		if not _game_over and not _choice_prompt_stack.is_empty():
 			_start_choice_countdown(_choice_prompt_stack.back())
@@ -6577,6 +6648,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 	return result
 
 func _start_choice_countdown(pending: Dictionary):
+	_select_time_bank(int(pending.get("seat", 0)))
 	# 超时是有效取消；先答复后由等待者销毁窗口，避免误判为外部关闭。
 	_halt_countdown()
 	_set_status_line("等待 %s 响应" % pending.who)
@@ -6761,7 +6833,7 @@ func _check_player_awaken(p: Player):
 		return
 	if _awaken_in_progress.get(p, {}) == {"revision": p.awakening_revision, "lifecycle": _dying_lifecycle_generation}:
 		return
-	if p.seat_index == 0:
+	if _is_human(p):
 		call_deferred("_do_awaken", p, p.awakening_revision, _dying_lifecycle_generation)
 	else:
 		_do_awaken(p, p.awakening_revision, _dying_lifecycle_generation)
@@ -6799,7 +6871,7 @@ func _do_awaken(p: Player, expected_revision: int = -1, expected_lifecycle: int 
 	if _awaken_in_progress.get(p, {}) == lease:
 		_awaken_in_progress.erase(p)
 	# 人类必选窗口被销毁或阶段过期时，重新显示待选择项；不重做已结算效果。
-	if lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p, generation) and p.seat_index == 0:
+	if lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p, generation) and _is_human(p):
 		call_deferred("_do_awaken", p, generation, lifecycle)
 
 func _resolve_awaken_choice(p: Player, generation: int):
@@ -6808,10 +6880,11 @@ func _resolve_awaken_choice(p: Player, generation: int):
 	var choice: int
 	if _awaken_pick_override.is_valid():
 		choice = await _awaken_pick_override.call()
-	elif p.seat_index != 0:
+	elif not _is_human(p):
 		choice = await _choose_ai_response(p, "awaken", [1, 2, 3])
 	else:
 		var actor_ref = weakref(p)
+		_set_input_player(p)
 		choice = await _show_awaken_pick(func(): return lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(actor_ref.get_ref(), generation))
 	if lifecycle != _dying_lifecycle_generation or not _awaken_choice_pending(p, generation) or revision != turn_manager.get_context_revision():
 		return
@@ -6859,8 +6932,9 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 		var reply = await _paixiong_override.call()
 		use = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
-		if victim.seat_index != 0:
+		if not _is_human(victim):
 			return PaixiongOutcome.NOT_USED  # AI 暂不发动
+		_set_input_player(victim)
 		use = await _show_paixiong_prompt(source.player_name, valid)
 	if _game_over or not players.has(victim) or not victim.is_alive():
 		return PaixiongOutcome.INVALIDATED
@@ -6954,7 +7028,7 @@ func _can_use_play_skill(p: Player) -> bool:
 		and not _is_kneeling(p)
 
 func _play_skill_target_is_current() -> bool:
-	if _can_use_play_skill(players[0]) and _play_skill_target_revision == turn_manager.get_context_revision():
+	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
 	_play_skill_selection_generation += 1
 	_is_zhuangbi_targeting = false
@@ -6969,7 +7043,7 @@ func _play_skill_target_is_current() -> bool:
 	return false
 
 func _restore_play_skill_buttons():
-	var allowed = _can_use_play_skill(players[0])
+	var allowed = _can_use_play_skill(_local_player())
 	_play_btn.visible = allowed
 	_end_play_btn.visible = allowed
 
@@ -6979,7 +7053,7 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 	if _zhuangbi_blocked_this_phase:
 		_show_toast("【装逼】胜负各半，本出牌阶段不能再次发动")
 		return
-	if p != players[0] or p.seat_index != 0:
+	if p != _local_player() or not _is_human(p):
 		_update_debug("只能对自己使用【装逼】")
 		return
 	if p.general_name != "史蒂芬·彼特先斯":
@@ -7002,7 +7076,7 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 	_start_zhuangbi_mode()
 
 func _start_zhuangbi_mode(continuing_owner: int = -1):
-	if _play_skill_execution_busy(continuing_owner) or not _can_use_play_skill(players[0]):
+	if _play_skill_execution_busy(continuing_owner) or not _can_use_play_skill(_local_player()):
 		return
 	_begin_play_skill_selection()
 	_is_zhuangbi_targeting = true
@@ -7030,7 +7104,7 @@ func _exit_zhuangbi_mode():
 func _on_zhuangbi_target_click(target: Player):
 	if not _is_zhuangbi_targeting or not _play_skill_target_is_current():
 		return
-	var p = players[0]
+	var p = _local_player()
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -7075,12 +7149,12 @@ func _execute_zhuangbi(targets: Array[Player]) -> void:
 		_zhuangbi_execution_owner = -1
 
 func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
-	if not _can_use_play_skill(players[0]):
+	if not _can_use_play_skill(_local_player()):
 		return
 	if _zhuangbi_blocked_this_phase:
 		_update_debug("【装逼】本出牌阶段不能再次发动")
 		return
-	var p = players[0]
+	var p = _local_player()
 	if p.general_name != "史蒂芬·彼特先斯" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
@@ -7187,6 +7261,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 			var reply = await _zhuangbi_again_override.call()
 			again = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 		else:
+			_set_input_player(p)
 			again = await _show_zhuangbi_again_prompt(can_repeat)
 		if again == 1 and can_repeat.call():
 			_start_zhuangbi_mode(owner)  # 同一有效执行成功后重新选择，不被自己的执行锁阻止。
@@ -7209,7 +7284,7 @@ func _show_zhuangbi_again_prompt(allowed: Callable = Callable()) -> int:
 func _on_campus_skill_clicked(p: Player) -> void:
 	if not _can_use_play_skill(p):
 		return
-	if p != players[0] or p.seat_index != 0:
+	if p != _local_player() or not _is_human(p):
 		_update_debug("只能对自己使用【校园霸主】")
 		return
 	if p.general_name != "杰基·斯特朗":
@@ -7232,7 +7307,7 @@ func _on_campus_skill_clicked(p: Player) -> void:
 	_start_campus_mode()
 
 func _start_campus_mode():
-	if _play_skill_execution_busy() or not _can_use_play_skill(players[0]):
+	if _play_skill_execution_busy() or not _can_use_play_skill(_local_player()):
 		return
 	_begin_play_skill_selection()
 	_is_campus_targeting = true
@@ -7249,7 +7324,7 @@ func _start_campus_mode():
 func _on_campus_target_click(target: Player):
 	if not _is_campus_targeting or not _play_skill_target_is_current():
 		return
-	var p = players[0]
+	var p = _local_player()
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -7355,7 +7430,8 @@ func _maybe_shensu_pending(p: Player, owner: int) -> int:
 	if _shensu_override.is_valid():
 		var reply = await _shensu_override.call()
 		activate = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
-	elif p.seat_index == 0:
+	elif _is_human(p):
+		_set_input_player(p)
 		activate = await _show_shensu_activate_prompt(valid)
 	if activate == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if activate != 1: return 0
@@ -7363,7 +7439,8 @@ func _maybe_shensu_pending(p: Player, owner: int) -> int:
 	var option := 0
 	if _shensu_option_override.is_valid():
 		option = await _shensu_option_override.call()
-	elif p.seat_index == 0:
+	elif _is_human(p):
+		_set_input_player(p)
 		option = await _show_shensu_option_prompt(p, valid)
 	if option == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if option == 1:
@@ -7507,7 +7584,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 func _on_gay_skill_clicked(p: Player) -> void:
 	if _play_skill_execution_busy() or not _can_use_play_skill(p):
 		return
-	if p != players[0] or p.seat_index != 0:
+	if p != _local_player() or not _is_human(p):
 		_update_debug("只能对自己使用【Gay】")
 		return
 	if p.general_name != "比尔·盖伊":
@@ -7544,7 +7621,7 @@ func _on_gay_skill_clicked(p: Player) -> void:
 func _on_gay_target_click(target: Player):
 	if not _is_gay_targeting or not _play_skill_target_is_current():
 		return
-	var p = players[0]
+	var p = _local_player()
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -7606,7 +7683,8 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 	var x := 0
 	if _gay_x_override.is_valid():
 		x = await _gay_x_override.call()
-	elif p.seat_index == 0:
+	elif _is_human(p):
+		_set_input_player(p)
 		x = await _show_gay_x_picker(max_x, valid)
 	if x == CHOICE_INVALID or not valid.call():
 		return
@@ -7652,7 +7730,7 @@ func _show_gay_x_picker(max_x: int, allowed: Callable = Callable()) -> int:
 func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 	if not _can_use_play_skill(p):
 		return
-	if p != players[0] or p.seat_index != 0:
+	if p != _local_player() or not _is_human(p):
 		_update_debug("只能对自己使用【没用】")
 		return
 	if p.general_name != "麦克斯·欧尼斯特":
@@ -7669,7 +7747,7 @@ func _on_lanzhonghou_skill_clicked(p: Player) -> void:
 	_start_lanzhonghou_mode()
 
 func _start_lanzhonghou_mode():
-	if _play_skill_execution_busy() or not _can_use_play_skill(players[0]):
+	if _play_skill_execution_busy() or not _can_use_play_skill(_local_player()):
 		return
 	_begin_play_skill_selection()
 	_is_lanzhonghou_targeting = true
@@ -7728,9 +7806,9 @@ func _run_lanzhonghou(a: Player, b: Player) -> void:
 		_lanzhonghou_execution_owner = -1
 
 func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
-	if not _can_use_play_skill(players[0]):
+	if not _can_use_play_skill(_local_player()):
 		return
-	var p = players[0]
+	var p = _local_player()
 	if p.general_name != "麦克斯·欧尼斯特" or not p.is_alive():
 		return
 	var revision = turn_manager.get_context_revision()
@@ -8184,7 +8262,7 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 			and turn_manager.current_phase == TurnManager.Phase.START and not turn_manager.skip_full_turn
 	if not valid.call(): return CHOICE_INVALID
 	# AI策略暂不主动发动此技能；获得的出牌阶段仍正常决策。
-	if p.seat_index != 0 and not _meiyong_override.is_valid():
+	if not _is_human(p) and not _meiyong_override.is_valid():
 		return 0
 	# 是否发动（玩家0弹窗 / 测试钩子）
 	var activate := 0
@@ -8193,6 +8271,7 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 		var reply = await _meiyong_override.call()
 		activate = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
 	else:
+		_set_input_player(p)
 		activate = await _show_meiyong_activate_prompt(valid, remaining)
 	if activate == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	if activate != 1: return 0
@@ -8288,6 +8367,7 @@ func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> in
 	return 1
 
 func _choose_meiyong_phase_target(p: Player, allowed: Callable, remaining: float):
+	_set_input_player(p)
 	# 仅双钩子路径用于既有确定性测试；真实交互必须同屏选人再点阶段。
 	if _meiyong_option_override.is_valid() and _meiyong_target_override.is_valid():
 		var option = await _meiyong_option_override.call()
@@ -8501,7 +8581,8 @@ func _ask_bloodthirsty(source: Player, victim: Player, allowed: Callable = Calla
 		if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID:
 			return CHOICE_INVALID
 		return 1 if reply else 0
-	if source.seat_index == 0:
+	if _is_human(source):
+		_set_input_player(source)
 		return await _show_bloodthirsty_prompt(source, victim, allowed)
 	return 1 if source.hp < source.max_hp else 0
 
@@ -8612,7 +8693,8 @@ func _ask_calamity_target(source: Player, allowed: Callable = Callable()) -> Var
 		if r is String and r == "cancel":
 			return null
 		return r
-	if source.seat_index == 0:
+	if _is_human(source):
+		_set_input_player(source)
 		return await _show_calamity_target_picker(source, allowed)
 	var alive_others: Array[Player] = []
 	for p in players:
@@ -8732,7 +8814,8 @@ func _ask_calamity_robe_target(victim: Player, allowed: Callable = Callable()) -
 		if r is String and r == "cancel":
 			return null
 		return r
-	if victim.seat_index == 0:
+	if _is_human(victim):
+		_set_input_player(victim)
 		return await _show_calamity_robe_target_picker(victim, allowed)
 	var alive_others: Array[Player] = []
 	for p in players:
@@ -8849,7 +8932,8 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 				and target.mount_count() == Player.MOUNT_SLOTS.size() \
 				and Player.MOUNT_SLOTS.all(func(slot): return originals[slot] != null and _equipment_resource_for_pick(target, slot) == originals[slot])
 		# 最新Q1：选择权属于转移者；AI沿用第一槽策略，非固定规则。
-		replace_slot = await _show_mule_replace_picker(target, replacement_valid) if p.seat_index == 0 else target.get_mount_slots()[0]
+		_set_input_player(p)
+		replace_slot = await _show_mule_replace_picker(target, replacement_valid) if _is_human(p) else target.get_mount_slots()[0]
 		if not replacement_valid.call() or not originals.has(replace_slot):
 			return CHOICE_INVALID
 	var mule_card = p.remove_equipment(source_slot)
@@ -8873,7 +8957,8 @@ func _ask_mule_target(p: Player, is_minus: bool, allowed: Callable = Callable())
 		if r is String and r == "cancel":
 			return null
 		return r
-	if p.seat_index == 0:
+	if _is_human(p):
+		_set_input_player(p)
 		return await _show_mule_target_picker(p, is_minus, allowed)
 	var alive_others: Array[Player] = []
 	for pl in players:
@@ -9038,7 +9123,8 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 			and source.soul_blade_activated and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 
 	# 是否发动拼点（玩家0弹窗 / AI 默认发动）
-	if source.seat_index == 0:
+	if _is_human(source):
+		_set_input_player(source)
 		var activate = await _ask_soul_blade_activate(victim.player_name, valid)
 		if activate == CHOICE_INVALID or not valid.call():
 			return CHOICE_INVALID
@@ -9068,7 +9154,8 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 	if source.hand_size() < need:
 		_update_debug("%s 手牌不足 %d 张，无法弃牌令 %s 翻面" % [source.player_name, need, victim.player_name])
 		return 0
-	if source.seat_index == 0:
+	if _is_human(source):
+		_set_input_player(source)
 		var discard_reply = await _ask_soul_blade_discard(victim.player_name, need, valid)
 		if discard_reply == CHOICE_INVALID or not valid.call():
 			return CHOICE_INVALID
@@ -9234,7 +9321,8 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		var play = "skip"
 		if _sacrifice_actor_override.is_valid():
 			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
-		elif p.seat_index == 0:
+		elif _is_human(p):
+			_set_input_player(p)
 			play = await _show_sacrifice_prompt(target, amount, valid)
 		else:
 			var options: Array = [CardData.CardSubType.SACRIFICE] if HandPayment.has_card(p, CardData.CardSubType.SACRIFICE) else []
@@ -9284,7 +9372,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
 func _show_sacrifice_prompt(target: Player, amount: int, allowed: Callable = Callable()) -> String:
-	var p = players[0]
+	var p = _local_player()
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.SACRIFICE)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
@@ -9593,7 +9681,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 		var indices: Array[int] = []
 		if _hand_discard_override.is_valid():
 			indices.assign(await _hand_discard_override.call(snapshot, count, mandatory))
-		elif p.seat_index != 0:
+		elif not _is_human(p):
 			indices = snapshot.defaults(count)
 		else:
 			var prompt = HandDiscardPrompt.new()
@@ -9609,6 +9697,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			prompt.answered.connect(func(chosen):
 				reply.indices = chosen.duplicate()
 				answer.submit(1), CONNECT_ONE_SHOT)
+			_set_input_player(p)
 			var result = await _wait_choice_prompt(prompt, answer, valid)
 			if result == CHOICE_INVALID:
 				return HandDiscardOutcome.GAME_ENDED if _game_over else HandDiscardOutcome.ACTION_INVALIDATED
@@ -9811,7 +9900,8 @@ func _ask_sage_save_pending(dying: Player, valid: Callable) -> int:
 	if _sage_save_override.is_valid():
 		var reply = await _sage_save_override.call()
 		return CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (1 if reply else 0)
-	if dying.seat_index == 0:
+	if _is_human(dying):
+		_set_input_player(dying)
 		return await _show_sage_save_prompt(valid)
 	return 1  # AI 默认使用
 
@@ -9975,15 +10065,16 @@ func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
 
 func _ask_rescue_card_pending(rescuer: Player, dying: Player, options: Array[int], valid: Callable) -> int:
 	var selected: int
-	if rescuer == dying and rescuer == players[0] and _dying_peach_override.is_valid():
+	if rescuer == dying and rescuer == _local_player() and _dying_peach_override.is_valid():
 		var reply = await _dying_peach_override.call()
 		selected = CHOICE_INVALID if typeof(reply) == TYPE_INT and reply == CHOICE_INVALID else (CardData.CardSubType.PEACH if reply else -1)
 	elif _rescue_choice_override.is_valid():
 		selected = await _rescue_choice_override.call(rescuer, dying, options)
-	elif rescuer != players[0]:
+	elif not _is_human(rescuer):
 		selected = await _choose_ai_response(rescuer, "rescue", options, {"target": dying.seat_index})
 	else:
 		var allowed = func(): return valid.call() and dying.is_dying() and not _rescue_options(rescuer, dying).is_empty()
+		_set_input_player(rescuer)
 		selected = await _show_rescue_prompt(rescuer, dying, options, allowed)
 	return selected
 
@@ -10108,7 +10199,7 @@ func _on_determined_card_clicked(card: CardBase):
 	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
 	var p = players[turn_manager.get_play_actor_idx()]
-	if p.seat_index != 0 or not p.determined_cards.has(card):
+	if not _is_human(p) or not p.determined_cards.has(card):
 		_update_debug("所选的已确定牌已不在当前玩家牌区")
 		return
 	_pending_determined_card = card
@@ -10267,6 +10358,7 @@ func _on_target_click(target: Player):
 			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target)) \
 			and (selected_sub != CardData.CardSubType.BORROWED_SWORD or _equipment_resource_for_pick(target, "weapon") == borrowed_weapon)
 	_card_target_confirm_owner = generation
+	_set_input_player(attacker)
 	var confirmed = await _show_target_confirm(attacker.player_name, target.player_name, selected_sub, valid)
 	if _card_target_confirm_owner == generation: _card_target_confirm_owner = -1
 	if confirmed == CHOICE_INVALID or not valid.call():
@@ -10325,6 +10417,7 @@ func _on_detail_popup_closed():
 
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
+	if owner_player != _local_player(): return
 	if skill_key == "苕":
 		await _on_sao_skill_clicked(owner_player)
 		return
@@ -10345,8 +10438,8 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	await _on_kneel_skill_clicked(owner_player)
 
 func _on_kneel_skill_clicked(owner_player: Player) -> void:
-	var p = players[0]
-	if owner_player != p or p.seat_index != 0:
+	var p = _local_player()
+	if owner_player != p or not _is_human(p):
 		_update_debug("只能对自己使用【下跪】")
 		return
 	if p.general_name != "布鲁斯·萨维奇":
@@ -10366,7 +10459,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 	var original_used = p.kneel_used
 	var valid = func():
 		return _kneel_execution_owner == owner and _kneel_execution_generation == owner \
-			and not _game_over and players.has(p) and players[0] == p and not p.is_dead() \
+			and not _game_over and players.has(p) and players[p.seat_index] == p and not p.is_dead() \
 			and p.general_name == "布鲁斯·萨维奇" and revision == turn_manager.get_context_revision() \
 			and p.kneeling == original_kneeling and p.kneel_used == original_used \
 			and (original_kneeling or _kneel_conditions_met(p))
@@ -10378,6 +10471,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 
 	# 下跪状态中 → 询问是否解除（任意时刻）
 	if p.kneeling:
+		_set_input_player(p)
 		var cancel = await _show_kneel_confirm("是否解除【下跪】状态？", "解除", "保持", valid)
 		if cancel == 1 and valid.call():
 			p.kneeling = false
@@ -10395,6 +10489,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 		else:
 			_show_toast("【下跪】发动条件：已经受伤（体力小于上限）")
 		return
+	_set_input_player(p)
 	var ok = await _show_kneel_confirm("是否发动【下跪】？\n（下跪状态：不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）", "发动", "取消", valid)
 	if ok == 1 and valid.call():
 		p.kneeling = true
@@ -10489,16 +10584,17 @@ func _show_toast(msg: String):
 func _sync_all_ui():
 	# 【觉醒】（史蒂芬·彼特先斯）：手牌为 0 时立即自动觉醒（觉醒技）
 	_check_awaken_trigger()
-	_update_player_panel(_self_info_panel, players[0])
+	_update_player_panel(_self_info_panel, _local_player())
 
 	for i in range(4):
 		var seat = i + 1
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])
 
-	var my_turn = (turn_manager.get_play_actor_idx() == 0)
+	var my_turn = (_is_human(players[turn_manager.get_play_actor_idx()]))
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
-		_play_btn.disabled = ((players[0].hand_size() <= 0 and players[0].determined_cards.is_empty()) or _is_kneeling(players[0]))
+		var play_actor = players[turn_manager.get_play_actor_idx()]
+		_play_btn.disabled = ((play_actor.hand_size() <= 0 and play_actor.determined_cards.is_empty()) or _is_kneeling(play_actor))
 	else:
 		_play_btn.disabled = true
 
@@ -10540,6 +10636,9 @@ func _set_status_line(msg: String):
 
 # 根据当前回合状态刷新提示句（并启动/停止对应倒计时）
 func _refresh_status_line():
+	# A LAN response may belong to a different seat; do not replace its timer
+	# with the current turn owner's play timer while an outer prompt is pending.
+	if lan_enabled and not _choice_prompt_stack.is_empty(): return
 	if _game_over:
 		_halt_countdown()
 		_set_status_line("游戏已结束")
@@ -10551,7 +10650,7 @@ func _refresh_status_line():
 	_halt_countdown()
 	match turn_manager.current_phase:
 		TurnManager.Phase.PLAY:
-			if pid == 0:
+			if _is_human(players[pid]):
 				_start_play_countdown()
 			else:
 				_set_status_line("%s 出牌阶段" % pname)
@@ -10564,8 +10663,9 @@ func _refresh_status_line():
 
 # 出牌阶段倒计时：每次成功出牌重置每步 30 秒（整局储备不重置），超时自动结束出牌
 func _start_play_countdown():
+	_select_time_bank(turn_manager.get_play_actor_idx())
 	_halt_countdown()
-	_set_status_line("%s 出牌阶段" % players[0].player_name)
+	_set_status_line("%s 出牌阶段" % players[turn_manager.get_play_actor_idx()].player_name)
 	_step_remaining = STEP_SECONDS
 	_countdown_active = true
 	var generation = _countdown_generation
@@ -10586,7 +10686,8 @@ func _start_response_countdown(overlay: Control, who: String, on_timeout: Callab
 
 # 出牌阶段成功打出一张牌后重置每步倒计时（仅玩家0出牌阶段且倒计时运行中）
 func _reset_play_countdown_if_p0():
-	if turn_manager.get_play_actor_idx() == 0 and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
+	if lan_enabled and not _choice_prompt_stack.is_empty(): return
+	if _is_human(players[turn_manager.get_play_actor_idx()]) and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
 		_start_play_countdown()
 
 # 停止倒计时并恢复阶段提示（响应结束后回到当前阶段状态）

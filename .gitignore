@@ -25,3 +25,6 @@ memory/
 
 # 临时输出
 *.out.txt
+
+# Reproducible LAN release outputs, not source or credentials.
+builds/
