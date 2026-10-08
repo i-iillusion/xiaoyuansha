@@ -10,7 +10,7 @@ try {
     $engine = (Resolve-Path -LiteralPath $GodotPath).Path
     $template = (Resolve-Path -LiteralPath $TemplatePath).Path
     $evidence = (Resolve-Path -LiteralPath $VerificationDirectory).Path
-    $results = @(Get-Content -LiteralPath (Join-Path $evidence 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json)
+    [array]$results = Get-Content -LiteralPath (Join-Path $evidence 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($results.Count -ne 8 -or @($results | Where-Object {-not $_.passed}).Count -ne 0) { throw 'All seven original suites and import must pass before packaging.' }
     $manifest = Get-Content -LiteralPath (Join-Path $evidence 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($item in $manifest.files) {
@@ -32,10 +32,11 @@ try {
     $preset = [IO.File]::ReadAllText((Join-Path $project 'export_presets.cfg'))
     $preset = $preset.Replace('res://.git/lan-build/templates/windows_release_x86_64.exe', $template.Replace('\','/'))
     [IO.File]::WriteAllText((Join-Path $snapshot 'export_presets.cfg'), $preset, [Text.UTF8Encoding]::new($false))
-    function Run-Checked([string]$Name, [string]$Executable, [string]$Arguments) {
+    function Run-Checked([string]$Name, [string]$Executable, [string]$Arguments, [string]$WorkingDirectory = $project) {
         $info = [Diagnostics.ProcessStartInfo]::new()
         $info.FileName = $Executable
         $info.Arguments = $Arguments
+        $info.WorkingDirectory = $WorkingDirectory
         $info.UseShellExecute = $false
         $info.CreateNoWindow = $true
         $info.RedirectStandardOutput = $true
@@ -73,7 +74,22 @@ try {
     $info | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $bundle 'build-info.json') -Encoding UTF8
     $zip = Join-Path $build 'CampusSha-LAN-Windows-x64.zip'
     Compress-Archive -LiteralPath $bundle -DestinationPath $zip
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $entries = @($archive.Entries | Where-Object {-not $_.FullName.EndsWith('/')} | ForEach-Object {$_.FullName.Replace('\','/')} | Sort-Object)
+        $allowed = @('CampusSha-LAN/CampusSha-LAN.exe', 'CampusSha-LAN/试玩说明.txt', 'CampusSha-LAN/Godot-LICENSE.txt', 'CampusSha-LAN/Godot-COPYRIGHT.txt', 'CampusSha-LAN/build-info.json') | Sort-Object
+        if (@(Compare-Object $allowed $entries).Count -ne 0) { throw 'Unexpected release ZIP file set.' }
+    } finally { $archive.Dispose() }
+    $unpack = Join-Path $build 'clean-unpack'
+    Expand-Archive -LiteralPath $zip -DestinationPath $unpack
+    $cleanBundle = Join-Path $unpack 'CampusSha-LAN'
+    $cleanExe = Join-Path $cleanBundle 'CampusSha-LAN.exe'
+    if ((Get-FileHash -LiteralPath $cleanExe).Hash -ne $info.exe_sha256) { throw 'Unpacked executable hash mismatch.' }
+    Run-Checked 'clean-lan-startup' $cleanExe '--headless --quit-after 20 -- --lan' $cleanBundle
+    if ([IO.File]::ReadAllText((Join-Path $build 'clean-lan-startup.stdout.log')) -notmatch '\[LAN\] room ready') { throw 'Unpacked LAN scene did not reach ready.' }
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+    [pscustomobject]@{passed=$true; zip_sha256=$hash; zip_bytes=(Get-Item -LiteralPath $zip).Length; exe_sha256=$info.exe_sha256; base_commit=$info.base_commit; files=$entries; working_directory=$cleanBundle} | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $build 'clean-package-check.json') -Encoding UTF8
     "$hash  CampusSha-LAN-Windows-x64.zip" | Set-Content -LiteralPath (Join-Path $build 'SHA256.txt') -Encoding ASCII
     Write-Host "PACKAGE=$zip"
     Write-Host "SHA256=$hash"
