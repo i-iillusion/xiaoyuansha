@@ -63,12 +63,7 @@ func real_rps():
 	seed(104)
 	var opponent = randi() % 3
 	seed(104)
-	var gesture = opponent if rounds == 1 else (opponent + 1) % 3
-	# 使用既有RPS映射求获胜手势，不把循环数字顺序当玩法。
-	if rounds == 2:
-		for pick in 3:
-			if game._rps_result(pick, opponent) == GameManager.RPS_WIN: gesture = pick
-	if rounds == 1: real_rps.call_deferred()
+	var gesture = opponent # RPS-06：真实平局后不得再创建出拳窗口。
 	buttons[[0, 2, 1][gesture]].pressed.emit()
 
 func after_visual_delay():
@@ -117,7 +112,8 @@ func run(host):
 		owner.general_name = "凯文·罗本"
 		after_visual_delay.call_deferred()
 		await game._deal_damage(opponent if receive else owner, owner if receive else opponent, 1, EffectChain.DamageType.PHYSICAL)
-		suite.check(rounds == 2 and owner.hand_size() == 2, "E03e-16d：无确认/出拳钩子，真实平局重猜后获胜只摸两张")
+		suite.check(rounds == 1 and owner.hand_size() == 0, "RPS-06：无确认/出拳钩子，真实平局只猜一次、不摸牌")
+		suite.check(game._choice_prompt_stack.is_empty(), "RPS-06：平局完成后没有遗留或重复出拳窗口")
 		await suite.process_frame
 	reset()
 	var old: Array = []

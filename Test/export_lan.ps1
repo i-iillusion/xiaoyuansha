@@ -66,7 +66,7 @@ try {
     $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $snapshot 'Scripts'),(Join-Path $snapshot 'Scenes') -File -Recurse) + @(Get-Item -LiteralPath (Join-Path $snapshot 'project.godot'))
     $info = [pscustomobject]@{
         base_commit=(& git rev-parse HEAD).Trim(); branch=(& git branch --show-current).Trim()
-        protocol='campus-lan-1'; built_at=(Get-Date).ToString('o'); engine_sha256=(Get-FileHash -LiteralPath $engine).Hash
+        protocol='campus-lan-2'; built_at=(Get-Date).ToString('o'); engine_sha256=(Get-FileHash -LiteralPath $engine).Hash
         template_sha256=(Get-FileHash -LiteralPath $template).Hash; exe_sha256=(Get-FileHash -LiteralPath $exe).Hash
         verification='Seven rule suites passed; see repository LAN verification report.'
         source=@($sourceFiles | ForEach-Object { [pscustomobject]@{path=$_.FullName.Substring($snapshot.Length+1).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName).Hash} })

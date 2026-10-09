@@ -1,4 +1,4 @@
-# C03：伤害链逐点询问；默认拼点平局重做，装傻为单次猜拳例外。
+# C03：伤害链逐点询问；凯文按RPS-06平局不重猜，噬血保持默认重猜。
 extends RefCounted
 
 var suite
@@ -40,11 +40,12 @@ func run(host):
 				return choices.pop_front()
 			await game._deal_damage(source, target, 2, EffectChain.DamageType.PHYSICAL)
 			check(target.hp == 8 and asks.size() == 2, "两点伤害只结算一次并逐点询问：" + kind + mode)
-			check(calls.size() == (0 if mode == "decline" else (1 if mode == "stale" else 4)), "拒绝不拼点，发动后平局重猜，过期立即停止：" + kind + mode)
+			var expected_calls = 0 if mode == "decline" else (1 if mode == "stale" else (4 if kind == "bloodthirsty" else 2))
+			check(calls.size() == expected_calls, "拒绝不拼点；凯文平局单次、噬血重猜；过期停止：" + kind + mode)
 			if kind == "bloodthirsty":
 				check(source.hp == (7 if mode == "mixed" else 6), "只在当前有效拼点获胜后回复一次")
 			else:
-				check(owner.hand_size() == (2 if mode == "mixed" else 0), "只在当前有效拼点获胜后摸两张")
+				check(owner.hand_size() == 0, "凯文第一点拒绝、第二点平局均不摸牌；失效也不摸牌")
 	for wins in [1, 2]:
 		suite.reset_players()
 		game.turn_manager.current_phase = TurnManager.Phase.PLAY

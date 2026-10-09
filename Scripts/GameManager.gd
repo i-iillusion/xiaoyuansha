@@ -5704,7 +5704,8 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 		if use == 0:
 			continue
 		# 拼点结果（出拳 + 胜负，按胜负着色）由 _do_ping_dian_once 输出，这里不再补日志覆盖它
-		var r = await _do_ping_dian(kaiwen, opponent, valid)
+		# RPS-06：每点伤害只猜一次，平局结束本次机会，不重猜、不摸牌。
+		var r = await _do_ping_dian_once(kaiwen, opponent, valid)
 		if r == RPS_INVALID or not valid.call():
 			return CHOICE_INVALID
 		if r == RPS_WIN:

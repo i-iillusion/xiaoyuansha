@@ -45,12 +45,12 @@ const STRATAGEM_NORMAL = [
 	CardData.CardSubType.DISARM,
 	CardData.CardSubType.SNATCH,
 	CardData.CardSubType.DISMANTLE,
-	CardData.CardSubType.BURNING_CAMP,
 	CardData.CardSubType.NULLIFICATION,
 	CardData.CardSubType.SACRIFICE,
 ]
 
 const STRATAGEM_DELAYED = [
+	CardData.CardSubType.BURNING_CAMP,
 	CardData.CardSubType.LIGHTNING,
 	CardData.CardSubType.INDULGENCE,
 	CardData.CardSubType.SUPPLY_SHORTAGE,
