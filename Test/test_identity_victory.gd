@@ -200,5 +200,6 @@ func _run():
 	check_pure_matrix()
 	await check_integration()
 	await load("res://Test/equipment_response_suite.gd").new().run(self)
+	await load("res://Test/action_history_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

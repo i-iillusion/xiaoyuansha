@@ -5,7 +5,7 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-2"
+const PROTOCOL := "campus-lan-3"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
 	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊"]
@@ -21,6 +21,9 @@ var port_number := DEFAULT_PORT
 var _tick := 0.0
 var _connecting := 0.0
 var _last_sent: Dictionary = {}
+var history := ActionHistory.new()
+var _log_sent: Dictionary = {}
+var _view_match := ""
 
 func _ready() -> void:
 	# Clients only communicate with authority; do not relay peer-to-peer traffic.
@@ -117,6 +120,8 @@ func begin_match() -> bool:
 	add_child(bridge)
 	bridge.start(roster, GameManager.MODE_CLASSIC_IDENTITY if count == 5 else GameManager.MODE_FREE_FOR_ALL)
 	_last_sent.clear()
+	_log_sent.clear()
+	bridge.game.action_history.match_key = match_id
 	_publish_lobby()
 	_publish_states()
 	return true
@@ -147,7 +152,7 @@ func return_to_lobby() -> void:
 	_publish_lobby()
 
 func _publish_lobby() -> void:
-	var state = {"count": count, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL}
+	var state = {"count": count, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL, "match": match_id}
 	_receive_lobby(state)
 	for peer in members:
 		if peer != 1 and _peer_ready(peer): _receive_lobby.rpc_id(peer, state)
@@ -162,6 +167,8 @@ func _peer_ready(peer: int) -> bool:
 @rpc("authority", "call_remote", "reliable")
 func _receive_lobby(state: Dictionary) -> void:
 	lobby = state
+	_view_match = str(state.get("match", ""))
+	if history.match_key != _view_match: history.reset(_view_match)
 	if not state.playing: latest.clear()
 	lobby_changed.emit(state)
 
@@ -169,16 +176,19 @@ func _publish_states() -> void:
 	if bridge == null: return
 	for peer in members:
 		if peer != 1 and not _peer_ready(peer): continue
-		var state = bridge.snapshot(int(members[peer].seat))
+		var state = bridge.snapshot(int(members[peer].seat), int(_log_sent.get(peer, 0)))
 		state["match"] = match_id
 		var fingerprint = var_to_str(state)
 		if _last_sent.get(peer, "") == fingerprint: continue
 		_last_sent[peer] = fingerprint
+		if not state.history.entries.is_empty(): _log_sent[peer] = state.history.entries.back().seq
 		if peer == 1: _receive_state(state)
 		else: _receive_state.rpc_id(peer, state)
 
 @rpc("authority", "call_remote", "reliable")
 func _receive_state(state: Dictionary) -> void:
+	if str(state.get("match", "")) != _view_match or _view_match.is_empty(): return
+	if not history.receive(state.get("history", {})): return
 	latest = state
 	state_received.emit(state)
 
@@ -217,6 +227,9 @@ func close() -> void:
 	lobby.clear()
 	latest.clear()
 	_last_sent.clear()
+	_log_sent.clear()
+	_view_match = ""
+	history.reset("")
 	match_id = ""
 
 func _exit_tree() -> void:

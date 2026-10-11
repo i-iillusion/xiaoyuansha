@@ -19,6 +19,7 @@ var drop_on_match := false
 var drop_case := false
 var interrupted := false
 var saved_game: GameManager
+var history_digest := ""
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -104,6 +105,7 @@ func _run() -> void:
 		for child_log in child_logs:
 			var log_text = FileAccess.get_file_as_string(child_log)
 			check("RESULT:" in log_text and "0 failures" in log_text and "SCRIPT ERROR" not in log_text and "ERROR:" not in log_text and "FAIL " not in log_text, "independent client validation/log clean")
+			if not history_digest.is_empty(): check("LOG_DIGEST " + history_digest in log_text, "remote public history matches host")
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(0 if failures == 0 else 1)
 
@@ -114,6 +116,12 @@ func _state(state: Dictionary) -> void:
 		session.close.call_deferred()
 		return
 	if state.ended:
+		# Consume all bounded reliable batches before treating the client as done.
+		if session.history.sequence < int(state.history.last): return
+		check(session.history.sequence > 0, "network history received through final result")
+		check(session.history.entries.any(func(e): return "游戏结束！" in e.text), "network history contains terminal result")
+		history_digest = var_to_str(session.history.entries).sha256_text()
+		print("LOG_DIGEST ", history_digest)
 		final_seen = true
 		return
 	var token = driver.choose(state)

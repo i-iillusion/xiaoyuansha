@@ -28,6 +28,29 @@ signal card_action_committed(event: CardActionEvent)
 signal card_action_completed(event: CardActionEvent)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
+var action_history := ActionHistory.new()
+var _history_hp: Dictionary = {}
+var _history_panel: ActionHistoryPanel
+
+func _history_event(kind: String, text: String, actor: Player = null, targets: Array = [], details: Dictionary = {}) -> void:
+	if action_history.match_key.is_empty() or turn_manager == null: return
+	var seats: Array = []
+	for target in targets:
+		if target is Player: seats.append(target.seat_index)
+		elif target is int: seats.append(target)
+	action_history.append(kind, text, turn_manager.turn_id, turn_manager.current_phase,
+		actor.seat_index if actor != null else -1, seats, details)
+
+# Only explicitly audited, already-public result messages call this helper.
+func _public_result(msg: String, color: Color = Color(1, 1, 1, 0.55)) -> void:
+	_history_event("result", msg)
+	_update_debug(msg, color)
+
+func _history_hp_changed(value: int, p: Player) -> void:
+	var previous: int = _history_hp.get(p, value)
+	_history_hp[p] = value
+	if value == previous: return
+	_history_event("hp", "%s 体力 %d→%d" % [p.player_name, previous, value], p, [], {"before": previous, "after": value})
 
 @export var player_count: int = 5
 @export var auto_start: bool = true
@@ -438,6 +461,16 @@ func _ready():
 # ============================
 
 func _create_ui():
+	# Independent of rule buttons/target selection; no callbacks submit game actions.
+	if not lan_enabled:
+		_history_panel = ActionHistoryPanel.new()
+		_history_panel.z_index = 50 # Above board, below mandatory rule overlays.
+		_history_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		_history_panel.offset_left = -440
+		_history_panel.offset_right = -16
+		_history_panel.offset_top = 130
+		$UI.add_child(_history_panel)
+		_history_panel.bind(action_history)
 	_debug_label.text = "初始化中..."
 	_countdown_label.text = ""
 	_log_label.text = ""
@@ -744,6 +777,9 @@ func start_game():
 			return
 	_clear_pending_determined_card()
 	# 身份分配：当前经典身份入口为五人标准；乱斗 2～10 人始终无身份。
+	action_history.reset(Crypto.new().generate_random_bytes(16).hex_encode())
+	_history_hp.clear()
+	_history_event("start", "—— 校园杀 %d 人局开始 ——" % player_count)
 	# random_identity = true 时身份牌洗牌随机分配（主公仍开局公开）
 	var identities: Array = []
 	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
@@ -776,6 +812,8 @@ func start_game():
 		p.gender = GeneralData.get_gender(p.general_name)
 		add_child(p)
 		players.append(p)
+		_history_hp[p] = p.hp
+		p.hp_changed.connect(_history_hp_changed.bind(p))
 		# 【觉醒】监听手牌变化（史蒂芬·彼特先斯：手牌为 0 时立即觉醒）
 		p.hand_updated.connect(_on_hand_updated.bind(p))
 
@@ -811,6 +849,8 @@ func start_game():
 # ---- 阶段响应 ----
 
 func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phase, pid: int):
+	if not _game_over and new_phase != TurnManager.Phase.WAITING and not (old_phase == TurnManager.Phase.WAITING and new_phase == TurnManager.Phase.PLAY):
+		_history_event("phase", "%s · %s" % [players[pid].player_name, ["回合开始", "判定", "摸牌", "出牌", "弃牌", "回合结束", "响应"][new_phase]], players[pid])
 	if lan_enabled and not players.is_empty() and _choice_prompt_stack.is_empty():
 		_set_input_player(players[pid])
 	# 胜负已分：不再推进任何阶段逻辑（当前结算链由各调用方的 _game_over 检查自行收尾）
@@ -865,7 +905,7 @@ func _do_start_pending(pid: int, generation: int):
 	# 武将牌反面：翻回正面并跳过本回合（不摸牌/不出牌/不弃牌）
 	if p.facedown:
 		p.facedown = false
-		_update_debug("%s 武将牌翻回正面，本回合被跳过！" % p.player_name)
+		_public_result("%s 武将牌翻回正面，本回合被跳过！" % p.player_name)
 		turn_manager.skip_full_turn = true
 	_update_debug("%s 回合开始（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	# 每回合重置回合级标志（治疗权杖桃计数 / 酒层数——狂暴战斧装备者的酒跨回合保留）
@@ -905,7 +945,7 @@ func _do_judge(pid: int):
 	# 【神速】（比尔·盖伊）选项1：跳过判定阶段（判定区延时锦囊保留，下回合再判）
 	if turn_manager.skip_judge_phase:
 		turn_manager.skip_judge_phase = false
-		_update_debug("%s 发动【神速】：跳过判定阶段（判定区 %d 张牌保留）" % [p.player_name, p.judgment_cards.size()])
+		_public_result("%s 发动【神速】：跳过判定阶段（判定区 %d 张牌保留）" % [p.player_name, p.judgment_cards.size()])
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
@@ -952,11 +992,11 @@ func _move_lightning(p: Player, card: CardBase) -> Player:
 		var target = circle[(start + offset) % circle.size()]
 		if not target.is_alive() or _is_kneeling(target) or _has_delayed_card(target, card.sub_type): continue
 		target.judgment_cards.append(card)
-		_update_debug("【闪电】原牌移至 %s 的判定区，等待其判定" % target.player_name)
+		_public_result("【闪电】原牌移至 %s 的判定区，等待其判定" % target.player_name)
 		return target
 	# G02c-Q1：绕回当前判定者，只留到下次判定，不立即重新判。
 	p.judgment_cards.append(card)
-	_update_debug("【闪电】绕回 %s，留待下次判定" % p.player_name)
+	_public_result("【闪电】绕回 %s，留待下次判定" % p.player_name)
 	return p
 
 func _run_judgment(p: Player, granted: bool) -> bool:
@@ -986,11 +1026,11 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		match card.sub_type:
 			CardData.CardSubType.LIGHTNING:
 				if nullified == NullificationOutcome.NULLIFIED:
-					_update_debug("【闪电】的效果被【无懈可击】抵消")
+					_public_result("【闪电】的效果被【无懈可击】抵消")
 					if _move_lightning(p, card) == p: deferred.append(card)
 					continue
 				else:
-					_update_debug("【闪电】判定：必定命中！即将对 %s 造成 3 点雷电伤害" % p.player_name)
+					_public_result("【闪电】判定：必定命中！即将对 %s 造成 3 点雷电伤害" % p.player_name)
 					# 授权经典基础：闪电及其连环传导均为无来源雷电伤害。
 					var damage = await _deal_damage_result(null, p, 3, EffectChain.DamageType.THUNDER)
 					if damage.invalidated:
@@ -999,28 +1039,28 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 			CardData.CardSubType.INDULGENCE:
 				if granted:
 					# 【烂忠厚】授予的判定阶段：乐不思蜀失效（不触发效果）
-					_update_debug("【乐不思蜀】在授予的判定阶段失效，不触发效果")
+					_public_result("【乐不思蜀】在授予的判定阶段失效，不触发效果")
 				else:
 					if nullified == NullificationOutcome.NULLIFIED:
-						_update_debug("【乐不思蜀】的效果被【无懈可击】抵消")
+						_public_result("【乐不思蜀】的效果被【无懈可击】抵消")
 					else:
-						_update_debug("【乐不思蜀】判定：必定生效！%s 本回合跳过出牌阶段" % p.player_name)
+						_public_result("【乐不思蜀】判定：必定生效！%s 本回合跳过出牌阶段" % p.player_name)
 						turn_manager.skip_play_phase = true
 			CardData.CardSubType.SUPPLY_SHORTAGE:
 				if granted:
 					# 【烂忠厚】授予的判定阶段：兵粮寸断失效（不触发效果）
-					_update_debug("【兵粮寸断】在授予的判定阶段失效，不触发效果")
+					_public_result("【兵粮寸断】在授予的判定阶段失效，不触发效果")
 				else:
 					if nullified == NullificationOutcome.NULLIFIED:
-						_update_debug("【兵粮寸断】的效果被【无懈可击】抵消")
+						_public_result("【兵粮寸断】的效果被【无懈可击】抵消")
 					else:
-						_update_debug("【兵粮寸断】判定：必定生效！%s 本回合摸牌阶段少摸一张" % p.player_name)
+						_public_result("【兵粮寸断】判定：必定生效！%s 本回合摸牌阶段少摸一张" % p.player_name)
 						turn_manager.supply_shortage_active = true
 			CardData.CardSubType.BURNING_CAMP:
 				if nullified == NullificationOutcome.NULLIFIED:
-					_update_debug("【火烧连营】的效果被【无懈可击】抵消")
+					_public_result("【火烧连营】的效果被【无懈可击】抵消")
 				else:
-					_update_debug("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
+					_public_result("【火烧连营】判定生效！%s 及其左右角色受到 1 点火焰伤害" % p.player_name)
 					# G02d-Q3：火烧连营始终为无来源火焰伤害。
 					var burning = await _resolve_burning_camp_result(p, 1)
 					if burning.outcome == CHOICE_INVALID or _game_over:
@@ -1065,11 +1105,11 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true):
 	# 额外摸牌走_draw_blank_cards，不受这个阶段锁定技限制。
 	if p.general_name == "里奥·普利威尔" and p.is_alive():
 		draw_count = 1
-		_update_debug("%s 发动【丑态】：摸牌阶段基础摸一张" % p.player_name)
+		_public_result("%s 发动【丑态】：摸牌阶段基础摸一张" % p.player_name)
 	# 【英姿】（比尔·盖伊）锁定技：摸牌阶段多摸一张
 	if p.general_name == "比尔·盖伊" and p.is_alive():
 		draw_count += 1
-		_update_debug("%s 发动【英姿】：摸牌阶段多摸一张" % p.player_name)
+		_public_result("%s 发动【英姿】：摸牌阶段多摸一张" % p.player_name)
 	if apply_supply and turn_manager.supply_shortage_active:
 		turn_manager.supply_shortage_active = false
 		draw_count -= 1
@@ -1396,6 +1436,7 @@ func _on_turn_ended(pid: int):
 func _draw_blank_cards(p: Player, count: int):
 	for i in count:
 		p.hand.append(null)
+	if count > 0: _history_event("draw", "%s 摸%d张牌" % [p.player_name, count], p, [], {"count": count})
 
 # ============================
 #  可攻击目标查询
@@ -1744,13 +1785,13 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	if r == RPS_WIN:
 		wearer.sage_tokens += 1
-		_update_debug("%s 赢得拼点，获得 1 个贤者标记（%d/3）" % [wearer.player_name, wearer.sage_tokens])
+		_public_result("%s 赢得拼点，获得 1 个贤者标记（%d/3）" % [wearer.player_name, wearer.sage_tokens])
 		if wearer.sage_tokens >= 3:
 			wearer.sage_tokens = 0
 			wearer.sage_activated = true
 			_update_debug("【贤者的加护】激活！%s 获得保命能力：即将死亡时可弃置所有牌，复原武将牌并摸四张牌" % wearer.player_name)
 	else:
-		_update_debug("%s 拼点失败，未获得贤者标记" % wearer.player_name)
+		_public_result("%s 拼点失败，未获得贤者标记" % wearer.player_name)
 	_sync_all_ui()
 	return r == RPS_WIN
 
@@ -1846,6 +1887,9 @@ func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind =
 	_card_action_serial += 1
 	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
 	_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
+	var name = "暗置" + card.hidden_category if card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else card.card_name
+	_history_event("response" if kind == CardActionEvent.Kind.RESPONSE else "use", "%s %s【%s】%s" % [p.player_name,
+		"打出" if kind == CardActionEvent.Kind.RESPONSE else "使用", name, "（虚拟）" if is_virtual else ""], p, [], {"action": event.id, "card": name, "virtual": is_virtual})
 	card_action_committed.emit(event)
 	return event
 
@@ -1863,6 +1907,8 @@ func _complete_card_actions(events: Array):
 		completed.append(event)
 	# 全批计数先完成，再通知观察者；无懈链迁移可共用该批量边界。
 	for event in completed:
+		_history_event("completed", "%s 的【%s】结算完成" % [players[event.actor_seat].player_name,
+			"暗置" + event.card.hidden_category if event.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else CardData.get_type_name(event.sub_type)], players[event.actor_seat], [], {"action": event.id})
 		card_action_completed.emit(event)
 
 func _abandon_card_actions(events: Array):
@@ -1871,6 +1917,7 @@ func _abandon_card_actions(events: Array):
 		if not event is CardActionEvent or not _pending_card_actions.has(event.id): continue
 		if _pending_card_actions[event.id].event == event:
 			_pending_card_actions.erase(event.id)
+			_history_event("invalidated", "已支付的用牌结算中断（上下文失效）", null, [], {"action": event.id})
 
 func _apply_prep_card_action(p: Player, event: CardActionEvent):
 	if p.general_name != "里奥·普利威尔" or p.is_dead() or not players.has(p): return
@@ -1878,7 +1925,7 @@ func _apply_prep_card_action(p: Player, event: CardActionEvent):
 	if not event.from_hand or event.is_virtual: return
 	if event.kind not in [CardActionEvent.Kind.USE, CardActionEvent.Kind.RESPONSE]: return
 	p.prep_tokens += 1
-	_update_debug("%s 获得1个【预习】标记（共%d个）" % [p.player_name, p.prep_tokens])
+	_public_result("%s 获得1个【预习】标记（共%d个）" % [p.player_name, p.prep_tokens])
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	if _game_over: return
@@ -1982,7 +2029,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			elif sub == CardData.CardSubType.SUPPLY_SHORTAGE: turn_manager.use_card("supply_shortage")
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
-			_update_debug("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
+			_public_result("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 
 
@@ -2038,7 +2085,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 				var discarded_mount = p.remove_equipment(slot)
 				if discarded_mount != null:
 					deck.discard(discarded_mount)
-				_update_debug("%s 发动【贯石斧】：此【杀】依然造成伤害" % p.player_name)
+				_public_result("%s 发动【贯石斧】：此【杀】依然造成伤害" % p.player_name)
 				var hit = _new_damage_chain(p, actual, card, base_damage, element)
 				hit.damage.original_target = chain.damage.original_target
 				hit.skip_response = true
@@ -2461,7 +2508,7 @@ func play_card(sub: CardData.CardSubType):
 			p.judgment_cards.append(card)
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_complete_card_actions([action])
-			_update_debug("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
+			_public_result("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2541,7 +2588,7 @@ func play_card(sub: CardData.CardSubType):
 			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
 			_complete_card_actions([action])
-			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
+			_public_result("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2594,7 +2641,7 @@ func play_card(sub: CardData.CardSubType):
 			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
 			_complete_card_actions([action])
-			_update_debug("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
+			_public_result("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
 			_reset_play_countdown_if_p0()
 
@@ -2615,7 +2662,7 @@ func play_card(sub: CardData.CardSubType):
 					return
 				var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 				_complete_card_actions([action])
-				_update_debug("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
+				_public_result("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
 				])
 				_sync_all_ui()
@@ -2718,6 +2765,8 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 	await _replace_paid_global(p, card_sub, actions, response_revision)
 
 func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = []):
+	_history_event("targets", "%s 的【%s】指定群体目标" % [p.player_name, card_name], p,
+		_prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster))
 	_sync_all_ui()
 	turn_manager.use_card("aoe")
 	_reset_play_countdown_if_p0()
@@ -2753,7 +2802,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 			_abandon_card_actions(actions)
 			return
 		if nullified == NullificationOutcome.NULLIFIED:
-			_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
+			_public_result("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
 
 		var responded = await _ask_basic_card_response_result(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
@@ -2891,6 +2940,7 @@ func _play_peach_garden():
 	await _replace_paid_global(p, CardData.CardSubType.PEACH_GARDEN, actions, revision)
 
 func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster))
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
 	_reset_play_countdown_if_p0()
@@ -2913,7 +2963,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
-			_update_debug("【桃园结义】对 %s 的效果被【无懈可击】抵消" % target.player_name)
+			_public_result("【桃园结义】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 		if target.hp >= target.max_hp:
 			_update_debug("%s 体力已满，【桃园结义】对其无效" % target.player_name)
@@ -2938,6 +2988,7 @@ func _play_harvest():
 	await _replace_paid_global(p, CardData.CardSubType.HARVEST, actions, revision)
 
 func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.HARVEST, roster))
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
 	_reset_play_countdown_if_p0()
@@ -2964,7 +3015,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
-			_update_debug("【五谷丰登】对 %s 的效果被【无懈可击】抵消" % target.player_name)
+			_public_result("【五谷丰登】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 
 		var lost = target.max_hp - target.hp
@@ -2996,6 +3047,7 @@ func _play_disarm():
 	await _replace_paid_global(p, CardData.CardSubType.DISARM, actions, revision)
 
 func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.DISARM, roster))
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
@@ -3022,7 +3074,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 		if not target.is_alive() or _is_kneeling(target):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
-			_update_debug("【卸甲归田】对 %s 的效果被【无懈可击】抵消" % target.player_name)
+			_public_result("【卸甲归田】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
 
 		var slots = target.get_equip_slots()
@@ -3248,6 +3300,7 @@ func _show_borrowed_extra_targets(second: Player, candidates: Array, allowed: Ca
 # Q19/Q21：方天保留固定目标，追加选择超时按当前勾选集合出杀。
 # 原版及预习替换共用；原牌实体和事件不改写。
 func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
+	_history_event("target", "%s 对 %s 使用【借刀杀人】" % [user.player_name, first.player_name], user, [first])
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	if user == null or first == null or not players.has(user) or not players.has(first):
@@ -3270,12 +3323,14 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_abandon_card_actions(actions)
 		return
 	second_confirmed[0] = true
+	_history_event("target", "%s 指定 %s 对 %s 出杀" % [user.player_name, first.player_name, second.player_name], user, [first, second])
 	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid)
 	if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 		_abandon_card_actions(actions)
 		return
 	if nullified == NullificationOutcome.NULLIFIED:
 		_complete_card_actions(actions)
+		_history_event("nullified", "借刀杀人被无懈抵消", user, [first])
 		_sync_all_ui()
 		return
 	var strike_sub = await _choose_borrowed_strike(first, second, valid)
@@ -3283,6 +3338,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		_abandon_card_actions(actions)
 		return
 	if strike_sub == -1:
+		_history_event("declined", "%s 未按借刀要求出杀" % first.player_name, first, [second])
 		if user.is_dead():
 			# Q20：已死亡原使用者不能接收武器，第一目标仍装备原牌。
 			_complete_card_actions(actions)
@@ -3374,6 +3430,7 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 	if sub == CHOICE_INVALID or not allowed.call():
 		_abandon_card_actions(actions)
 		return
+	_history_event("effect", "%s 的本次效果为【%s】" % [p.player_name, CardData.get_type_name(sub)], p, original_targets, {"effective": sub})
 	match sub:
 		CardData.CardSubType.BARBARIAN_INVASION:
 			await _resolve_paid_aoe(p, CardData.CardSubType.STRIKE, "南蛮入侵", "杀", actions, revision, roster)
@@ -3475,6 +3532,8 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 		if not candidates.has(selected) or not _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster).has(selected):
 			return current_sub
 		leo.prep_tokens -= 1
+		_history_event("replacement", "%s 发动【预习】：%s 的【%s】视为【%s】使用" % [leo.player_name, attacker.player_name,
+			CardData.get_type_name(current_sub), CardData.get_type_name(selected)], attacker, [current_target] if current_target != null else [], {"original": original_sub, "from": current_sub, "effective": selected})
 		replacements.append(selected)
 		if selected not in GLOBAL_TRICKS and current_target != null: target = current_target
 		current_sub = selected
@@ -3539,6 +3598,7 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 	turn_manager.use_card("steal")
 	_reset_play_countdown_if_p0()
 	_update_debug("%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name])
+	_history_event("target", "%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name], attacker, [target])
 
 	# 成为目标时先处理烈火盾；无效后不选装备、不移动任何目标牌。
 	var shield_result = await _try_liehuo_nullify_result(target, sub, valid)
@@ -3559,7 +3619,7 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 		_abandon_card_actions(actions)
 		return
 	if nullified == NullificationOutcome.NULLIFIED:
-		_update_debug("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
+		_public_result("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 		_complete_card_actions(actions)
 		_sync_all_ui()
 		return
@@ -3761,7 +3821,7 @@ func _discard_exhausted_hidden_category(category: String) -> void:
 					deck.discard(zone_card)
 					removed += 1
 	if removed > 0:
-		_update_debug("同类装备名称已全部声明，%d 张暗置%s进入弃牌堆" % [removed, "武器" if category == "weapon" else "防具"])
+		_public_result("同类装备名称已全部声明，%d 张暗置%s进入弃牌堆" % [removed, "武器" if category == "weapon" else "防具"])
 		_sync_all_ui()
 		_refresh_detail_popup()
 
@@ -3855,7 +3915,7 @@ func _declare_stolen_hidden_equipment(original_holder: Player, recipient: Player
 	if chosen != CardData.CardSubType.MOUNT_PLUS and chosen != CardData.CardSubType.MOUNT_MINUS \
 			and chosen != CardData.CardSubType.MULE_PLUS and chosen != CardData.CardSubType.MULE_MINUS:
 		_claim_equipment_name(chosen, card)
-	_update_debug("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
+	_public_result("%s 声明被顺走的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 【没用】交换时先完成原牌移动，再由原持有者声明；与顺走共用合法名称和取消默认。
 func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Player,
@@ -3886,7 +3946,7 @@ func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Pla
 			or not options.has(chosen) or not _hidden_declaration_options(card).has(chosen):
 		return
 	if _reveal_hidden_slot_as(recipient, slot, card, chosen):
-		_update_debug("%s 声明交换离区的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
+		_public_result("%s 声明交换离区的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
 func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String):
@@ -4293,7 +4353,7 @@ func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()
 			and turn_manager.get_context_revision() == revision and (not allowed.is_valid() or allowed.call())
 	if not valid.call():
 		return false
-	_update_debug("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
+	_public_result("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
 
 	if target.hand_size() <= 0:
 		_draw_blank_cards(p, 1)
@@ -4699,6 +4759,7 @@ func _execute_iron_chain(targets: Array[Player]):
 	await _resolve_prep_effect(p, targets, effect_sub, actions, replacements, valid, revision, "", roster)
 
 func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[CardActionEvent], force_chained: bool = false):
+	_history_event("targets", "%s 的【铁索连环】指定%d名目标" % [p.player_name, targets.size()], p, targets)
 	_sync_all_ui()
 
 	var names = []
@@ -4715,7 +4776,7 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 		if not t.is_alive() or _is_kneeling(t):
 			continue
 		if nullified == NullificationOutcome.NULLIFIED:
-			_update_debug("【铁索连环】对 %s 的效果被【无懈可击】抵消" % t.player_name)
+			_public_result("【铁索连环】对 %s 的效果被【无懈可击】抵消" % t.player_name)
 			continue
 		t.chained = true if force_chained else not t.chained
 		var state = "进入连环状态" if t.chained else "退出连环状态"
@@ -4775,7 +4836,7 @@ func _play_duel(attacker: Player, target: Player):
 	if nullified == NullificationOutcome.INVALIDATED:
 		return CHOICE_INVALID
 	if nullified == NullificationOutcome.NULLIFIED:
-		_update_debug("【决斗】的效果被【无懈可击】抵消")
+		_public_result("【决斗】的效果被【无懈可击】抵消")
 		return
 
 	# 【霸王】（杰基·斯特朗）：与杰基进行决斗的其他角色总是先响应，且每次响应需依次打出两张【杀】
@@ -5014,7 +5075,7 @@ func _spawn_burning_camp(target: Player, source_seat: int):
 	var card = CardBase.create(CardData.CardSubType.BURNING_CAMP)
 	card.source_seat = source_seat
 	target.judgment_cards.append(card)
-	_update_debug("%s 的判定区生成了一张【火烧连营】" % target.player_name)
+	_public_result("%s 的判定区生成了一张【火烧连营】" % target.player_name)
 
 # ============================
 #  无懈可击
@@ -5206,7 +5267,7 @@ func _record_strike_played(p: Player):
 	var first := turn_manager.record_strike_played(p.seat_index)
 	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
 		_draw_blank_cards(p, 1)
-		_update_debug("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
+		_public_result("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 
 # 【八卦阵】：你每使用或打出一张【闪】时，摸一张牌（锁定技；装备者判定）
 func _try_bagua_draw(p: Player):
@@ -5215,7 +5276,7 @@ func _try_bagua_draw(p: Player):
 	if p.get_armor() != CardData.CardSubType.BAGUA_ZHEN:
 		return
 	_draw_blank_cards(p, 1)
-	_update_debug("%s 发动【八卦阵】：使用【闪】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
+	_public_result("%s 发动【八卦阵】：使用【闪】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	_sync_all_ui()
 
 # C-L1：只在成为拆/顺目标时失去1体力，令该次牌对自己无效。
@@ -5244,7 +5305,7 @@ func _try_liehuo_nullify_result(p: Player, sub: CardData.CardSubType, allowed: C
 	if use != 1 or p.get_equipment_card("armor") != shield:
 		return LiehuoOutcome.NOT_USED
 	p.hp -= 1
-	_update_debug("%s 发动【烈火盾】：失去1点体力，【%s】对其无效（%d/%d）" % [p.player_name, CardData.get_type_name(sub), p.hp, p.max_hp])
+	_public_result("%s 发动【烈火盾】：失去1点体力，【%s】对其无效（%d/%d）" % [p.player_name, CardData.get_type_name(sub), p.hp, p.max_hp])
 	_sync_all_ui()
 	if p.is_dying():
 		if await _resolve_dying(p, null, "liehuo") == CHOICE_INVALID: return LiehuoOutcome.INVALIDATED
@@ -5320,6 +5381,8 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		chain.is_cancelled = true
 		chain.continuation_invalid = true
 		return false
+	_history_event("dodged" if dodged == BasicResponseOutcome.PAID else "declined",
+		"%s 的【闪】抵消了【杀】" % responder.player_name if dodged == BasicResponseOutcome.PAID else "%s 未打出【闪】" % responder.player_name, responder)
 	return dodged == BasicResponseOutcome.PAID
 
 func _show_dodge_prompt(attacker_name: String, card_name: String) -> int:
@@ -5422,6 +5485,12 @@ func _show_target_confirm(attacker_name: String, target_name: String, sub: CardD
 	return await _wait_choice_prompt(overlay, answer, allowed, false)
 
 func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, source: Player, data: Dictionary) -> bool:
+	if event_name == "on_being_targeted":
+		_history_event("target", "%s 对 %s 使用【%s】" % [source.player_name if source != null else "无来源", subject.player_name,
+			chain.source_card.card_name if chain.source_card != null else "伤害"], source, [subject])
+	if event_name == "damage_applied":
+		_history_event("damage", "%s 对 %s 造成%d点%s伤害" % [source.player_name if source != null else "无来源", subject.player_name,
+			chain.damage.applied_amount, ["普通", "火焰", "雷电"][chain.damage.element]], source, [subject], {"amount": chain.damage.applied_amount, "element": chain.damage.element})
 	if _game_over:
 		chain.terminal_complete = true
 		return true
@@ -5465,7 +5534,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					return true
 				var discard_count = mini(2, actual.hand_size())
 				if chosen == 1 and discard_count > 0 and _discard_hand_cards(actual, discard_count):
-					_update_debug("%s 发动【寒冰剑】：防止本次伤害，弃置 %s %d张手牌" % [subject.player_name, actual.player_name, discard_count])
+					_public_result("%s 发动【寒冰剑】：防止本次伤害，弃置 %s %d张手牌" % [subject.player_name, actual.player_name, discard_count])
 					_sync_all_ui()
 					return true
 			if weapon == CardData.CardSubType.ZHANGBA_SPEAR:
@@ -5568,7 +5637,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				record.transfer_target = substitute
 				record.transfer_amount = data["value"]
 				record.transfer_action = reply.get("card_action")
-				_update_debug("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
+				_public_result("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
 				return true
 
 	if event_name == "damage_applied":
@@ -5817,7 +5886,7 @@ func _trigger_pofeng(source: Player, amount: int):
 	if source.get_weapon() != CardData.CardSubType.POFENG_SPEAR:
 		return
 	source.hand_limit_bonus += amount
-	_update_debug("%s 发动【破风枪】：造成 %d 点伤害，手牌上限 +%d（当前上限 %d）" % [source.player_name, amount, amount, source.hand_limit()])
+	_public_result("%s 发动【破风枪】：造成 %d 点伤害，手牌上限 +%d（当前上限 %d）" % [source.player_name, amount, amount, source.hand_limit()])
 	_sync_all_ui()
 
 # ============================
@@ -5980,7 +6049,7 @@ func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 		if not valid.call() or card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
 			return CHOICE_INVALID
 		sub = card.sub_type
-	_update_debug("%s 发动【勾镰爪】：获得 %s 的坐骑【%s】（已确定的牌 %d 张）" % [
+	_public_result("%s 发动【勾镰爪】：获得 %s 的坐骑【%s】（已确定的牌 %d 张）" % [
 		source.player_name, victim.player_name, CardData.get_type_name(sub), source.determined_cards.size()
 	])
 	_sync_all_ui()
@@ -6153,6 +6222,7 @@ func _do_ping_dian_once(challenger: Player, opponent: Player, allowed: Callable 
 		result_color = Color(1, 0.4, 0.4)
 	var result_msg = "【拼点】%s 出【%s】，%s 出【%s】——%s" % [challenger.player_name, names[a], opponent.player_name, names[b], r_name]
 	# 实时日志（带色，5 秒）：拼点结果只显示在上一行，不覆盖中间提示句
+	_history_event("rps", result_msg, challenger, [opponent], {"challenger": a, "opponent": b, "result": r})
 	_update_debug(result_msg, result_color)
 	return r
 
@@ -6233,7 +6303,7 @@ func _pay_yes_ah_cost_result(p: Player, allow_final_death: bool = false) -> int:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	p.hp -= 1
-	_update_debug("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
+	_public_result("%s 发动【是~啊~】：流失 1 点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp])
 	if p.is_dying():
 		if await _resolve_dying(p, null, "yes_ah") == CHOICE_INVALID: return CHOICE_INVALID
 	if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation \
@@ -6378,7 +6448,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	_discard_exhausted_hidden_category(etype)
 	_complete_card_actions([action])
 	if p.get_hidden_equipment_card(slot) == source:
-		_update_debug("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
+		_public_result("%s 发动【苕】：暗置了一件%s——你装备了一件装备" % [p.player_name, type_name])
 	_sync_all_ui()
 	_refresh_detail_popup()
 
@@ -6485,7 +6555,7 @@ func _reveal_hidden_slot_as(p: Player, slot: String, source: CardBase,
 	if sub != CardData.CardSubType.MOUNT_PLUS and sub != CardData.CardSubType.MOUNT_MINUS \
 			and sub != CardData.CardSubType.MULE_PLUS and sub != CardData.CardSubType.MULE_MINUS:
 		_claim_equipment_name(sub, source)
-	_update_debug("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
+	_public_result("%s 明置了暗置装备：装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 	_sync_all_ui()
 	_refresh_detail_popup()
 	return true
@@ -6536,7 +6606,7 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 		if accepted == 0:
 			continue
 		if _reveal_hidden_slot_as(owner, type_key, original, sub):
-			_update_debug("%s 抢先明置【%s】，%s 本次未装备，手牌未消耗" % [owner.player_name, CardData.get_type_name(sub), equipper.player_name])
+			_public_result("%s 抢先明置【%s】，%s 本次未装备，手牌未消耗" % [owner.player_name, CardData.get_type_name(sub), equipper.player_name])
 			return true
 	return false
 
@@ -6784,7 +6854,7 @@ func _try_zhuangsha(dying: Player) -> int:
 			opponents.append(pl)
 	if opponents.is_empty():
 		return 0
-	_update_debug("%s 发动【装傻】：与场上所有存活玩家拼点！" % dying.player_name)
+	_public_result("%s 发动【装傻】：与场上所有存活玩家拼点！" % dying.player_name)
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var context = _dying_contexts.get(dying)
@@ -6801,7 +6871,7 @@ func _try_zhuangsha(dying: Player) -> int:
 			wins += 1
 	if wins >= ceili(opponents.size() / 2.0):
 		dying.hp = 1
-		_update_debug("%s 【装傻】拼点胜 %d/%d，回复至 1 点体力！（%d/%d）" % [dying.player_name, wins, opponents.size(), dying.hp, dying.max_hp])
+		_public_result("%s 【装傻】拼点胜 %d/%d，回复至 1 点体力！（%d/%d）" % [dying.player_name, wins, opponents.size(), dying.hp, dying.max_hp])
 	else:
 		_update_debug("%s 【装傻】拼点胜 %d/%d，未能回复…" % [dying.player_name, wins, opponents.size()])
 	_sync_all_ui()
@@ -6959,7 +7029,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 		if _game_over or not victim.is_alive():
 			return PaixiongOutcome.INVALIDATED
 		if result == HandDiscardOutcome.PAID:
-			_update_debug("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），整次伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
+			_public_result("%s 发动【拍胸脯】！%s 弃置一张手牌（剩余 %d 张），整次伤害照常结算" % [victim.player_name, source.player_name, source.hand_size()])
 			_sync_all_ui()
 			return PaixiongOutcome.PAID
 		if source.is_dead():
@@ -6972,7 +7042,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 			await get_tree().process_frame # 非空旧答复不是拒绝；重建当前选择。
 			continue
 		if result == HandDiscardOutcome.DECLINED:
-			_update_debug("%s 发动【拍胸脯】！%s 选择不弃牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+			_public_result("%s 发动【拍胸脯】！%s 选择不弃牌，本次伤害被防止！" % [victim.player_name, source.player_name])
 			_sync_all_ui()
 			return PaixiongOutcome.PREVENTED
 		break # 牌在等待中耗尽，已无法支付。
@@ -6982,7 +7052,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 		return PaixiongOutcome.NOT_USED
 	if action_revision != turn_manager.get_context_revision():
 		return PaixiongOutcome.INVALIDATED
-	_update_debug("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
+	_public_result("%s 发动【拍胸脯】！%s 没有手牌，本次伤害被防止！" % [victim.player_name, source.player_name])
 	_sync_all_ui()
 	return PaixiongOutcome.PREVENTED
 
@@ -7194,7 +7264,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		await _do_awaken(p)
 	if not target_valid.call(valid[0]):
 		return
-	_update_debug("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
+	_public_result("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
 	for t in valid:
 		if not await _select_hand_discard(t, 1, true, func():
 			return target_valid.call(t)):
@@ -7390,7 +7460,7 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 		return
 	if not valid.call():
 		return
-	_update_debug("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
+	_public_result("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
 
 	# 进行拼点（平局继续直到分出胜负）
@@ -7398,10 +7468,10 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 	if r == RPS_INVALID or not valid.call():
 		return
 	if r == RPS_WIN:
-		_update_debug("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
+		_public_result("%s 赢得拼点！对 %s 造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(p, target, 1, EffectChain.DamageType.PHYSICAL)
 	else:
-		_update_debug("%s 拼点失败，%s 赢得拼点！对你造成 1 点伤害！" % [p.player_name, target.player_name])
+		_public_result("%s 拼点失败，%s 赢得拼点！对你造成 1 点伤害！" % [p.player_name, target.player_name])
 		await _deal_damage(target, p, 1, EffectChain.DamageType.PHYSICAL)
 	_sync_all_ui()
 
@@ -7465,13 +7535,13 @@ func _maybe_shensu_pending(p: Player, owner: int) -> int:
 			return 0
 		if not _shensu_strike_target_valid(p, target) or p.judgment_cards.is_empty(): return CHOICE_INVALID
 		turn_manager.skip_judge_phase = true
-		_update_debug("%s 发动【神速】选项1：跳过判定阶段，对 %s 视为打出一张无距离限制的【杀】！" % [p.player_name, target.player_name])
+		_public_result("%s 发动【神速】选项1：跳过判定阶段，对 %s 视为打出一张无距离限制的【杀】！" % [p.player_name, target.player_name])
 		await _execute_shensu_strike(p, target)
 	elif option == 2:
 		p.shensu_penalty += 1
 		p.shensu_used_this_turn = true
 		turn_manager.skip_play_discard_phase = true
-		_update_debug("%s 发动【神速】选项2：跳过出牌和弃牌阶段，摸牌减益叠加（累计欠 %d 张）" % [p.player_name, p.shensu_penalty])
+		_public_result("%s 发动【神速】选项2：跳过出牌和弃牌阶段，摸牌减益叠加（累计欠 %d 张）" % [p.player_name, p.shensu_penalty])
 	_sync_all_ui()
 	return 1 if option in [1, 2] else 0
 
@@ -7708,7 +7778,7 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 	var t_before = target.hp
 	p.heal(x)
 	target.heal(x)
-	_update_debug("%s 发动【Gay】：弃置 %d 张手牌，与 %s 各回复 %d 点体力（%d/%d → %d/%d；%d/%d → %d/%d）" % [p.player_name, x, target.player_name, x, p_before, p.max_hp, p.hp, p.max_hp, t_before, target.max_hp, target.hp, target.max_hp])
+	_public_result("%s 发动【Gay】：弃置 %d 张手牌，与 %s 各回复 %d 点体力（%d/%d → %d/%d；%d/%d → %d/%d）" % [p.player_name, x, target.player_name, x, p_before, p.max_hp, p.hp, p.max_hp, t_before, target.max_hp, target.hp, target.max_hp])
 	_sync_all_ui()
 
 # X 选择弹窗（玩家0）：返回 1..max_x（取消返回 0）
@@ -7953,7 +8023,7 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 				if not action_valid.call():
 					pending.clear()
 					return
-	_update_debug("%s 发动【没用】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
+	_public_result("%s 发动【没用】：弃置 %d 张手牌，交换了 %s 与 %s 的 %d 个装备区域" % [p.player_name, x, a.player_name, b.player_name, swapped])
 	pending.clear()
 	_sync_all_ui()
 
@@ -8175,7 +8245,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 				pA.equip_hidden_card_to_slot(slot_a, hidden_a)
 				pB.equip_hidden_card_to_slot(slot_b, hidden_b)
 				return false
-			_update_debug("交换了 %s 与 %s 的两张暗置装备" % [pA.player_name, pB.player_name])
+			_public_result("交换了 %s 与 %s 的两张暗置装备" % [pA.player_name, pB.player_name])
 			return true
 		if has_a and has_b and subA != subB:
 			var exchange_hidden_owner = pA if subA == CardData.CardSubType.HIDDEN_EQUIPMENT else pB
@@ -8197,7 +8267,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 				exchange_hidden_owner.equip_hidden_card_to_slot(exchange_hidden_slot, exchange_hidden_card)
 				exchange_visible_owner.equip_card_to_slot(exchange_visible_slot, exchange_visible_card)
 				return false
-			_update_debug("交换了 %s 的暗置装备与 %s 的【%s】" % [exchange_hidden_owner.player_name, exchange_visible_owner.player_name, exchange_visible_card.card_name])
+			_public_result("交换了 %s 的暗置装备与 %s 的【%s】" % [exchange_hidden_owner.player_name, exchange_visible_owner.player_name, exchange_visible_card.card_name])
 			return true
 		if has_a == has_b:
 			return false
@@ -8211,7 +8281,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		if not empty_dest.equip_hidden_card_to_slot(empty_slot, hidden_card):
 			hidden_source.equip_hidden_card_to_slot(hidden_slot, hidden_card)
 			return false
-		_update_debug("%s 的暗置装备交换至 %s 的空装备槽" % [hidden_source.player_name, empty_dest.player_name])
+		_public_result("%s 的暗置装备交换至 %s 的空装备槽" % [hidden_source.player_name, empty_dest.player_name])
 		return true
 	if not has_a or not has_b:
 		var source = pA if has_a else pB
@@ -8224,7 +8294,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		if not dest.equip_card_to_slot(dest_slot, moved):
 			source.equip_card_to_slot(source_slot, moved)
 			return false
-		_update_debug("%s 的【%s】交换至 %s 的空装备槽" % [source.player_name, moved.card_name, dest.player_name])
+		_public_result("%s 的【%s】交换至 %s 的空装备槽" % [source.player_name, moved.card_name, dest.player_name])
 		return true
 	var card_a = pA.detach_equipment_quiet(slot_a)
 	var card_b = pB.detach_equipment_quiet(slot_b)
@@ -8237,7 +8307,7 @@ func _swap_equip_slot(pA: Player, slot_a: String, pB: Player, slot_b: String) ->
 		return false
 	pA.equip_card_to_slot(slot_a, card_b)
 	pB.equip_card_to_slot(slot_b, card_a)
-	_update_debug("交换了 %s 的【%s】与 %s 的【%s】" % [pA.player_name, CardData.get_type_name(subA), pB.player_name, CardData.get_type_name(subB)])
+	_public_result("交换了 %s 的【%s】与 %s 的【%s】" % [pA.player_name, CardData.get_type_name(subA), pB.player_name, CardData.get_type_name(subB)])
 	return true
 
 # ============================
@@ -8300,7 +8370,7 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 			turn_manager.granted_play_target_idx = chosen_target.seat_index
 			turn_manager.granted_play_completed = true
 			if await _run_meiyong_granted_play(p, chosen_target, owner) == CHOICE_INVALID: return CHOICE_INVALID
-	_update_debug("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
+	_public_result("%s 发动【烂忠厚】，摸1张并选定赠送%s阶段给%s" % [p.player_name, ["判定", "摸牌", "出牌"][chosen_option], chosen_target.player_name])
 	_sync_all_ui()
 	return 1
 
@@ -8573,7 +8643,7 @@ func _try_bloodthirsty(source: Player, victim: Player, amount: int) -> int:
 			return CHOICE_INVALID
 		if r == RPS_WIN:
 			source.heal(1)
-			_update_debug("%s 赢得拼点，回复 1 点体力（%d/%d）" % [source.player_name, source.hp, source.max_hp])
+			_public_result("%s 赢得拼点，回复 1 点体力（%d/%d）" % [source.player_name, source.hp, source.max_hp])
 	_sync_all_ui()
 	return 0
 
@@ -8685,7 +8755,7 @@ func _try_calamity_transfer(source: Player) -> int:
 	if calamity_sword == null:
 		return CHOICE_INVALID
 	target.equip_card_to_slot("weapon", calamity_sword)
-	_update_debug("%s 将【灾厄剑】移至 %s 的装备区（%s 造成的伤害-1）" % [source.player_name, target.player_name, target.player_name])
+	_public_result("%s 将【灾厄剑】移至 %s 的装备区（%s 造成的伤害-1）" % [source.player_name, target.player_name, target.player_name])
 	_sync_all_ui()
 	return 0
 
@@ -8806,7 +8876,7 @@ func _try_calamity_robe_transfer(victim: Player) -> int:
 	if calamity_robe == null:
 		return CHOICE_INVALID
 	target.equip_card_to_slot("armor", calamity_robe)
-	_update_debug("%s 将【灾厄袍】移至 %s 的装备区（%s 受到的火焰伤害+1）" % [victim.player_name, target.player_name, target.player_name])
+	_public_result("%s 将【灾厄袍】移至 %s 的装备区（%s 受到的火焰伤害+1）" % [victim.player_name, target.player_name, target.player_name])
 	_sync_all_ui()
 	return 0
 
@@ -8948,7 +9018,7 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 		p.equip_card_to_slot(source_slot, mule_card)
 		return CHOICE_INVALID
 	var mule_name = "-1劣马" if is_minus else "+1劣马"
-	_update_debug("%s 将一匹【%s】移至 %s 的装备区" % [p.player_name, mule_name, target.player_name])
+	_public_result("%s 将一匹【%s】移至 %s 的装备区" % [p.player_name, mule_name, target.player_name])
 	_sync_all_ui()
 	return 0
 
@@ -9148,7 +9218,7 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 		wins += 1
 
 	if wins == 2:
-		_update_debug("%s 拼点全赢！" % source.player_name)
+		_public_result("%s 拼点全赢！" % source.player_name)
 		_flip_character(victim)
 		return 0
 
@@ -9169,7 +9239,7 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 		if payment in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED, HandDiscardOutcome.STALE_SELECTION] or not valid.call():
 			return CHOICE_INVALID
 		return 0
-	_update_debug("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
+	_public_result("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
 	_sync_all_ui()
 	_flip_character(victim)
 	return 0
@@ -9178,9 +9248,9 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 func _flip_character(p: Player):
 	p.facedown = not p.facedown
 	if p.facedown:
-		_update_debug("%s 武将牌翻面（反面）：其下个回合将被跳过" % p.player_name)
+		_public_result("%s 武将牌翻面（反面）：其下个回合将被跳过" % p.player_name)
 	else:
-		_update_debug("%s 武将牌翻回正面" % p.player_name)
+		_public_result("%s 武将牌翻回正面" % p.player_name)
 	_sync_all_ui()
 
 # 玩家0是否发动摄魂刀拼点
@@ -9448,7 +9518,7 @@ func _heal_with_staff(p: Player, recipient: Player = null) -> int:
 	if p.get_weapon() == CardData.CardSubType.HEAL_STAFF and not p.heal_staff_peach_used \
 			and recipient.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
 		amount = 2
-		_update_debug("%s 发动【治疗权杖】：本回合第一张【桃】额外回复 1 点体力" % p.player_name)
+		_public_result("%s 发动【治疗权杖】：本回合第一张【桃】额外回复 1 点体力" % p.player_name)
 	# 记录出桃者的首次使用；中途装备或解除目标青釭盾不能补触发。
 	p.heal_staff_peach_used = true
 	recipient.heal(amount)
@@ -9540,7 +9610,7 @@ func _check_dying(dying: Player) -> int:
 	if not dying.is_dying():
 		return 0
 
-	_update_debug("%s 进入濒死状态！" % dying.player_name)
+	_public_result("%s 进入濒死状态！" % dying.player_name)
 
 	if not players.has(dying):
 		return CHOICE_INVALID
@@ -9595,12 +9665,12 @@ func _handle_death(victim: Player, killer: Player):
 		return
 	victim.mark_dead()
 	_dead_processed.append(victim)
-	_update_debug("%s 阵亡！" % victim.player_name)
+	_public_result("%s 阵亡！" % victim.player_name)
 
 	# ---- 阶段2 翻开身份：清牌及失去装备效果必须能观察到已公开状态 ----
 	if victim.identity != "":
 		victim.identity_revealed = true
-		_update_debug("身份翻开：%s 是【%s】！" % [victim.player_name, victim.identity])
+		_public_result("身份翻开：%s 是【%s】！" % [victim.player_name, victim.identity])
 
 	# ---- 阶段3 清理牌区：此时已最终死亡，白银狮子等不能将其救回 ----
 	_discard_all_cards(victim, true)
@@ -9622,6 +9692,9 @@ func _handle_death(victim: Player, killer: Player):
 # 弃置一名角色的所有牌（死亡弃置 / 主公杀忠臣惩罚共用）
 # include_judgment 只控制判定区；已确定牌属于手牌，死亡和主公惩罚均须弃置。
 func _discard_all_cards(p: Player, include_judgment: bool):
+	var discarded_hand = p.hand_size()
+	var discarded_equipment = p.get_equip_slots().size()
+	var discarded_judgment = p.judgment_cards.size() if include_judgment else 0
 	# 全清沿用区内原顺序；普通数量费用仍使用自动尾部选择策略。
 	for cards in [p.hand, p.determined_cards]:
 		for card in cards:
@@ -9639,6 +9712,7 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 				deck.discard(c)
 		p.judgment_cards.clear()
 		p.hidden_equip_slot = ""
+	_history_event("discard", "%s 弃置%d张手牌、%d件装备、%d张判定牌" % [p.player_name, discarded_hand, discarded_equipment, discarded_judgment], p)
 
 # 弃牌/技能费用的公共记账，不调用烈火盾；盾只在拆/顺成为目标时询问。
 # 不把任意牌占位制造为某种具体牌；具体牌则以原实例入弃牌堆一次。
@@ -9650,6 +9724,7 @@ func _discard_hand_cards(p: Player, count: int) -> bool:
 	for card in p.take_hand_cards(count):
 		if card != null:
 			deck.discard(card)
+	_history_event("discard", "%s 弃置%d张手牌" % [p.player_name, count], p, [], {"count": count})
 	return true
 
 enum HandDiscardOutcome {
@@ -9724,6 +9799,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			for card in paid:
 				if card != null:
 					deck.discard(card)
+			_history_event("discard", "%s 弃置%d张手牌" % [p.player_name, count], p, [], {"count": count})
 			return HandDiscardOutcome.PAID
 		if not mandatory:
 			return HandDiscardOutcome.STALE_SELECTION # 非空无效答复不是主动拒绝。
@@ -9775,9 +9851,9 @@ func _finish_game(winner_identity: String, reason: String):
 	_yes_ah_active = false
 	_clear_pending_determined_card()
 	if winner_identity == "平局":
-		_update_debug("游戏结束！平局（%s）" % reason)
+		_public_result("游戏结束！平局（%s）" % reason)
 	else:
-		_update_debug("游戏结束！【%s】获胜！（%s）" % [winner_identity, reason])
+		_public_result("游戏结束！【%s】获胜！（%s）" % [winner_identity, reason])
 	game_over.emit(winner_identity)
 
 # 游戏结束弹窗（锚点居中）：显示胜方 + 返回主菜单
@@ -9819,6 +9895,15 @@ func _on_game_over(winner_identity: String):
 	btn.custom_minimum_size = Vector2(200, 52)
 	btn.pressed.connect(_return_to_main_menu.bind(btn))
 	hbox.add_child(btn)
+	if _history_panel != null:
+		var history_button = Button.new()
+		history_button.text = "回看本局日志"
+		history_button.custom_minimum_size = Vector2(200, 52)
+		history_button.pressed.connect(func():
+			_history_panel.z_index = 301
+			_history_panel.content.visible = true
+			_history_panel._changed())
+		hbox.add_child(history_button)
 
 # SceneTree移除旧场景后get_tree已为空；重复点击不能再导航或影响新菜单。
 func _return_to_main_menu(button: Button):
@@ -9831,6 +9916,12 @@ func _return_to_main_menu(button: Button):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	if _history_panel != null: _history_panel.z_index = 50
+	# Local restart identity needs uniqueness, not a new crypto provider per
+	# fixture/restart. Network matches retain LanSession's cryptographic ID.
+	action_history.reset("local:%d:%d" % [get_instance_id(), _dying_lifecycle_generation + 1])
+	_history_hp.clear()
+	for player in players: _history_hp[player] = player.hp
 	_dying_lifecycle_generation += 1
 	_pending_card_actions.clear()
 	_awaken_in_progress.clear()
@@ -9974,7 +10065,7 @@ func _do_sage_save(p: Player):
 	p.hidden_equip_slot = ""
 	# 一次恢复完再发牌，避免中间的零手牌状态重触发觉醒。
 	_draw_blank_cards(p, 4)
-	_update_debug("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
+	_public_result("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
 # 合法性与持牌情况是所有人共用的规则；是否愿意救援是另一个决策层。
@@ -10478,7 +10569,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 		var cancel = await _show_kneel_confirm("是否解除【下跪】状态？", "解除", "保持", valid)
 		if cancel == 1 and valid.call():
 			p.kneeling = false
-			_update_debug("%s 解除了【下跪】状态" % p.player_name)
+			_public_result("%s 解除了【下跪】状态" % p.player_name)
 			_sync_all_ui()
 			_refresh_detail_popup()
 		return
@@ -10497,7 +10588,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 	if ok == 1 and valid.call():
 		p.kneeling = true
 		p.kneel_used = true
-		_update_debug("%s 发动【下跪】！进入下跪状态（不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）" % p.player_name)
+		_public_result("%s 发动【下跪】！进入下跪状态（不会成为任何效果的目标，无法使用或打出任何牌，手牌上限固定为 5）" % p.player_name)
 		_sync_all_ui()
 		_refresh_detail_popup()
 

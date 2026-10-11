@@ -64,7 +64,13 @@ func run(host):
 			var players = game.players.map(func(p): return weakref(p))
 			var old_game = weakref(game)
 			var return_buttons = game._game_over_overlay.find_children("*", "Button", true, false)
-			suite.check(return_buttons.size() == 1 and return_buttons[0].text == "返回主菜单", "G03a real terminal overlay offers return")
+			var log_buttons = return_buttons.filter(func(button): return button.text == "回看本局日志")
+			return_buttons = return_buttons.filter(func(button): return button.text == "返回主菜单")
+			suite.check(return_buttons.size() == 1, "G03a real terminal overlay offers exactly one return")
+			suite.check(log_buttons.size() == 1, "LOG terminal offers exactly one history entry")
+			log_buttons[0].pressed.emit()
+			await suite.process_frame
+			suite.check(game._history_panel.content.visible and game._history_panel.z_index > game._game_over_overlay.z_index, "LOG terminal history visible above result without leaving game")
 			return_buttons[0].pressed.emit()
 			return_buttons[0].pressed.emit()
 			await suite.process_frame

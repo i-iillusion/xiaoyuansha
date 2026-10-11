@@ -8,6 +8,7 @@ var _screen := ""
 var _game_shape := ""
 var _submitted := ""
 var _name := "玩家"
+var _history_panel: ActionHistoryPanel
 
 func _ready() -> void:
 	session = LanSession.new()
@@ -35,6 +36,10 @@ func _ready() -> void:
 	clock_label = _label(top, "")
 	_button(top, "离开房间 / 返回主菜单", _leave)
 	message = _label(box, "仅用于信任的局域网；请所有成员使用同一个试玩包。")
+	_history_panel = ActionHistoryPanel.new()
+	box.add_child(_history_panel)
+	_history_panel.bind(session.history)
+	_history_panel.visible = false
 	var scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(scroll)
@@ -76,6 +81,7 @@ func _edit(parent: Node, hint: String, value: String) -> LineEdit:
 	return input
 
 func _show_connection() -> void:
+	_history_panel.visible = false
 	_screen = "connect"
 	_clear()
 	_label(body, "连接方式：一人创建房间，其余人在同一局域网输入房主IP加入。无需安装Godot。")
@@ -106,6 +112,7 @@ func _lobby_changed(state: Dictionary) -> void:
 		_show_connection()
 		return
 	if state.playing: return
+	_history_panel.visible = false
 	_screen = "lobby"
 	_game_shape = ""
 	clock_label.text = ""
@@ -141,10 +148,12 @@ func _send(token: String) -> void:
 	session.act(token)
 
 func _state_changed(state: Dictionary) -> void:
+	_history_panel.visible = true
 	_submitted = ""
 	clock_label.text = str(state.clock)
 	var shape = state.duplicate(true)
 	shape.erase("clock")
+	shape.erase("history") # Log refresh does not rebuild rule choices or scrolling.
 	var fingerprint = var_to_str(shape)
 	if _screen == "game" and fingerprint == _game_shape: return
 	_screen = "game"

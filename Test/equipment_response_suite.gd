@@ -1,14 +1,24 @@
 # Isolated host for whole existing equipment-response modules moved out of the
-# saturated confirmed suite. Same reset fixture; modules/assertions unchanged.
+# saturated confirmed/core suites. Same reset fixture; modules/assertions unchanged.
 extends RefCounted
 
 var host
 var game: GameManager
 var process_frame: Signal:
 	get: return host.process_frame
+var root: Window:
+	get: return host.root
+
+func create_timer(seconds: float) -> SceneTreeTimer:
+	return host.create_timer(seconds)
 
 func check(ok: bool, message: String):
 	host.check(ok, message)
+
+func strike(source: Player, target: Player, ignore_restrictions: bool = false):
+	return await game._execute_single_strike(source, target,
+		CardBase.create(CardData.CardSubType.STRIKE), CardData.CardSubType.STRIKE,
+		EffectChain.DamageType.PHYSICAL, 1, ignore_restrictions)
 
 func reset_players():
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)
@@ -62,7 +72,28 @@ func run(suite):
 	await host.process_frame
 	game.start_game()
 	game._stop_countdown()
-	for module in ["soul_blade_prompt_cases", "soul_blade_discard_cases", "soul_blade_rps_cases", "soul_blade_activation_cases"]:
+	for module in ["soul_blade_prompt_cases", "soul_blade_discard_cases", "soul_blade_rps_cases", "soul_blade_activation_cases",
+		"play_skill_selection_generation_cases",
+		"play_skill_entry_guard_cases",
+		"exchange_prompt_lifecycle_cases",
+		"kneel_prompt_lifecycle_cases",
+		"shensu_prompt_lifecycle_cases",
+		"grant_prompt_lifecycle_cases",
+		"standalone_grant_cases",
+		"sage_save_lifecycle_cases",
+		"rescue_lifecycle_cases",
+		"dying_caller_lifecycle_cases",
+		"judgment_damage_lifecycle_cases",
+		"thorn_lifecycle_cases",
+		"yes_ah_discard_lifecycle_cases",
+		"zhuangbi_revised_rule_cases",
+		"reset_scheduler_ai_cases",
+		"reveal_inner_lifecycle_cases",
+		"response_target_reset_cases",
+		"awaken_reset_cases",
+		"ui_tail_reset_cases",
+		"mandatory_skill_cases",
+		"equipment_boundary_cases"]:
 		await load("res://Test/" + module + ".gd").new().run(self)
 	game._game_over = true
 	game.queue_free()

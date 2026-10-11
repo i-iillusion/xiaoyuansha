@@ -107,7 +107,7 @@ func _add_command(seat: int, kind: String, value: Variant) -> String:
 	_commands[token] = {"seat": seat, "kind": kind, "value": value}
 	return token
 
-func snapshot(seat: int) -> Dictionary:
+func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	_refresh_commands()
 	var p: Player = game.players[seat]
 	var state = PlayerObservation.capture(game.players, p, game.turn_manager.current_phase,
@@ -122,6 +122,7 @@ func snapshot(seat: int) -> Dictionary:
 	state["status"] = game._debug_label.text if seat == input_owner() else "等待其他玩家操作"
 	state["clock"] = game._countdown_label.text
 	state["notice"] = game._log_label.text if seat == input_owner() else ""
+	state["history"] = game.action_history.packet(after_log)
 	state["targets"] = {}
 	state["kneel"] = ""
 	for token in _commands:
