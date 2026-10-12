@@ -171,6 +171,7 @@ var _sacrifice_override: Callable = Callable()
 # 座位无关的舍己决策入口；默认AI策略仍在D03接入。
 var _sacrifice_actor_override: Callable = Callable()
 var ai_driver = DecisionDriver.new()
+var ai_pacer = AiActionPacer.new()
 var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
 var _ai_offered_actions: Array = []
@@ -1342,14 +1343,27 @@ func _run_ai_play(actor: Player):
 		return
 	_ai_running_revisions[revision] = generation
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(actor) \
+		return is_inside_tree() and not is_queued_for_deletion() and not _game_over \
+			and generation == _dying_lifecycle_generation and is_instance_valid(actor) and players.has(actor) \
 			and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
 			and turn_manager.get_play_actor_idx() == actor.seat_index \
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
+	var before_execute = func(action: Dictionary):
+		var snapshot = _ai_hand_snapshot
+		var target = players[int(action.target)] if int(action.target) >= 0 else null
+		var eligible = func():
+			if snapshot == null or snapshot != _ai_hand_snapshot or not _ai_offered_actions.has(action): return false
+			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
+			if target == null: return true
+			if not is_instance_valid(target) or not players.has(target) or not target.is_alive(): return false
+			if players[int(action.target)] != target: return false
+			return get_trick_targets(actor, int(action.sub)).has(target) if int(action.sub) in TARGET_TRICKS \
+				else _get_strike_targets(actor).has(target)
+		return await ai_pacer.before_action(self, valid, eligible)
 	var result = await ai_driver.run(func(): return _ai_observation(actor),
-		_ai_play_candidates, _execute_ai_action, valid)
+		_ai_play_candidates, _execute_ai_action, valid, before_execute)
 	if _ai_running_revisions.get(revision, -1) == generation: _ai_running_revisions.erase(revision)
 	if not _game_over and generation == _dying_lifecycle_generation and players.has(actor) \
 			and actor.is_dead() and turn_manager.get_context_revision() == revision \

@@ -10,7 +10,8 @@ func _init(seed_value: int = 1):
 	rng.seed = seed_value
 
 # 返回原因由调用者决定是否推进阶段；预算只是自主出牌防挂保护。
-func run(observe: Callable, candidates: Callable, execute: Callable, valid: Callable) -> Dictionary:
+func run(observe: Callable, candidates: Callable, execute: Callable, valid: Callable,
+		before_execute: Callable = Callable()) -> Dictionary:
 	var executed = 0
 	while executed < action_budget:
 		if not valid.call():
@@ -37,6 +38,12 @@ func run(observe: Callable, candidates: Callable, execute: Callable, valid: Call
 			return {"reason": "stale", "actions": executed}
 		if index < 0 or index >= options.size():
 			return {"reason": "end", "actions": executed}
+		if before_execute.is_valid() and not await before_execute.call(options[index].duplicate(true)):
+			if not valid.call(): return {"reason": "stale", "actions": executed}
+			# Only the candidate expired: reobserve within the same finite budget.
+			executed += 1
+			continue
+		if not valid.call(): return {"reason": "stale", "actions": executed}
 		# 每次执行后重新观察，不复用旧候选；失败也消耗防挂预算。
 		await execute.call(options[index].duplicate(true))
 		executed += 1
