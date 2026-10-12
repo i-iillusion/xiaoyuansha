@@ -7,6 +7,7 @@ var game: GameManager
 var winners: Array[String] = []
 
 func _init():
+	load("res://Test/ai_test_clock.gd").install(self)
 	_run()
 
 func check(ok: bool, message: String):

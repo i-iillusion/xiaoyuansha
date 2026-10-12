@@ -4,9 +4,21 @@ extends RefCounted
 
 enum Speed { SLOW, STANDARD, FAST }
 const SECONDS = [1.2, 0.6, 0.0]
-# Preserve the existing speed until PACE01b exposes the menu setting.
-var speed: Speed = Speed.FAST
+const LABELS = ["慢（1.2秒）", "标准（0.6秒）", "快（0秒）"]
+static var preferred_speed: Speed = Speed.STANDARD
+var speed: Speed = Speed.STANDARD
 var wait_override: Callable # Dedicated test clock, not a response timeout.
+
+func _init():
+	speed = preferred_speed
+
+static func valid_speed(value: Variant) -> bool:
+	return typeof(value) == TYPE_INT and value >= Speed.SLOW and value <= Speed.FAST
+
+static func set_preference(value: Variant) -> bool:
+	if not valid_speed(value): return false
+	preferred_speed = value
+	return true
 
 func before_action(owner: Node, valid: Callable, eligible: Callable) -> bool:
 	var reference = weakref(owner)

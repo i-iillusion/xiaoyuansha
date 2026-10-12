@@ -20,6 +20,7 @@ var drop_case := false
 var interrupted := false
 var saved_game: GameManager
 var history_digest := ""
+var pace_checked := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -55,6 +56,7 @@ func _run() -> void:
 	else:
 		port = 26000 + randi_range(0, 10000)
 		check(session.host("Host", size, port) == OK, "host ENet start")
+		check(session.set_pace(AiActionPacer.Speed.SLOW), "host configures slow pace before match")
 		session.choose("稻草人", true)
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.git/lan-tests"))
 		for i in range(1, size):
@@ -110,6 +112,11 @@ func _run() -> void:
 	quit(0 if failures == 0 else 1)
 
 func _state(state: Dictionary) -> void:
+	if not pace_checked:
+		check(state.pace == AiActionPacer.Speed.SLOW and session.pace == state.pace, "authority pace synchronized to real peer")
+		check(not session.set_pace(AiActionPacer.Speed.FAST), "live match rejects pace changes")
+		if child: check(session.bridge == null, "client does not run a rule bridge")
+		pace_checked = true
 	if drop_on_match:
 		check(not state.ended, "client disconnects during active match")
 		final_seen = true

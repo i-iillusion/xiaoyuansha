@@ -4,6 +4,7 @@ var session: LanSession
 var body: VBoxContainer
 var message: Label
 var clock_label: Label
+var pace_label: Label
 var _screen := ""
 var _game_shape := ""
 var _submitted := ""
@@ -36,6 +37,7 @@ func _ready() -> void:
 	clock_label = _label(top, "")
 	_button(top, "离开房间 / 返回主菜单", _leave)
 	message = _label(box, "仅用于信任的局域网；请所有成员使用同一个试玩包。")
+	pace_label = _label(box, "")
 	_history_panel = ActionHistoryPanel.new()
 	box.add_child(_history_panel)
 	_history_panel.bind(session.history)
@@ -81,6 +83,7 @@ func _edit(parent: Node, hint: String, value: String) -> LineEdit:
 	return input
 
 func _show_connection() -> void:
+	pace_label.text = ""
 	_history_panel.visible = false
 	_screen = "connect"
 	_clear()
@@ -112,6 +115,7 @@ func _lobby_changed(state: Dictionary) -> void:
 		_show_connection()
 		return
 	if state.playing: return
+	pace_label.text = "房主AI速度：" + AiActionPacer.LABELS[session.pace] + " · 真人读条不变"
 	_history_panel.visible = false
 	_screen = "lobby"
 	_game_shape = ""
@@ -123,6 +127,12 @@ func _lobby_changed(state: Dictionary) -> void:
 		for ip in IP.get_local_addresses():
 			if ":" not in ip and not ip.begins_with("127.") and not ip.begins_with("169.254."): addresses.append(ip)
 		_label(body, "让同伴加入：" + " / ".join(addresses) + " · UDP端口 %d" % session.port_number)
+		var picker = OptionButton.new()
+		picker.name = "HostPacePicker"
+		for label in AiActionPacer.LABELS: picker.add_item(label)
+		picker.select(session.pace)
+		picker.item_selected.connect(func(index): session.set_pace(index))
+		body.add_child(picker)
 	var mine: Dictionary = {}
 	for member in state.members:
 		_label(body, "%s%s · %s · %s" % [member.name, "（房主）" if member.peer == 1 else "", member.general, "已准备" if member.ready else "未准备"])
@@ -148,6 +158,7 @@ func _send(token: String) -> void:
 	session.act(token)
 
 func _state_changed(state: Dictionary) -> void:
+	pace_label.text = "房主AI速度：" + AiActionPacer.LABELS[state.get("pace", AiActionPacer.Speed.STANDARD)] + " · 当前联机全是真人，不影响真人行动"
 	_history_panel.visible = true
 	_submitted = ""
 	clock_label.text = str(state.clock)

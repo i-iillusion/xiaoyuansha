@@ -8,6 +8,7 @@ var game: GameManager
 var winners: Array[String] = []
 
 func _init():
+	load("res://Test/ai_test_clock.gd").install(self)
 	_run()
 
 func check(ok: bool, message: String):
@@ -202,5 +203,6 @@ func _run():
 	await load("res://Test/equipment_response_suite.gd").new().run(self)
 	await load("res://Test/action_history_cases.gd").new().run(self)
 	await load("res://Test/ai_pace_cases.gd").new().run(self)
+	await load("res://Test/ai_pace_settings_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

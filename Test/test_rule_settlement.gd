@@ -17,6 +17,7 @@ var observations: Array = []
 var _check_log_buffer: Array[String] = []
 
 func _init():
+	load("res://Test/ai_test_clock.gd").install(self)
 	_run()
 
 func _flush_check_log():

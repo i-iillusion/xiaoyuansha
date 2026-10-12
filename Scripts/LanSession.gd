@@ -5,12 +5,13 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-3"
+const PROTOCOL := "campus-lan-4"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
 	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊"]
 var members: Dictionary = {}
 var count := 2
+var pace: int = AiActionPacer.preferred_speed
 var bridge: LanGameBridge
 var lobby: Dictionary = {}
 var latest: Dictionary = {}
@@ -42,6 +43,7 @@ func host(player_name: String, size: int = 2, port: int = DEFAULT_PORT) -> Error
 	multiplayer.multiplayer_peer = peer
 	connected = true
 	count = size
+	pace = AiActionPacer.preferred_speed
 	port_number = port
 	nickname = _clean_name(player_name)
 	members[1] = {"peer": 1, "name": nickname, "general": "随机", "ready": false}
@@ -96,6 +98,12 @@ func _apply_choice(peer: int, general: String, ready: bool) -> void:
 	members[peer].ready = ready
 	_publish_lobby()
 
+func set_pace(value: Variant) -> bool:
+	if not connected or not multiplayer.is_server() or bridge != null or not AiActionPacer.valid_speed(value): return false
+	pace = value
+	_publish_lobby()
+	return true
+
 func begin_match() -> bool:
 	if not connected or not multiplayer.is_server() or bridge != null or members.size() != count: return false
 	var used: Array[String] = []
@@ -118,7 +126,7 @@ func begin_match() -> bool:
 	match_id = Crypto.new().generate_random_bytes(16).hex_encode()
 	bridge = LanGameBridge.new()
 	add_child(bridge)
-	bridge.start(roster, GameManager.MODE_CLASSIC_IDENTITY if count == 5 else GameManager.MODE_FREE_FOR_ALL)
+	bridge.start(roster, GameManager.MODE_CLASSIC_IDENTITY if count == 5 else GameManager.MODE_FREE_FOR_ALL, pace)
 	_last_sent.clear()
 	_log_sent.clear()
 	bridge.game.action_history.match_key = match_id
@@ -152,7 +160,7 @@ func return_to_lobby() -> void:
 	_publish_lobby()
 
 func _publish_lobby() -> void:
-	var state = {"count": count, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL, "match": match_id}
+	var state = {"count": count, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL, "match": match_id, "pace": pace}
 	_receive_lobby(state)
 	for peer in members:
 		if peer != 1 and _peer_ready(peer): _receive_lobby.rpc_id(peer, state)
@@ -166,6 +174,8 @@ func _peer_ready(peer: int) -> bool:
 
 @rpc("authority", "call_remote", "reliable")
 func _receive_lobby(state: Dictionary) -> void:
+	if not AiActionPacer.valid_speed(state.get("pace", AiActionPacer.Speed.STANDARD)): return
+	pace = state.get("pace", AiActionPacer.Speed.STANDARD)
 	lobby = state
 	_view_match = str(state.get("match", ""))
 	if history.match_key != _view_match: history.reset(_view_match)
@@ -188,7 +198,9 @@ func _publish_states() -> void:
 @rpc("authority", "call_remote", "reliable")
 func _receive_state(state: Dictionary) -> void:
 	if str(state.get("match", "")) != _view_match or _view_match.is_empty(): return
+	if not AiActionPacer.valid_speed(state.get("pace", null)): return
 	if not history.receive(state.get("history", {})): return
+	pace = state.pace
 	latest = state
 	state_received.emit(state)
 

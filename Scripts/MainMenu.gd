@@ -58,9 +58,25 @@ func _show_start():
 	_page_title.text = "选择模式"
 	_add_btn("单人游戏", func(): _not_implemented("单人游戏"))
 	_add_btn("多人游戏 · 局域网", _start_lan)
-	_add_btn("设置", func(): _not_implemented("设置"))
+	_add_btn("设置", _show_settings)
 	_add_btn("测试模式", _show_test)
 	_add_btn("← 返回", _show_main, "")
+
+func _show_settings():
+	_clear()
+	_page_title.text = "设置 · AI速度（下一局生效）"
+	for speed in range(AiActionPacer.LABELS.size()):
+		var button = _add_btn("AI速度：" + AiActionPacer.LABELS[speed], _select_pace.bind(speed))
+		button.toggle_mode = true
+		button.button_pressed = speed == AiActionPacer.preferred_speed
+	var explanation = Label.new()
+	explanation.text = "仅延后下一次AI主动行动，不改变真人读条或伤害结算。\n本次程序运行内保留；联机房间以房主设置为准。"
+	_page.add_child(explanation)
+	_add_btn("← 返回", _show_start)
+
+func _select_pace(speed: int):
+	if _launch_pending or not is_inside_tree(): return
+	if AiActionPacer.set_preference(speed): _show_settings()
 
 func _show_test():
 	_clear()

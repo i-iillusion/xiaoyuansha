@@ -12,13 +12,15 @@ var _commands: Dictionary = {}
 var _controls: Array = []
 var _labels: Array = []
 
-func start(roster: Array[Dictionary], mode: String) -> void:
+func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> void:
 	viewport = SubViewport.new()
 	viewport.size = Vector2i(1280, 720)
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(viewport)
 	game = preload("res://Scenes/Game.tscn").instantiate()
 	game.auto_start = false
+	var configured = AiActionPacer.preferred_speed if pace == -1 else pace
+	game.ai_pacer.speed = configured if AiActionPacer.valid_speed(configured) else AiActionPacer.Speed.STANDARD
 	game.lan_enabled = true
 	game.lan_roster = roster.duplicate(true)
 	var old_count = GameManager.selected_players
@@ -123,6 +125,7 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	state["clock"] = game._countdown_label.text
 	state["notice"] = game._log_label.text if seat == input_owner() else ""
 	state["history"] = game.action_history.packet(after_log)
+	state["pace"] = game.ai_pacer.speed
 	state["targets"] = {}
 	state["kneel"] = ""
 	for token in _commands:

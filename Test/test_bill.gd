@@ -6,6 +6,7 @@ var asserts := 0
 var game = null
 
 func _init():
+	load("res://Test/ai_test_clock.gd").install(self)
 	_run()
 
 func _check(cond: bool, msg: String):
