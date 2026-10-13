@@ -80,7 +80,10 @@ func _select_time_bank(seat: int) -> void:
 	_bank_remaining = float(_seat_banks.get(seat, BANK_SECONDS))
 
 const MODE_CLASSIC_IDENTITY := "classic_identity"
+const MODE_AMBITIOUS_IDENTITY := "ambitious_identity"
 const MODE_FREE_FOR_ALL := "free_for_all"
+var _ambitious_state: AmbitiousIdentityState
+var _ambitious_declaration_override: Callable = Callable()
 
 # 主菜单选中的武将（玩家0 使用），静态变量跨场景保留；直接加载游戏（测试）时默认凯文·罗本
 static var selected_general: String = "凯文·罗本"
@@ -815,6 +818,9 @@ func start_game():
 		# 【觉醒】监听手牌变化（史蒂芬·彼特先斯：手牌为 0 时立即觉醒）
 		p.hand_updated.connect(_on_hand_updated.bind(p))
 
+	if game_mode == MODE_AMBITIOUS_IDENTITY:
+		_ambitious_state = AmbitiousIdentityState.new()
+		assert(_ambitious_state.initialize(players), "Invalid ambitious opening")
 	for p in players:
 		_draw_blank_cards(p, 4)
 
@@ -9571,7 +9577,9 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 			if not valid.call(): return _invalidate_dying_context(victim, context)
 	if not _game_over and victim.is_dying():
 		context.stage = DyingContext.Stage.FINAL_DEATH
-		_handle_death(victim, context.killer)
+		var death_result = await _handle_death(victim, context.killer)
+		if death_result == CHOICE_INVALID or not valid.call():
+			return _invalidate_dying_context(victim, context)
 	context.stage = DyingContext.Stage.FINISHED
 	_dying_contexts.erase(victim)
 	_sync_all_ui()
@@ -9694,16 +9702,46 @@ func _handle_death(victim: Player, killer: Player):
 	_sync_all_ui()
 
 	# ---- 阶段4 击杀奖惩（仅身份局；乱斗明确没有击杀奖励）----
-	if game_mode == MODE_CLASSIC_IDENTITY and not _game_over and killer != null and killer.is_alive():
-		if victim.identity == "反贼":
+	if game_mode in [MODE_CLASSIC_IDENTITY, MODE_AMBITIOUS_IDENTITY] and not _game_over and killer != null and killer.is_alive():
+		if victim.identity == "反贼" or (game_mode == MODE_AMBITIOUS_IDENTITY and victim.identity == "奸雄"):
 			_draw_blank_cards(killer, 3)
-			_update_debug("奖惩：%s 击杀【反贼】%s，摸 3 张牌！（%d 张）" % [killer.player_name, victim.player_name, killer.hand_size()])
+			_update_debug("奖惩：%s 击杀【%s】%s，摸 3 张牌！（%d 张）" % [killer.player_name, victim.identity, victim.player_name, killer.hand_size()])
 		elif victim.identity == "忠臣" and killer.identity == "主公":
 			_discard_all_cards(killer, false)
 			_update_debug("奖惩：主公 %s 误杀忠臣 %s，弃置所有手牌和装备！（%d 张手牌）" % [killer.player_name, victim.player_name, killer.hand_size()])
 
+	# Must finish succession before the parent Yudaxi continues or rebels win.
+	if game_mode == MODE_AMBITIOUS_IDENTITY and _ambitious_state != null and _ambitious_state.candidate() != null:
+		if await _resolve_ambitious_declaration() == CHOICE_INVALID: return CHOICE_INVALID
 	# ---- 阶段5 胜负判定 ----
 	_check_win_condition(victim, killer)
+	return 0
+
+func _resolve_ambitious_declaration() -> int:
+	var state = _ambitious_state
+	var candidate = state.candidate()
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var allowed = func():
+		return not _game_over and _ambitious_state == state and state.candidate() == candidate \
+			and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision()
+	var result: int
+	if _ambitious_declaration_override.is_valid():
+		result = await _ambitious_declaration_override.call(candidate)
+	elif not _is_human(candidate):
+		result = 0 # AI strategy: accept its own succession opportunity.
+	else:
+		_set_input_player(candidate)
+		result = await _show_choice_popup("主公已阵亡，是否声明奸雄并成为新主公？", ["声明成为主公", "放弃声明"], allowed, false)
+	if result == CHOICE_INVALID or not allowed.call(): return CHOICE_INVALID
+	if result == 0:
+		if not state.declare(): return CHOICE_INVALID
+		_public_result("%s 声明奸雄，成为新主公！" % candidate.player_name)
+	else:
+		if not state.decline(): return CHOICE_INVALID
+		_public_result("奸雄未声明，放弃其胜利。") # Never expose the hidden player's seat/name.
+	_sync_all_ui()
+	return 0
 
 # 弃置一名角色的所有牌（死亡弃置 / 主公杀忠臣惩罚共用）
 # include_judgment 只控制判定区；已确定牌属于手牌，死亡和主公惩罚均须弃置。
@@ -9833,6 +9871,8 @@ func _check_win_condition(_victim: Player, _killer: Player):
 	var outcome: Dictionary = {}
 	if game_mode == MODE_CLASSIC_IDENTITY:
 		outcome = IdentityVictory.evaluate(players)
+	elif game_mode == MODE_AMBITIOUS_IDENTITY and _ambitious_state != null:
+		outcome = _ambitious_state.evaluate()
 	elif game_mode == MODE_FREE_FOR_ALL:
 		outcome = FreeForAllVictory.evaluate(players)
 	if not outcome.is_empty():
