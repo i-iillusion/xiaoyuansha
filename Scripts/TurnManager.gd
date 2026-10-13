@@ -27,6 +27,8 @@ signal standalone_play_finished(frame: Dictionary)
 var _context_revision: int = 0
 var rounds: RoundLedger
 var live_seats: Callable = Callable()
+var before_ordinary: Callable = Callable()
+var _ordinary_selecting := false
 var _extra_frames: Array[Dictionary] = []
 var _turn_sequence := 0
 # Explicit state ownership for suspended turns, not Player/general-card state.
@@ -173,6 +175,17 @@ func start_game():
 		assert(rounds.initialize(ids))
 		current_player_idx = rounds.begin_next(live_seats.call())
 		if current_player_idx < 0: return
+	await _enter_ordinary()
+
+func _enter_ordinary():
+	if _ordinary_selecting: return
+	_ordinary_selecting = true
+	var selected = current_player_idx
+	if rounds != null and before_ordinary.is_valid():
+		selected = await before_ordinary.call(rounds.current().seat)
+	_ordinary_selecting = false
+	if selected < 0 or (rounds != null and not rounds.select_pending(selected)): return
+	current_player_idx = selected
 	_begin_turn()
 	_change_phase(Phase.START)
 
@@ -220,6 +233,7 @@ func advance_phase():
 		Phase.END:     turn_ended.emit(current_player_idx)
 
 func next_turn():
+	if _ordinary_selecting: return
 	_context_revision += 1
 	if not _extra_frames.is_empty():
 		rounds.finish()
@@ -234,8 +248,7 @@ func next_turn():
 		if current_player_idx < 0: return
 	else:
 		current_player_idx = (current_player_idx + 1) % player_count
-	_begin_turn()
-	_change_phase(Phase.START)
+	await _enter_ordinary()
 
 # Mechanical safe-checkpoint API. Skill/effect callers own authorization and
 # continuation; no currently metadata-only general is enabled by this API.

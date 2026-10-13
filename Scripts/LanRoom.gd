@@ -187,7 +187,8 @@ func _state_changed(state: Dictionary) -> void:
 	_board = board
 	board.columns = SeatLayout.columns(state.players.size(), get_viewport_rect().size.x - 36)
 	body.add_child(board)
-	for player in state.players:
+	for seat in state.get("space", range(state.players.size())):
+		var player: Dictionary = state.players[seat]
 		var text = "%d号 %s\n%s\n体力 %d/%d · 手牌 %d\n%s%s%s" % [int(player.seat) + 1, player.name, player.general,
 			player.hp, player.max_hp, player.hand_count, "已阵亡 " if player.dead else "", "横置 " if player.chained else "", "翻面 " if player.facedown else ""]
 		text += "\n身份：" + (player.identity if player.identity != "" else ("暗置" if state.mode != GameModes.FREE_FOR_ALL else "无"))

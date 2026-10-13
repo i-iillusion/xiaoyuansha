@@ -84,6 +84,8 @@ const MODE_AMBITIOUS_IDENTITY := "ambitious_identity"
 const MODE_FREE_FOR_ALL := "free_for_all"
 var _ambitious_state: AmbitiousIdentityState
 var _ambitious_declaration_override: Callable = Callable()
+var _timeweave_candidates_override: Callable = Callable()
+var _timeweave_choice_override: Callable = Callable()
 
 # 主菜单选中的武将（玩家0 使用），静态变量跨场景保留；直接加载游戏（测试）时默认凯文·罗本
 static var selected_general: String = "凯文·罗本"
@@ -857,6 +859,7 @@ func start_game():
 		for p in players:
 			if not p.is_dead(): seats.append(p.seat_index)
 		return seats
+	turn_manager.before_ordinary = _choose_ordinary_actor
 	turn_manager.start_game()
 	game_started.emit()
 
@@ -881,17 +884,12 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 			# 阵亡角色跳过自己的回合：推进到下一位存活角色
 			# （next_turn 会同步触发 START 回调 → 用 _skipping_dead 挡重入；
 			#   胜负判定保证至少还有一名对手存活，guard 仅兜底防死循环）
-			if _skipping_dead:
-				return
-			_skipping_dead = true
-			var guard := 0
-			while guard < player_count and players[turn_manager.current_player_idx].is_dead():
+			if players[pid].is_dead():
+				if _skipping_dead: return
+				_skipping_dead = true
 				turn_manager.next_turn()
-				guard += 1
-				if _game_over:
-					_skipping_dead = false
-					return
-			_skipping_dead = false
+				_skipping_dead = false
+				return
 			_do_start(turn_manager.current_player_idx)
 		TurnManager.Phase.JUDGE:   _do_judge(pid)
 		TurnManager.Phase.DRAW:    _do_draw(pid)
@@ -1000,7 +998,7 @@ func _last_pending_judgment(p: Player, deferred: Array[CardBase]) -> CardBase:
 	return null
 
 func _move_lightning(p: Player, card: CardBase) -> Player:
-	var circle = LivingTable.ordered(players)
+	var circle = LivingTable.ordered(spatial_players(), true)
 	var start = circle.find(p)
 	for offset in range(1, circle.size()):
 		var target = circle[(start + offset) % circle.size()]
@@ -1522,7 +1520,56 @@ func _kneel_conditions_met(p: Player) -> bool:
 
 # 固定座号的存活圆桌；濒死待救者仍占座位。
 func ordinary_seat_distance(source: Player, target: Player) -> int:
-	return LivingTable.distance(players, source, target)
+	return LivingTable.distance(spatial_players(), source, target, true)
+
+func spatial_players() -> Array[Player]:
+	if turn_manager.rounds == null: return players.duplicate()
+	var result: Array[Player] = []
+	for seat in turn_manager.rounds.space_order(): result.append(players[seat])
+	return result
+
+func _spatial_from(owner: Player) -> Array[Player]:
+	var circle = spatial_players()
+	var start = circle.find(owner)
+	var result: Array[Player] = []
+	if start < 0: return result
+	for offset in circle.size(): result.append(circle[(start + offset) % circle.size()])
+	return result
+
+func _choose_ordinary_actor(nominee: int) -> int:
+	if _game_over: return -1
+	var ledger = turn_manager.rounds
+	var candidates: Array = []
+	if _timeweave_candidates_override.is_valid(): candidates = _timeweave_candidates_override.call()
+	else:
+		# I05 opens the complete general; metadata-only random assignments cannot
+		# silently acquire one of its unimplemented skills in I01.
+		candidates = players.filter(func(p): return p.general_name == "桑尼·泰姆" and GeneralData.get_implementation_status(p.general_name) == "prototype")
+	for actor in candidates:
+		if not players.has(actor) or not actor.is_alive() or not ledger.pending_seats().has(actor.seat_index): continue
+		if ledger.pending_seats().size() == 1: return actor.seat_index
+		var generation = _dying_lifecycle_generation
+		var revision = turn_manager.get_context_revision()
+		var allowed = func():
+			return not _game_over and generation == _dying_lifecycle_generation and actor.is_alive() \
+				and revision == turn_manager.get_context_revision() and ledger == turn_manager.rounds \
+				and ledger.current().get("seat", -1) == nominee
+		var choice: int
+		if _timeweave_choice_override.is_valid(): choice = await _timeweave_choice_override.call(actor, nominee)
+		elif not _is_human(actor): choice = 0
+		else:
+			_set_input_player(actor)
+			choice = await _show_choice_popup("【时光交错】本轮是否现在行动？", ["现在行动", "不插入，继续等待"], allowed, false)
+		if choice == CHOICE_INVALID or not allowed.call(): return -1
+		if choice == 0:
+			if actor.seat_index != nominee:
+				ledger.relocate_before(actor.seat_index, nominee)
+				_layout_player_panels()
+				_public_result("%s 发动时光交错，插入本轮普通回合。" % actor.player_name)
+			return actor.seat_index
+		# Q2: even at its own position, no reply means continue postponing.
+		if actor.seat_index == nominee: return ledger.next_pending_except(nominee)
+	return nominee
 
 # 【劣马】全局距离修正：-1劣马 → 其他玩家（非持有者）视作额外装备 -1马（攻击距离-1）；
 # +1劣马 → 其他玩家（非持有者）视作额外装备 +1马（被攻击距离+1）
@@ -3156,8 +3203,7 @@ func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) 
 # Q14：群体互换后按新牌条件生效，合条件目标为空也可更换。
 func _prep_group_roster(p: Player) -> Array[Player]:
 	var roster: Array[Player] = []
-	for i in range(players.size()):
-		var target = players[(p.seat_index + i) % players.size()]
+	for target in _spatial_from(p):
 		if target.is_alive(): roster.append(target)
 	return roster
 
@@ -4817,8 +4863,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 	if element == EffectChain.DamageType.PHYSICAL or not damaged.chained:
 		return
 	var linked: Array[Player] = []
-	for i in range(1, player_count):
-		var other = players[(damaged.seat_index + i) % player_count]
+	for other in _spatial_from(damaged):
 		if other != damaged and other.is_alive() and other.chained:
 			linked.append(other)
 	_update_debug("%s 受到属性伤害，触发【铁索连环】！" % damaged.player_name)
@@ -5037,7 +5082,7 @@ func _show_duel_second_strike_prompt() -> int:
 # Q2：中心伤害及其传导/濒死结束后，按存活圆桌选下家、上家。
 # 即使中心最终死亡，也以其原空间位置为锚；不修改固定座号。
 func _burning_camp_neighbors(center: Player) -> Array[Player]:
-	var circle = LivingTable.ordered(players)
+	var circle = LivingTable.ordered(spatial_players(), true)
 	circle.erase(center)
 	var result: Array[Player] = []
 	if circle.is_empty(): return result
@@ -9604,12 +9649,8 @@ func _invalidate_dying_context(victim: Player, context: DyingContext) -> int:
 # 沿当前空间/行动数组从发动者下家起算；排除正在等待死亡前规则的角色。
 func _yudaxi_targets(owner: Player) -> Array[Player]:
 	var targets: Array[Player] = []
-	var start = players.find(owner)
-	if start < 0:
-		return targets
-	for offset in range(1, players.size()):
-		var target = players[(start + offset) % players.size()]
-		if target.is_alive() and not _dying_contexts.has(target):
+	for target in _spatial_from(owner):
+		if target != owner and target.is_alive() and not _dying_contexts.has(target):
 			targets.append(target)
 	return targets
 
@@ -10179,9 +10220,7 @@ func _run_rescue_round(dying: Player) -> int:
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
-	var order: Array[Player] = []
-	for offset in players.size():
-		order.append(players[(turn_manager.current_player_idx + offset) % players.size()])
+	var order = _spatial_from(players[turn_manager.current_player_idx])
 	for rescuer in order:
 		while dying.is_dying() and not _game_over:
 			var sub = await _ask_rescue_card(rescuer, dying)
@@ -10739,8 +10778,14 @@ func _show_toast(msg: String):
 func _layout_player_panels():
 	if _seat_board == null: return
 	var geometry = SeatLayout.rectangles(player_count, _seat_board.size)
+	var order: Array[int] = []
+	if not players.is_empty():
+		for p in _spatial_from(players[0]):
+			if p.seat_index != 0: order.append(p.seat_index)
 	for slot in _player_positions:
-		var rectangle: Rect2 = geometry.get(slot.get_meta("seat"), Rect2())
+		var seat = int(slot.get_meta("seat"))
+		var visual = order.find(seat) + 1 if order.has(seat) else seat
+		var rectangle: Rect2 = geometry.get(visual, Rect2())
 		slot.position = rectangle.position
 		slot.size = rectangle.size
 

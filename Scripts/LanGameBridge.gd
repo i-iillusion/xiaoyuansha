@@ -130,6 +130,8 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	state["pace"] = game.ai_pacer.speed
 	state["mode"] = game.game_mode
 	state["count"] = game.players.size()
+	state["space"] = game.spatial_players().map(func(player): return player.seat_index)
+	state["round"] = game.turn_manager.rounds.round_id if game.turn_manager.rounds != null else 0
 	state["targets"] = {}
 	state["kneel"] = ""
 	for token in _commands:

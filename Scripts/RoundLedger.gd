@@ -35,6 +35,20 @@ func pending_seats() -> Array[int]: return _pending.duplicate()
 func current() -> Dictionary:
 	return _frames.back().duplicate() if not _frames.is_empty() else {}
 
+# Before START effects, choose one still-unspent ordinary quota.
+func select_pending(seat: int) -> bool:
+	if _frames.size() != 1 or _frames[0].kind != Kind.ORDINARY or not _pending.has(seat): return false
+	_frames[0].seat = seat
+	return true
+
+func next_pending_except(seat: int) -> int:
+	var origin = _space.find(seat)
+	if origin < 0: return -1
+	for offset in range(1, _space.size()):
+		var candidate = _space[(origin + offset) % _space.size()]
+		if _pending.has(candidate): return candidate
+	return -1
+
 func begin_next(live: Array[int]) -> int:
 	if not _frames.is_empty() or not _valid_live(live) or live.is_empty(): return -1
 	# Final deaths count as processed without inventing a turn for the dead.
