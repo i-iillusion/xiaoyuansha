@@ -808,7 +808,7 @@ func start_game():
 		p.max_hp = GeneralData.get_max_hp(p.general_name, player_count)
 		# Classic >=5 baseline: identity bonus is separate from
 		# the general snapshot, and must be set before Player._ready initializes HP.
-		if game_mode == MODE_CLASSIC_IDENTITY and p.identity == "主公":
+		if game_mode in [MODE_CLASSIC_IDENTITY, MODE_AMBITIOUS_IDENTITY] and p.identity == "主公":
 			p.identity_max_hp_bonus = 1
 		p.gender = GeneralData.get_gender(p.general_name)
 		add_child(p)

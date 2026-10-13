@@ -29,7 +29,7 @@ func choose(state: Dictionary) -> String:
 					candidates.sort_custom(func(a, b): return a.hp < b.hp)
 					# Identity fixtures end via the already-public lord when in range;
 					# hidden roles are never inferred and opening roles remain random.
-					if state.get("mode", "") == GameModes.CLASSIC:
+					if state.get("mode", "") in [GameModes.CLASSIC, GameModes.AMBITIOUS]:
 						var public_lords = candidates.filter(func(player): return player.get("identity", "") == "主公")
 						if not public_lords.is_empty(): candidates = public_lords
 				var player = candidates[0 if dueling or striking else target_cursor % candidates.size()]
@@ -50,7 +50,7 @@ func choose(state: Dictionary) -> String:
 		for action in controls:
 			if action.text == "结束出牌" and not action.disabled: return action.id
 	# Decline responses/rescue; pay normal declarations through the actual widgets.
-	for text in ["不响应", "不出", "放弃", "不救", "不使用", "自动选牌", "石头", "确认", "确定", "是", "锦囊牌", "普通锦囊", "决斗", "出牌"]:
+	for text in ["声明成为主公", "不响应", "不出", "放弃", "不救", "不使用", "自动选牌", "石头", "确认", "确定", "是", "锦囊牌", "普通锦囊", "决斗", "出牌"]:
 		for action in controls:
 			if text in action.text and not action.disabled:
 				if action.text == "决斗":

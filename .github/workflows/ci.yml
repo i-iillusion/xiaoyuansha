@@ -90,7 +90,7 @@ jobs:
       - name: Run LAN ownership and actual ENet process tests
         run: |
           set -euo pipefail
-          for spec in 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2' 'test_lan_network 2' 'test_lan_network 3' 'test_lan_network 5' 'test_lan_network 2 --drop-case'; do
+          for spec in 'test_h03 2' 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2' 'test_lan_network 2' 'test_lan_network 3' 'test_lan_network 5' 'test_lan_network 2 --drop-case'; do
             read -r test players extra <<< "$spec"
             log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
             status=0
@@ -104,7 +104,7 @@ jobs:
       - name: Run all H02 playable network configurations
         run: |
           set -euo pipefail
-          for spec in 'free_for_all 2' 'free_for_all 3' 'free_for_all 4' 'free_for_all 5' 'free_for_all 6' 'free_for_all 7' 'free_for_all 8' 'free_for_all 9' 'free_for_all 10' 'classic_identity 5' 'classic_identity 7' 'classic_identity 9'; do
+          for spec in 'free_for_all 2' 'free_for_all 3' 'free_for_all 4' 'free_for_all 5' 'free_for_all 6' 'free_for_all 7' 'free_for_all 8' 'free_for_all 9' 'free_for_all 10' 'classic_identity 5' 'classic_identity 7' 'classic_identity 9' 'ambitious_identity 6' 'ambitious_identity 8' 'ambitious_identity 10'; do
             read -r mode players <<< "$spec"
             log="$CI_LOG_DIR/h02-$mode-$players.log"
             status=0

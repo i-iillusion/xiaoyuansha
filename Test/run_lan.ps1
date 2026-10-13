@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
     [string]$Script = 'Test/test_lan.gd',
     [ValidateRange(2,10)][int]$Players = 2,
-    [ValidateSet('','classic_identity','free_for_all')][string]$Mode = '',
+    [ValidateSet('','classic_identity','ambitious_identity','free_for_all')][string]$Mode = '',
     [switch]$DropCase
 )
 $ErrorActionPreference = 'Stop'

@@ -91,9 +91,8 @@ func _show_test():
 	_add_btn("2V2", func(): _not_implemented("2V2"))
 	for count in [5, 7, 9]:
 		_add_btn("%d人标准" % count, _start_test_game.bind(count, GameModes.CLASSIC))
-	_add_btn("6人奸雄", func(): _not_implemented("6人奸雄"))
-	_add_btn("8人奸雄", func(): _not_implemented("8人奸雄"))
-	_add_btn("10人奸雄（H03后开放）", func(): _not_implemented("10人奸雄"))
+	for count in [6, 8, 10]:
+		_add_btn("%d人奸雄" % count, _start_test_game.bind(count, GameModes.AMBITIOUS))
 	_add_btn("← 返回", _show_start, "")
 
 # 切换随机武将 / 自选武将（重新渲染测试模式页）
@@ -109,7 +108,7 @@ func _start_test_game(players: int, mode: String):
 	GameManager.selected_players = players
 	GameManager.selected_mode = mode
 	if random_mode:
-		GameManager.random_identity = mode == GameManager.MODE_CLASSIC_IDENTITY
+		GameManager.random_identity = mode != GameModes.FREE_FOR_ALL
 		GameManager.random_general = true
 		_start_game_5p()
 	else:

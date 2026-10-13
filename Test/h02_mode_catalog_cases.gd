@@ -23,7 +23,7 @@ func run(t):
 		roles[0] = "主公"
 		t.check(not GameModes.valid_opening(GameModes.FREE_FOR_ALL, count, roles), "H02a FFA cannot invent role or identity bonus")
 	for count in [6, 8, 10]:
-		t.check(GameModes.defined(GameModes.AMBITIOUS, count) and not GameModes.playable(GameModes.AMBITIOUS, count), "H02a ambitious rules known but H03/release gate remains closed")
+		t.check(GameModes.defined(GameModes.AMBITIOUS, count) and GameModes.playable(GameModes.AMBITIOUS, count) and GameModes.initializable(GameModes.AMBITIOUS, count), "H03e implemented ambitious mode has a matching release gate")
 	for count in [7, 9]:
 		t.check(GameModes.defined(GameModes.CLASSIC, count) and GameModes.roles(GameModes.CLASSIC, count).count("忠臣") == (count - 3) / 2 and GameModes.roles(GameModes.CLASSIC, count).count("反贼") == (count - 1) / 2, "H02-Q1 confirmed classic distribution")
 	for count in range(4, 11):
@@ -34,7 +34,7 @@ func run(t):
 		t.check(not GameModes.defined(value, 5), "H02a unknown mode cannot default to identity-free game")
 	t.check(GameModes.playable(GameModes.CLASSIC, 5) and GameModes.playable(GameModes.FREE_FOR_ALL, 2) and GameModes.playable(GameModes.FREE_FOR_ALL, 3), "H02a existing release gates retained")
 	var catalog = GameModes.catalog()
-	t.check(catalog.size() == 15 and catalog.filter(func(row): return row.playable).size() == 12, "H02 definition and release state counted independently")
+	t.check(catalog.size() == 15 and catalog.filter(func(row): return row.playable).size() == 15, "H03e all fifteen verified-scope configurations available")
 	catalog[0].roles.clear()
 	catalog[0].count = 99
 	t.check(GameModes.catalog()[0].count == 5 and GameModes.catalog()[0].roles.size() == 5, "H02a catalog snapshots are isolated")

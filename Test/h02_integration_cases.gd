@@ -93,15 +93,15 @@ func opening(t, entry):
 		var state = PlayerObservation.capture(game.players, game.players[viewer], 0, 0)
 		t.check(state.players.all(func(row): return row.identity == (game.players[row.seat].identity if row.seat == viewer or game.players[row.seat].identity_revealed else "")), "H02b own role known, other hidden roles private")
 	var victims: Array = []
-	if entry.mode == GameModes.CLASSIC:
-		victims = game.players.filter(func(p): return p.identity in ["反贼", "内奸"])
+	if entry.mode != GameModes.FREE_FOR_ALL:
+		victims = game.players.filter(func(p): return p.identity in ["反贼", "内奸", "奸雄"])
 	else:
 		victims = game.players.slice(1)
 	var wins: Array = []
 	game.game_over.connect(func(w): wins.append(w))
 	for victim in victims:
 		await game._deal_damage(null, victim, 20, EffectChain.DamageType.PHYSICAL)
-	t.check(game._game_over and wins == [("主公" if entry.mode == GameModes.CLASSIC else "玩家 1")], "H02c actual rescue/death pipeline reaches correct single terminal result")
+	t.check(game._game_over and wins == [("主公" if entry.mode != GameModes.FREE_FOR_ALL else "玩家 1")], "H02c actual rescue/death pipeline reaches correct single terminal result")
 	t.check(game._pending_card_actions.is_empty() and game._dying_contexts.is_empty(), "H02c death/terminal contexts clean")
 	game.queue_free()
 	await frames(t)
@@ -117,7 +117,7 @@ func menu(t):
 		var main = t.current_scene
 		MainMenu.random_mode = false
 		main._show_test()
-		var text = "%d人%s" % [entry.count, "标准" if entry.mode == GameModes.CLASSIC else "乱斗"]
+		var text = "%d人%s" % [entry.count, {GameModes.CLASSIC: "标准", GameModes.AMBITIOUS: "奸雄", GameModes.FREE_FOR_ALL: "乱斗"}[entry.mode]]
 		var buttons = main._page.get_children().filter(func(b): return b is Button and b.text == text and not b.is_queued_for_deletion())
 		t.check(buttons.size() == 1, "H02d actual menu exposes confirmed configuration")
 		buttons[0].pressed.emit()
@@ -154,7 +154,7 @@ func network_setup(t):
 	t.check(room._board.get_child_count() == 10 and room._board.get_children().any(func(b): return "技能尚未实装" in b.tooltip_text), "H02d actual LAN renders metadata generals without missing dictionary key")
 	t.check(session.lobby.mode == GameModes.FREE_FOR_ALL and session.latest.mode == session.mode, "H02d lobby and game carry explicit same mode")
 	session.close()
-	for pair in [[6, GameModes.CLASSIC], [6, GameModes.AMBITIOUS], [5, "unknown"]]:
+	for pair in [[6, GameModes.CLASSIC], [5, GameModes.AMBITIOUS], [5, "unknown"]]:
 		t.check(session.host("invalid", pair[0], 24567, pair[1]) == ERR_INVALID_PARAMETER and not session.connected, "H02d unimplemented/malformed modes cannot host")
 	room.queue_free()
 	session.queue_free()
@@ -214,7 +214,7 @@ func run(t):
 		game._game_over = true
 		game.queue_free()
 		await frames(t)
-	for pair in [[6, GameModes.CLASSIC], [6, GameModes.AMBITIOUS], [5, "unknown"]]:
+	for pair in [[6, GameModes.CLASSIC], [5, GameModes.AMBITIOUS], [5, "unknown"]]:
 		var game = fixture(t, pair[0], pair[1])
 		t.check(game.players.is_empty(), "H02b invalid configuration cannot become blank-role half-game")
 		game.queue_free()
