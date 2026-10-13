@@ -852,6 +852,11 @@ func start_game():
 		_update_debug(seat_desc)
 	_update_debug("距离规则：武器无攻击距离，4 个坐骑槽位自由搭配 +1/-1 马")
 	_update_debug("武器规则：每种武器/防具全场仅一张，装备过即永久占用")
+	turn_manager.live_seats = func():
+		var seats: Array[int] = []
+		for p in players:
+			if not p.is_dead(): seats.append(p.seat_index)
+		return seats
 	turn_manager.start_game()
 	game_started.emit()
 
@@ -880,7 +885,7 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 				return
 			_skipping_dead = true
 			var guard := 0
-			while guard < player_count and not players[turn_manager.current_player_idx].is_alive():
+			while guard < player_count and players[turn_manager.current_player_idx].is_dead():
 				turn_manager.next_turn()
 				guard += 1
 				if _game_over:

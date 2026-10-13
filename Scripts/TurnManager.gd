@@ -25,6 +25,17 @@ signal standalone_play_finished(frame: Dictionary)
 # 交互上下文代次：字段离开又回到同值也不能重新授权旧答复。
 # 不是规则中的轮数/回合次数，不参与技能次数刷新。
 var _context_revision: int = 0
+var rounds: RoundLedger
+var live_seats: Callable = Callable()
+var _extra_frames: Array[Dictionary] = []
+var _turn_sequence := 0
+# Explicit state ownership for suspended turns, not Player/general-card state.
+const TURN_FRAME_FIELDS = ["current_player_idx", "current_phase", "play_actor_idx", "turn_id", "phase_id",
+	"_turn_card_counts", "_strike_actors_this_turn", "_phase_skill_uses",
+	"skip_play_phase", "skip_judge_phase", "skip_play_discard_phase", "supply_shortage_active", "skip_full_turn",
+	"granted_judge_target_idx", "granted_draw_target_idx", "granted_judge_completed", "granted_draw_completed",
+	"granted_play_target_idx", "granted_play_completed", "_standalone_play_frame",
+	"waiting_responder_idx", "waiting_response_type"]
 # 规则回合/阶段标识与交互代次分开；WAITING暂停不创建新规则阶段。
 var turn_id: int = 0
 var phase_id: int = 0
@@ -154,6 +165,14 @@ func get_play_actor_idx() -> int:
 func start_game():
 	_context_revision += 1
 	current_player_idx = 0
+	_extra_frames.clear()
+	if live_seats.is_valid():
+		rounds = RoundLedger.new()
+		var ids: Array[int] = []
+		for seat in player_count: ids.append(seat)
+		assert(rounds.initialize(ids))
+		current_player_idx = rounds.begin_next(live_seats.call())
+		if current_player_idx < 0: return
 	_begin_turn()
 	_change_phase(Phase.START)
 
@@ -202,12 +221,40 @@ func advance_phase():
 
 func next_turn():
 	_context_revision += 1
-	current_player_idx = (current_player_idx + 1) % player_count
+	if not _extra_frames.is_empty():
+		rounds.finish()
+		var frame = _extra_frames.pop_back()
+		for field in TURN_FRAME_FIELDS: set(field, frame[field])
+		_context_revision += 1
+		if not _standalone_play_frame.is_empty(): _standalone_play_frame.revision = _context_revision
+		return
+	if rounds != null:
+		rounds.finish()
+		current_player_idx = rounds.begin_next(live_seats.call())
+		if current_player_idx < 0: return
+	else:
+		current_player_idx = (current_player_idx + 1) % player_count
 	_begin_turn()
 	_change_phase(Phase.START)
 
+# Mechanical safe-checkpoint API. Skill/effect callers own authorization and
+# continuation; no currently metadata-only general is enabled by this API.
+func begin_extra_turn(seat: int) -> bool:
+	if rounds == null or not live_seats.call().has(seat): return false
+	var frame: Dictionary = {}
+	for field in TURN_FRAME_FIELDS:
+		var value = get(field)
+		frame[field] = value if field == "_standalone_play_frame" else (value.duplicate(true) if value is Dictionary or value is Array else value)
+	if not rounds.begin_extra(seat): return false
+	_extra_frames.append(frame)
+	current_player_idx = seat
+	_begin_turn()
+	_change_phase(Phase.START)
+	return true
+
 func _begin_turn():
-	turn_id += 1
+	_turn_sequence = maxi(_turn_sequence, turn_id) + 1
+	turn_id = _turn_sequence
 	_reset_turn_counts()
 	skip_play_phase = false
 	skip_judge_phase = false
