@@ -86,13 +86,14 @@ func _show_test():
 		_add_btn("选将：随机武将（身份按玩法配置）", _toggle_mode)
 	else:
 		_add_btn("选将：自选武将（身份按玩法配置）", _toggle_mode)
-	_add_btn("2人乱斗", func(): _start_test_game(2, GameManager.MODE_FREE_FOR_ALL))
-	_add_btn("3人乱斗", func(): _start_test_game(3, GameManager.MODE_FREE_FOR_ALL))
+	for count in range(2, 11):
+		_add_btn("%d人乱斗" % count, _start_test_game.bind(count, GameModes.FREE_FOR_ALL))
 	_add_btn("2V2", func(): _not_implemented("2V2"))
-	_add_btn("5人标准", func(): _start_test_game(5, GameManager.MODE_CLASSIC_IDENTITY))
+	for count in [5, 7, 9]:
+		_add_btn("%d人标准" % count, _start_test_game.bind(count, GameModes.CLASSIC))
 	_add_btn("6人奸雄", func(): _not_implemented("6人奸雄"))
-	_add_btn("7人标准", func(): _not_implemented("7人标准"))
 	_add_btn("8人奸雄", func(): _not_implemented("8人奸雄"))
+	_add_btn("10人奸雄（H03后开放）", func(): _not_implemented("10人奸雄"))
 	_add_btn("← 返回", _show_start, "")
 
 # 切换随机武将 / 自选武将（重新渲染测试模式页）
@@ -102,7 +103,7 @@ func _toggle_mode():
 
 # 测试模式开始对局：随机模式直接进游戏；自选武将先进入武将选择页
 func _start_test_game(players: int, mode: String):
-	if _launch_pending or not is_inside_tree(): return
+	if _launch_pending or not is_inside_tree() or not GameModes.playable(mode, players): return
 	_pending_players = players
 	_pending_mode = mode
 	GameManager.selected_players = players

@@ -70,10 +70,10 @@ func run(t):
 	t.check(client.create_client("127.0.0.1", 24567) == OK, "PACE01b client fixture starts")
 	api.multiplayer_peer = client
 	session.connected = true
-	session._receive_lobby({"count": 2, "members": [], "playing": false, "match": "", "pace": AiActionPacer.Speed.FAST})
+	session._receive_lobby({"count": 2, "mode": GameModes.FREE_FOR_ALL, "members": [], "playing": false, "match": "", "pace": AiActionPacer.Speed.FAST})
 	t.check(session.pace == AiActionPacer.Speed.FAST and room.pace_label.text.contains("快"), "PACE01b client displays authority config instead of local preference")
 	t.check(room.body.get_node_or_null("HostPacePicker") == null and not session.set_pace(AiActionPacer.Speed.SLOW), "PACE01b client cannot configure room pace")
-	session._receive_lobby({"playing": false, "pace": 99})
+	session._receive_lobby({"count": 2, "mode": GameModes.FREE_FOR_ALL, "members": [], "playing": false, "match": "", "pace": 99})
 	t.check(session.pace == AiActionPacer.Speed.FAST, "PACE01b malformed lobby cannot overwrite config")
 	session.close()
 	var room_path = room.get_path()

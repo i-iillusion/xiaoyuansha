@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
     [string]$Script = 'Test/test_lan.gd',
-    [ValidateSet(2,3,5)][int]$Players = 2,
+    [ValidateRange(2,10)][int]$Players = 2,
+    [ValidateSet('','classic_identity','free_for_all')][string]$Mode = '',
     [switch]$DropCase
 )
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,7 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $info = [Diagnostics.ProcessStartInfo]::new()
 $info.FileName = $executable
 $info.Arguments = '--headless --disable-render-loop --path "' + $projectPath + '" --script "' + $Script + '" -- --players=' + $Players
+if ($Mode -ne '') { $info.Arguments += ' --mode=' + $Mode }
 if ($DropCase) { $info.Arguments += ' --drop-case' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true

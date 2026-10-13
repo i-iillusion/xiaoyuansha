@@ -154,5 +154,6 @@ func _run():
 	# the unchanged 60-second limit. All original victory assertions remain.
 	var scene_restart_cases = load("res://Test/scene_restart_cases.gd").new()
 	await scene_restart_cases.run(self)
+	await load("res://Test/h01_layout_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

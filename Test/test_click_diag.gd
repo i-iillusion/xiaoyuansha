@@ -13,6 +13,7 @@ func _run() -> void:
 	GameManager.random_identity = false
 	GameManager.random_general = false
 	GameManager.selected_players = 2
+	GameManager.selected_mode = GameManager.MODE_FREE_FOR_ALL
 	GameManager.selected_general = "凯文·罗本"
 	game = load("res://Scenes/Game.tscn").instantiate()
 	root.add_child(game)
@@ -47,6 +48,7 @@ func _run() -> void:
 
 	# ---- 用例 4：5人局面板也居中 ----
 	GameManager.selected_players = 5
+	GameManager.selected_mode = GameManager.MODE_CLASSIC_IDENTITY
 	game.queue_free()
 	await process_frame
 	game = load("res://Scenes/Game.tscn").instantiate()

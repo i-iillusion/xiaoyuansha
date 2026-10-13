@@ -12,7 +12,8 @@ var _commands: Dictionary = {}
 var _controls: Array = []
 var _labels: Array = []
 
-func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> void:
+func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
+	if game != null or not GameModes.initializable(mode, roster.size()): return false
 	viewport = SubViewport.new()
 	viewport.size = Vector2i(1280, 720)
 	viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
@@ -32,6 +33,7 @@ func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> void:
 	GameManager.selected_mode = old_mode
 	game.game_over.connect(func(result): winner = result)
 	game.start_game()
+	return game.players.size() == roster.size()
 
 func input_owner() -> int:
 	if game == null or game._game_over: return -1
@@ -126,6 +128,8 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	state["notice"] = game._log_label.text if seat == input_owner() else ""
 	state["history"] = game.action_history.packet(after_log)
 	state["pace"] = game.ai_pacer.speed
+	state["mode"] = game.game_mode
+	state["count"] = game.players.size()
 	state["targets"] = {}
 	state["kneel"] = ""
 	for token in _commands:

@@ -97,11 +97,16 @@ func _show_connection() -> void:
 	var port = _edit(body, "UDP端口", str(LanSession.DEFAULT_PORT))
 	port.max_length = 5
 	var mode = OptionButton.new()
-	for text in ["2人无身份乱斗", "3人无身份乱斗", "5人经典身份局"]: mode.add_item(text)
+	mode.name = "RoomModePicker"
+	var modes = GameModes.catalog().filter(func(row): return row.playable)
+	for entry in modes: mode.add_item("%d人%s" % [entry.count, GameModes.title(entry.mode)])
+	for index in modes.size():
+		if modes[index].mode == GameModes.FREE_FOR_ALL and modes[index].count == 2: mode.select(index)
 	body.add_child(mode)
 	_button(body, "创建房间（我是房主）", func():
 		_name = name_input.text
-		var error = session.host(_name, [2, 3, 5][mode.selected], int(port.text))
+		var entry = modes[mode.selected]
+		var error = session.host(_name, entry.count, int(port.text), entry.mode)
 		if error != OK: message.text = "创建失败：%s。检查端口是否被占用。" % error_string(error))
 	_button(body, "加入房间", func():
 		_name = name_input.text
@@ -124,7 +129,7 @@ func _lobby_changed(state: Dictionary) -> void:
 	_game_shape = ""
 	clock_label.text = ""
 	_clear()
-	_label(body, "房间：%d / %d 人 · %s" % [state.members.size(), state.count, "经典身份" if state.count == 5 else "无身份乱斗"])
+	_label(body, "房间：%d / %d 人 · %s" % [state.members.size(), state.count, GameModes.title(state.mode)])
 	if multiplayer.is_server():
 		var addresses: Array[String] = []
 		for ip in IP.get_local_addresses():
@@ -153,7 +158,7 @@ func _lobby_changed(state: Dictionary) -> void:
 		var start = _button(body, "全部准备后开始", func():
 			if not session.begin_match(): message.text = "请等人数齐全、每人准备，并确保非稻草人武将不重复。")
 		start.disabled = state.members.size() != state.count
-	_label(body, "当前开放8名已实现武将；随机选将不重复，稻草人仅作为可重复测试占位。\n中途断线将中断本局，不自动托管、不判任何人获胜；支持重新准备开局。")
+	_label(body, "8名武将已有技能；随机池不足时补手册资料将，其技能尚未实装。稻草人可重复测试。\n中途断线中断本局，不自动托管、不判胜负；支持重新准备。")
 
 func _send(token: String) -> void:
 	if token.is_empty() or token == _submitted: return
@@ -185,7 +190,7 @@ func _state_changed(state: Dictionary) -> void:
 	for player in state.players:
 		var text = "%d号 %s\n%s\n体力 %d/%d · 手牌 %d\n%s%s%s" % [int(player.seat) + 1, player.name, player.general,
 			player.hp, player.max_hp, player.hand_count, "已阵亡 " if player.dead else "", "横置 " if player.chained else "", "翻面 " if player.facedown else ""]
-		text += "\n身份：" + (player.identity if player.identity != "" else ("暗置" if state.players.size() == 5 else "无"))
+		text += "\n身份：" + (player.identity if player.identity != "" else ("暗置" if state.mode != GameModes.FREE_FOR_ALL else "无"))
 		var judgments: Array[String] = []
 		for sub in player.judgments: judgments.append(CardData.get_type_name(int(sub)))
 		text += "\n判定：" + ("、".join(judgments) if not judgments.is_empty() else "无")
@@ -203,7 +208,8 @@ func _state_changed(state: Dictionary) -> void:
 		for slot in player.equipment:
 			var sub = player.equipment[slot]
 			if sub != null: equipment.append(str(slot) + ": " + CardData.get_type_name(sub))
-		button.tooltip_text = "\n".join(equipment) + "\n" + "\n".join(GeneralData.GENERALS[player.general].skills)
+		var skill_text = "技能尚未实装（资料武将）" if GeneralData.get_implementation_status(player.general) == "metadata_only" else "\n".join(GeneralData.get_skills(player.general))
+		button.tooltip_text = "\n".join(equipment) + "\n" + skill_text
 	var cards: Array[String] = []
 	for card in state.own_cards:
 		cards.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))

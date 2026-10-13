@@ -7,13 +7,18 @@ const CLASSIC = "classic_identity"
 const AMBITIOUS = "ambitious_identity"
 const FREE_FOR_ALL = "free_for_all"
 const ROLE_ORDER = ["主公", "忠臣", "反贼", "内奸", "奸雄"]
-# Classic 7/9 remain unregistered pending H02-Q1; never infer them by
-# subtracting the ambitious role from the manual's table.
+# H02-Q1: confirmed classic 7/9 distributions; ambitious follows manual 5.1.3.
 const IDENTITY_COUNTS = {
-	CLASSIC: {5: [1, 1, 2, 1, 0]},
+	CLASSIC: {5: [1, 1, 2, 1, 0], 7: [1, 2, 3, 1, 0], 9: [1, 3, 4, 1, 0]},
 	AMBITIOUS: {6: [1, 1, 2, 1, 1], 8: [1, 2, 3, 1, 1], 10: [1, 3, 4, 1, 1]},
 }
-const OPEN = {CLASSIC: [5], FREE_FOR_ALL: [2, 3]}
+const OPEN = {CLASSIC: [5, 7, 9], FREE_FOR_ALL: [2, 3, 4, 5, 6, 7, 8, 9, 10]}
+
+static func initializable(mode: Variant, count: Variant) -> bool:
+	return defined(mode, count) and mode != AMBITIOUS # H03 resolution is not implemented.
+
+static func title(mode: String) -> String:
+	return {CLASSIC: "经典身份", AMBITIOUS: "奸雄身份（暂未开放）", FREE_FOR_ALL: "无身份乱斗"}.get(mode, "未知模式")
 
 static func defined(mode: Variant, count: Variant) -> bool:
 	if typeof(mode) != TYPE_STRING or not SeatLayout.valid_count(count): return false

@@ -5,12 +5,13 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-4"
+const PROTOCOL := "campus-lan-5"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
 	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊"]
 var members: Dictionary = {}
 var count := 2
+var mode := GameModes.FREE_FOR_ALL
 var pace: int = AiActionPacer.preferred_speed
 var bridge: LanGameBridge
 var lobby: Dictionary = {}
@@ -34,8 +35,10 @@ func _ready() -> void:
 	multiplayer.server_disconnected.connect(func(): _lost("房主已断开，本局中断；请重新加入房间。"))
 	multiplayer.peer_disconnected.connect(_peer_left)
 
-func host(player_name: String, size: int = 2, port: int = DEFAULT_PORT) -> Error:
-	if size not in [2, 3, 5] or port < 1024 or port > 65535: return ERR_INVALID_PARAMETER
+func host(player_name: String, size: int = 2, port: int = DEFAULT_PORT, selected_mode: String = "") -> Error:
+	# Legacy local callers retain their old default; wire/UI always carry explicit mode.
+	var chosen = selected_mode if selected_mode != "" else (GameModes.CLASSIC if size == 5 else GameModes.FREE_FOR_ALL)
+	if not GameModes.playable(chosen, size) or port < 1024 or port > 65535: return ERR_INVALID_PARAMETER
 	close()
 	var peer = ENetMultiplayerPeer.new()
 	var error = peer.create_server(port, size - 1)
@@ -43,6 +46,7 @@ func host(player_name: String, size: int = 2, port: int = DEFAULT_PORT) -> Error
 	multiplayer.multiplayer_peer = peer
 	connected = true
 	count = size
+	mode = chosen
 	pace = AiActionPacer.preferred_speed
 	port_number = port
 	nickname = _clean_name(player_name)
@@ -105,7 +109,7 @@ func set_pace(value: Variant) -> bool:
 	return true
 
 func begin_match() -> bool:
-	if not connected or not multiplayer.is_server() or bridge != null or members.size() != count: return false
+	if not connected or not multiplayer.is_server() or bridge != null or members.size() != count or not GameModes.playable(mode, count): return false
 	var used: Array[String] = []
 	for entry in members.values():
 		if not entry.ready: return false
@@ -117,6 +121,14 @@ func begin_match() -> bool:
 	var pool: Array[String] = []
 	for general in GENERALS:
 		if not used.has(general): pool.append(general)
+	var random_needed = members.values().filter(func(entry): return entry.general == "随机").size()
+	if random_needed > pool.size():
+		var supplements: Array[String] = []
+		for general in GeneralData.METADATA_ONLY_GENERALS:
+			if GeneralData.get_implementation_status(general) != "deferred" and not used.has(general): supplements.append(general)
+		supplements.shuffle()
+		pool.append_array(supplements.slice(0, random_needed - pool.size()))
+	if random_needed > pool.size(): return false
 	pool.shuffle()
 	var roster: Array[Dictionary] = []
 	for peer in members:
@@ -126,7 +138,11 @@ func begin_match() -> bool:
 	match_id = Crypto.new().generate_random_bytes(16).hex_encode()
 	bridge = LanGameBridge.new()
 	add_child(bridge)
-	bridge.start(roster, GameManager.MODE_CLASSIC_IDENTITY if count == 5 else GameManager.MODE_FREE_FOR_ALL, pace)
+	if not bridge.start(roster, mode, pace):
+		bridge.abort()
+		bridge = null
+		match_id = ""
+		return false
 	_last_sent.clear()
 	_log_sent.clear()
 	bridge.game.action_history.match_key = match_id
@@ -160,7 +176,7 @@ func return_to_lobby() -> void:
 	_publish_lobby()
 
 func _publish_lobby() -> void:
-	var state = {"count": count, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL, "match": match_id, "pace": pace}
+	var state = {"count": count, "mode": mode, "members": members.values().duplicate(true), "playing": bridge != null, "protocol": PROTOCOL, "match": match_id, "pace": pace}
 	_receive_lobby(state)
 	for peer in members:
 		if peer != 1 and _peer_ready(peer): _receive_lobby.rpc_id(peer, state)
@@ -174,7 +190,10 @@ func _peer_ready(peer: int) -> bool:
 
 @rpc("authority", "call_remote", "reliable")
 func _receive_lobby(state: Dictionary) -> void:
+	if not GameModes.playable(state.get("mode"), state.get("count")): return
 	if not AiActionPacer.valid_speed(state.get("pace", AiActionPacer.Speed.STANDARD)): return
+	mode = state.mode
+	count = state.count
 	pace = state.get("pace", AiActionPacer.Speed.STANDARD)
 	lobby = state
 	_view_match = str(state.get("match", ""))
@@ -198,6 +217,7 @@ func _publish_states() -> void:
 @rpc("authority", "call_remote", "reliable")
 func _receive_state(state: Dictionary) -> void:
 	if str(state.get("match", "")) != _view_match or _view_match.is_empty(): return
+	if state.get("mode") != mode or state.get("count") != count: return
 	if not AiActionPacer.valid_speed(state.get("pace", null)): return
 	if not history.receive(state.get("history", {})): return
 	pace = state.pace

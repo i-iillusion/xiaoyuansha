@@ -14,6 +14,7 @@ var exit_at := 0
 var driver = Driver.new()
 var child_logs: Array[String] = []
 var size := 2
+var mode := ""
 var actions := 0
 var drop_on_match := false
 var drop_case := false
@@ -35,6 +36,7 @@ func _run() -> void:
 		if arg == "--lan-child": child = true
 		if arg.begins_with("--port="): port = int(arg.trim_prefix("--port="))
 		if arg.begins_with("--players="): size = int(arg.trim_prefix("--players="))
+		if arg.begins_with("--mode="): mode = arg.trim_prefix("--mode=")
 		if arg == "--drop-on-match": drop_on_match = true
 		if arg == "--drop-case": drop_case = true
 	var holder = Node.new()
@@ -55,7 +57,7 @@ func _run() -> void:
 		check(session.join_room("127.0.0.1", "Remote", port) == OK, "client ENet start")
 	else:
 		port = 26000 + randi_range(0, 10000)
-		check(session.host("Host", size, port) == OK, "host ENet start")
+		check(session.host("Host", size, port, mode) == OK, "host ENet start")
 		check(session.set_pace(AiActionPacer.Speed.SLOW), "host configures slow pace before match")
 		session.choose("稻草人", true)
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.git/lan-tests"))
@@ -113,6 +115,8 @@ func _run() -> void:
 
 func _state(state: Dictionary) -> void:
 	if not pace_checked:
+		check(GameModes.playable(state.mode, state.count) and state.count == state.players.size(), "explicit supported mode matches wire player count")
+		check(state.players.all(func(p): return p.identity == "" if state.mode == GameModes.FREE_FOR_ALL else (p.identity != "" if p.seat == state.actor else (p.dead or p.identity in ["", "主公"]))), "observer identity values match declared mode without live hidden-role leakage")
 		check(state.pace == AiActionPacer.Speed.SLOW and session.pace == state.pace, "authority pace synchronized to real peer")
 		check(not session.set_pace(AiActionPacer.Speed.FAST), "live match rejects pace changes")
 		if child: check(session.bridge == null, "client does not run a rule bridge")

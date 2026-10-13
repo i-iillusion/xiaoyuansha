@@ -761,34 +761,33 @@ func _update_player_panel(panel: Control, player: Player):
 # ============================
 
 func start_game():
-	if not SeatLayout.valid_count(player_count) or not players.is_empty():
-		_update_debug("人数必须为2～10，且不能重复启动已有对局")
+	if not GameModes.initializable(game_mode, player_count) or not players.is_empty():
+		_update_debug("人数/模式尚未支持，或对局已经启动")
 		return
 	var assigned_generals: Array[String] = []
 	if lan_enabled:
 		if lan_roster.size() != player_count: return
 		for entry in lan_roster:
+			if typeof(entry.get("name")) != TYPE_STRING or typeof(entry.get("general")) != TYPE_STRING: return
 			assigned_generals.append(entry.general)
 	elif random_general:
 		assigned_generals = GeneralData.draw_unique_random_generals(player_count)
 		if assigned_generals.size() != player_count:
 			_update_debug("可用武将不足，无法在不重复武将的条件下开始 %d 人局" % player_count)
 			return
+	if not assigned_generals.is_empty():
+		for general in assigned_generals:
+			if not GeneralData.is_valid(general) or GeneralData.get_implementation_status(general) == "deferred" or (general != "稻草人" and assigned_generals.count(general) != 1): return
+	elif not GeneralData.is_valid(GameManager.selected_general) or GeneralData.get_implementation_status(GameManager.selected_general) == "deferred":
+		return
 	_clear_pending_determined_card()
-	# 身份分配：当前经典身份入口为五人标准；乱斗 2～10 人始终无身份。
+	# Explicit configured classic deck; FFA 2～10 always has empty identities.
 	action_history.reset(Crypto.new().generate_random_bytes(16).hex_encode())
 	_history_hp.clear()
 	_history_event("start", "—— 校园杀 %d 人局开始 ——" % player_count)
 	# random_identity = true 时身份牌洗牌随机分配（主公仍开局公开）
-	var identities: Array = []
-	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
-		var full_identities = ["主公", "忠臣", "反贼", "反贼", "内奸"]
-		identities = full_identities.duplicate()
-		if random_identity or lan_enabled:
-			identities.shuffle()
-	else:
-		identities.resize(player_count)
-		identities.fill("")
+	var identities = GameModes.roles(game_mode, player_count)
+	if random_identity or lan_enabled: identities.shuffle()
 
 	for i in player_count:
 		var p = Player.new()
@@ -804,9 +803,9 @@ func start_game():
 		else:
 			p.general_name = GameManager.selected_general if i == 0 else "稻草人"
 		p.max_hp = GeneralData.get_max_hp(p.general_name, player_count)
-		# Current five-player classic baseline: identity bonus is separate from
+		# Classic >=5 baseline: identity bonus is separate from
 		# the general snapshot, and must be set before Player._ready initializes HP.
-		if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5 and p.identity == "主公":
+		if game_mode == MODE_CLASSIC_IDENTITY and p.identity == "主公":
 			p.identity_max_hp_bonus = 1
 		p.gender = GeneralData.get_gender(p.general_name)
 		add_child(p)
@@ -9826,13 +9825,13 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 	return HandDiscardOutcome.ACTION_INVALIDATED
 
 # 按显式模式分派判胜；击杀者只影响身份局奖惩，不决定胜方。
-# 经典身份当前只支持五人标准；乱斗支持 2～10 人。奸雄与预大习特殊提交点继续隔离。
+# Classic 5/7/9 and FFA 2～10; ambitious declaration/conversion belongs to H03.
 func _check_win_condition(_victim: Player, _killer: Player):
 	# 任一统一濒死/死亡前上下文尚未提交时，身份局与乱斗都不得提前终局。
 	if _game_over or not _dying_contexts.is_empty():
 		return
 	var outcome: Dictionary = {}
-	if game_mode == MODE_CLASSIC_IDENTITY and player_count == 5:
+	if game_mode == MODE_CLASSIC_IDENTITY:
 		outcome = IdentityVictory.evaluate(players)
 	elif game_mode == MODE_FREE_FOR_ALL:
 		outcome = FreeForAllVictory.evaluate(players)
