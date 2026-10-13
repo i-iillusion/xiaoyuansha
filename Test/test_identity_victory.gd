@@ -205,5 +205,6 @@ func _run():
 	await load("res://Test/ai_pace_cases.gd").new().run(self)
 	await load("res://Test/ai_pace_settings_cases.gd").new().run(self)
 	await load("res://Test/h01_layout_cases.gd").new().run(self)
+	await load("res://Test/h02_mode_catalog_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
