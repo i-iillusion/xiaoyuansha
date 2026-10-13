@@ -22,6 +22,8 @@ var interrupted := false
 var saved_game: GameManager
 var history_digest := ""
 var pace_checked := false
+var space_case := false
+var shifted_seen := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -39,6 +41,7 @@ func _run() -> void:
 		if arg.begins_with("--mode="): mode = arg.trim_prefix("--mode=")
 		if arg == "--drop-on-match": drop_on_match = true
 		if arg == "--drop-case": drop_case = true
+		if arg == "--space-case": space_case = true
 	var holder = Node.new()
 	holder.name = "LanHarness"
 	root.add_child(holder)
@@ -67,6 +70,7 @@ func _run() -> void:
 			var args = PackedStringArray(["--headless", "--disable-render-loop", "--log-file", child_log, "--path", ProjectSettings.globalize_path("res://"),
 				"--script", "res://Test/test_lan_network.gd", "--", "--lan-child", "--port=" + str(port)])
 			if drop_case: args.append("--drop-on-match")
+			if space_case: args.append("--space-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -75,6 +79,13 @@ func _run() -> void:
 			if session.begin_match():
 				started = true
 				check(true, "%d ready humans started" % size)
+				if space_case:
+					# Prepared legal spatial fixture; the actual skill window is tested
+					# independently. Do not alter fixed rows, roles, health or input.
+					var game = session.bridge.game
+					check(game.turn_manager.rounds.relocate_before(size-1,1), "authorized shifted-space fixture prepared")
+					game._layout_player_panels()
+					check(game.players.map(func(p): return p.seat_index) == range(size), "spatial movement never reorders fixed player rows")
 				if drop_case:
 					saved_game = session.bridge.game
 					saved_game._rps_choice(saved_game.players[1], "disconnect case")
@@ -91,6 +102,7 @@ func _run() -> void:
 	elif not drop_on_match:
 		check(final_seen, "full network game reaches real victory")
 		check(actions > 0, "local peer submitted real UI actions")
+		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 	if not child and final_seen:
 		var old_match = session.match_id
 		session.return_to_lobby()
@@ -114,7 +126,12 @@ func _run() -> void:
 	quit(0 if failures == 0 else 1)
 
 func _state(state: Dictionary) -> void:
+	if space_case:
+		var expected: Array = [0, int(state.count)-1]
+		for seat in range(1,int(state.count)-1): expected.append(seat)
+		if state.get("space",[]) == expected: shifted_seen = true
 	if not pace_checked:
+		check(state.space.size() == state.count and state.space.all(func(seat): return state.space.count(seat) == 1 and state.players[seat].seat == seat) and state.round >= 1, "wire space and round preserve permanent row IDs")
 		check(GameModes.playable(state.mode, state.count) and state.count == state.players.size(), "explicit supported mode matches wire player count")
 		check(state.players.all(func(p): return p.identity == "" if state.mode == GameModes.FREE_FOR_ALL else (p.identity != "" if p.seat == state.actor else (p.dead or p.identity in ["", "主公"]))), "observer identity values match declared mode without live hidden-role leakage")
 		check(state.pace == AiActionPacer.Speed.SLOW and session.pace == state.pace, "authority pace synchronized to real peer")

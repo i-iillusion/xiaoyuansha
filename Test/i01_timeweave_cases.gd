@@ -72,6 +72,25 @@ func run(t):
 		t.check(starts == ([4] if action == "accept" else ([0] if action == "timeout" else [])), "I01d timeout is no insertion, technical close never starts a turn")
 		var state = bridge.snapshot(1)
 		t.check(state.space.size() == 5 and state.round == 1 and state.players[4].seat == 4, "I01d spatial snapshot separate from fixed player rows")
+		var receiver = LanSession.new()
+		t.root.add_child(receiver)
+		receiver.mode = state.mode
+		receiver.count = state.count
+		receiver._view_match = state.history.match
+		receiver.history.reset(state.history.match)
+		state.match = state.history.match
+		receiver._receive_state(state)
+		t.check(not receiver.latest.is_empty(), "I01e valid wire spatial state accepted")
+		var malformed = state.duplicate(true)
+		malformed.space[0] = malformed.space[1]
+		receiver.latest = {}
+		receiver._receive_state(malformed)
+		t.check(receiver.latest.is_empty(), "I01e duplicate spatial ID rejected before consuming history")
+		malformed = state.duplicate(true)
+		malformed.round = 0
+		receiver._receive_state(malformed)
+		t.check(receiver.latest.is_empty(), "I01e invalid round rejected")
+		receiver.queue_free()
 		var room = load("res://Scenes/LanRoom.tscn").instantiate()
 		t.root.add_child(room)
 		room._state_changed(state)

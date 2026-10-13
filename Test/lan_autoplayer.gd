@@ -21,7 +21,9 @@ func choose(state: Dictionary) -> String:
 				var dueling = "决斗" in state.get("notice", "")
 				var striking = "【杀】" in state.get("notice", "")
 				if dueling or striking:
-					var alive = state.players.filter(func(player): return not player.dead)
+					var alive: Array = []
+					for seat in state.get("space", range(state.players.size())):
+						if not state.players[seat].dead: alive.append(state.players[seat])
 					var actor_index = alive.find(state.players.filter(func(player): return player.seat == state.actor)[0])
 					candidates = candidates.filter(func(player):
 						var diff = absi(alive.find(player) - actor_index)

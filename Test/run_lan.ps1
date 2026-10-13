@@ -3,7 +3,8 @@ param(
     [string]$Script = 'Test/test_lan.gd',
     [ValidateRange(2,10)][int]$Players = 2,
     [ValidateSet('','classic_identity','ambitious_identity','free_for_all')][string]$Mode = '',
-    [switch]$DropCase
+    [switch]$DropCase,
+    [switch]$SpaceCase
 )
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path $PSScriptRoot -Parent
@@ -15,6 +16,7 @@ $info.FileName = $executable
 $info.Arguments = '--headless --disable-render-loop --path "' + $projectPath + '" --script "' + $Script + '" -- --players=' + $Players
 if ($Mode -ne '') { $info.Arguments += ' --mode=' + $Mode }
 if ($DropCase) { $info.Arguments += ' --drop-case' }
+if ($SpaceCase) { $info.Arguments += ' --space-case' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $true
