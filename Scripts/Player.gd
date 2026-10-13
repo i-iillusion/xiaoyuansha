@@ -190,6 +190,11 @@ func is_dying() -> bool:
 func is_dead() -> bool:
 	return life_state == LifeState.DEAD
 
+# Identity-level qualification, not a cached general-card skill or snapshot.
+# Future lord skills must combine this with their own general/skill conditions.
+func has_lord_skill_authority() -> bool:
+	return identity == "主公" and not is_dead()
+
 func mark_dead():
 	life_state = LifeState.DEAD
 
