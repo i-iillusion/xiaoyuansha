@@ -10,6 +10,7 @@ var _game_shape := ""
 var _submitted := ""
 var _name := "玩家"
 var _history_panel: ActionHistoryPanel
+var _board: GridContainer
 
 func _ready() -> void:
 	session = LanSession.new()
@@ -50,9 +51,11 @@ func _ready() -> void:
 	body.add_theme_constant_override("separation", 12)
 	scroll.add_child(body)
 	_show_connection()
+	get_viewport().size_changed.connect(_resize_board)
 	print("[LAN] room ready · ", LanSession.PROTOCOL)
 
 func _clear() -> void:
+	_board = null
 	for child in body.get_children():
 		body.remove_child(child)
 		child.queue_free()
@@ -175,7 +178,9 @@ func _state_changed(state: Dictionary) -> void:
 	if not state.ended:
 		_label(body, "当前行动：%d号 · 当前窗口：%d号" % [int(state.turn) + 1, int(state.owner) + 1])
 	var board = GridContainer.new()
-	board.columns = mini(5, state.players.size())
+	board.name = "PlayerBoard"
+	_board = board
+	board.columns = SeatLayout.columns(state.players.size(), get_viewport_rect().size.x - 36)
 	body.add_child(board)
 	for player in state.players:
 		var text = "%d号 %s\n%s\n体力 %d/%d · 手牌 %d\n%s%s%s" % [int(player.seat) + 1, player.name, player.general,
@@ -190,6 +195,7 @@ func _state_changed(state: Dictionary) -> void:
 		if int(player.wine) > 0: text += "\n酒：%d" % player.wine
 		var token: String = state.targets.get(str(player.seat), "")
 		var button = _button(board, text, func(): _send(token))
+		button.set_meta("seat", int(player.seat))
 		button.custom_minimum_size = Vector2(210, 140)
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.disabled = token.is_empty()
@@ -220,6 +226,10 @@ func _state_changed(state: Dictionary) -> void:
 		button.disabled = action.disabled
 		button.tooltip_text = action.hint
 		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+func _resize_board() -> void:
+	if is_instance_valid(_board) and not _board.is_queued_for_deletion():
+		_board.columns = SeatLayout.columns(_board.get_child_count(), get_viewport_rect().size.x - 36)
 
 func _leave() -> void:
 	session.close()

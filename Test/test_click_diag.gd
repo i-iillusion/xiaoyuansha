@@ -20,11 +20,11 @@ func _run() -> void:
 		await process_frame
 
 	# ---- 用例 1：位置容器 mouse_filter = IGNORE（空容器不拦点击）----
-	_check(game._pos_left.mouse_filter == Control.MOUSE_FILTER_IGNORE, "PlayerPosLeft IGNORE")
-	_check(game._pos_top_left.mouse_filter == Control.MOUSE_FILTER_IGNORE, "PlayerPosTopLeft IGNORE")
-	_check(game._pos_top_right.mouse_filter == Control.MOUSE_FILTER_IGNORE, "PlayerPosTopRight IGNORE")
-	_check(game._pos_right.mouse_filter == Control.MOUSE_FILTER_IGNORE, "PlayerPosRight IGNORE")
-	_check(game._pos_top.mouse_filter == Control.MOUSE_FILTER_IGNORE, "PlayerPosTop IGNORE")
+	_check(game._seat_board.mouse_filter == Control.MOUSE_FILTER_IGNORE, "Dynamic board IGNORE")
+	_check(game._player_positions.all(func(slot): return slot.mouse_filter == Control.MOUSE_FILTER_IGNORE), "All dynamic slots IGNORE")
+	_check(game._player_positions.size() == game.players.size() - 1, "One slot per opponent")
+	_check(game._player_positions[0].get_meta("seat") == 1, "Slot keeps fixed seat")
+	_check(game._player_positions[0].get_parent() == game._seat_board, "Slot belongs to dynamic board")
 
 	# ---- 用例 2：1V1 对方面板在容器内居中（锚点 0.5 + 偏移）----
 	var panel = game._other_player_panels[0]

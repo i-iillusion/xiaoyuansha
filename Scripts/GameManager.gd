@@ -121,12 +121,8 @@ const BANK_SECONDS: float = 30.0
 @onready var _quick_play_container: VBoxContainer = $UI/BottomBar/QuickPlay
 @onready var _detail_popup_root: ColorRect = $UI/DetailPopup
 
-# 四周玩家位置锚点
-@onready var _pos_left: Control = $UI/PlayerPosLeft
-@onready var _pos_top_left: Control = $UI/PlayerPosTopLeft
-@onready var _pos_top_right: Control = $UI/PlayerPosTopRight
-@onready var _pos_right: Control = $UI/PlayerPosRight
-@onready var _pos_top: Control = $UI/PlayerPosTop
+# Dynamic presentation slots; fixed player IDs remain independent of layout.
+@onready var _seat_board: Control = $UI/SeatBoard
 var _player_positions: Array[Control] = []
 
 # --- 自建 UI 元素 ---
@@ -433,7 +429,7 @@ const RPS_LOSE = -1
 const RPS_INVALID = -2 # 与石头0/布1/剪刀2及胜负1/0/-1均不同；只表示动作失效。
 
 func _ready():
-	# 主菜单选择的玩法与人数（当前入口：2/3 人乱斗、5 人标准身份局）。
+	# Model/layout accepts 2～10; public modes remain gated by the menu/H02.
 	player_count = GameManager.selected_players
 	game_mode = GameManager.selected_mode
 	deck = Deck.new()
@@ -446,11 +442,8 @@ func _ready():
 	turn_manager.turn_ended.connect(_on_turn_ended)
 	game_over.connect(_on_game_over)
 
-	_player_positions = [_pos_left, _pos_top_left, _pos_top_right, _pos_right]
-	# 位置容器只是锚点（不拦鼠标，只有面板接收点击）——避免空容器覆盖拦截点击
-	for p in _player_positions:
-		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_pos_top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_seat_board.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_seat_board.resized.connect(_layout_player_panels)
 
 	_create_ui()
 
@@ -466,9 +459,9 @@ func _create_ui():
 	if not lan_enabled:
 		_history_panel = ActionHistoryPanel.new()
 		_history_panel.z_index = 50 # Above board, below mandatory rule overlays.
-		_history_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		_history_panel.offset_left = -440
-		_history_panel.offset_right = -16
+		_history_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+		_history_panel.offset_left = -210
+		_history_panel.offset_right = 210
 		_history_panel.offset_top = 130
 		$UI.add_child(_history_panel)
 		_history_panel.bind(action_history)
@@ -564,7 +557,8 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 
 	var name_label = Label.new()
 	name_label.position = Vector2(64, 2)
-	name_label.size = Vector2(140, 22)
+	name_label.size = Vector2(136, 22)
+	name_label.clip_text = true
 	name_label.add_theme_font_size_override("font_size", 13)
 	name_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.85))
 	name_label.mouse_filter = 2
@@ -572,7 +566,7 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 
 	var hp_label = Label.new()
 	hp_label.position = Vector2(64, 26)
-	hp_label.size = Vector2(140, 20)
+	hp_label.size = Vector2(136, 20)
 	hp_label.add_theme_font_size_override("font_size", 14)
 	hp_label.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0))
 	hp_label.mouse_filter = 2
@@ -580,7 +574,7 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 
 	var hand_label = Label.new()
 	hand_label.position = Vector2(64, 48)
-	hand_label.size = Vector2(140, 20)
+	hand_label.size = Vector2(136, 20)
 	hand_label.add_theme_font_size_override("font_size", 13)
 	hand_label.add_theme_color_override("font_color", Color(0.9, 0.8, 0.6))
 	hand_label.mouse_filter = 2
@@ -588,7 +582,7 @@ func _create_player_info_panel(parent: Node, player: Player) -> Control:
 
 	var identity_label = Label.new()
 	identity_label.position = Vector2(64, 68)
-	identity_label.size = Vector2(140, 20)
+	identity_label.size = Vector2(136, 20)
 	identity_label.add_theme_font_size_override("font_size", 11)
 	identity_label.add_theme_color_override("font_color", Color(0.8, 0.6, 0.4))
 	identity_label.mouse_filter = 2
@@ -696,6 +690,7 @@ func _update_player_panel(panel: Control, player: Player):
 	var hp_bar: ColorRect = panel.get_meta("hp_bar")
 
 	name_label.text = "%s · %s" % [player.player_name, player.general_name]
+	panel.tooltip_text = name_label.text
 	hp_label.text = "❤ %d/%d" % [player.hp, player.max_hp]
 	hand_label.text = "手牌：%d 张" % player.hand_size()
 	# 本人始终知道自己的身份；他人只显示已公开身份。
@@ -722,7 +717,7 @@ func _update_player_panel(panel: Control, player: Player):
 	# 阵亡：面板置灰
 	panel.modulate = Color(0.45, 0.45, 0.45, 1) if not player.is_alive() else Color.WHITE
 
-	var ratio = float(player.hp) / float(player.max_hp)
+	var ratio = clampf(float(player.hp) / float(maxi(1, player.max_hp)), 0, 1)
 	hp_bar.size.x = 120 * ratio
 	if ratio > 0.5:
 		hp_bar.color = Color(0.25, 0.55, 0.25)
@@ -766,6 +761,9 @@ func _update_player_panel(panel: Control, player: Player):
 # ============================
 
 func start_game():
+	if not SeatLayout.valid_count(player_count) or not players.is_empty():
+		_update_debug("人数必须为2～10，且不能重复启动已有对局")
+		return
 	var assigned_generals: Array[String] = []
 	if lan_enabled:
 		if lan_roster.size() != player_count: return
@@ -826,11 +824,16 @@ func start_game():
 	for i in range(player_count - 1):
 		var seat = i + 1
 		if seat < players.size():
-			# 2 人乱斗：对方在正上方（玩家对面）；多人按四周布局
-			var pos_node = _pos_top if player_count == 2 else _player_positions[i]
+			var pos_node = Control.new()
+			pos_node.name = "Seat%d" % seat
+			pos_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			pos_node.set_meta("seat", seat)
+			_seat_board.add_child(pos_node)
+			_player_positions.append(pos_node)
 			var panel = _create_player_info_panel(pos_node, players[seat])
 			_update_player_panel(panel, players[seat])
 			_other_player_panels.append(panel)
+	_layout_player_panels()
 
 	_sync_all_ui()
 	_update_debug("—— 校园杀 %d 人局开始 ——" % player_count)
@@ -10689,12 +10692,20 @@ func _show_toast(msg: String):
 #  UI 同步
 # ============================
 
+func _layout_player_panels():
+	if _seat_board == null: return
+	var geometry = SeatLayout.rectangles(player_count, _seat_board.size)
+	for slot in _player_positions:
+		var rectangle: Rect2 = geometry.get(slot.get_meta("seat"), Rect2())
+		slot.position = rectangle.position
+		slot.size = rectangle.size
+
 func _sync_all_ui():
 	# 【觉醒】（史蒂芬·彼特先斯）：手牌为 0 时立即自动觉醒（觉醒技）
 	_check_awaken_trigger()
 	_update_player_panel(_self_info_panel, _local_player())
 
-	for i in range(4):
+	for i in _other_player_panels.size():
 		var seat = i + 1
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])

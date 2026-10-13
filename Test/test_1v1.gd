@@ -34,7 +34,7 @@ func _run() -> void:
 	var p1_identity: Label = p1_panel.get_meta("identity_label")
 	_check(p1_identity.text == "", "对方面板不显示身份: '" + p1_identity.text + "'")
 	# 对方在正上方（玩家对面）
-	_check(p1_panel.get_parent().name == "PlayerPosTop", "2 人乱斗对方面板在正上方: " + p1_panel.get_parent().name)
+	_check(is_equal_approx(p1_panel.get_parent().get_rect().get_center().x, game._seat_board.size.x / 2) and p1_panel.get_parent().position.y < 30, "2 人乱斗对方面板在正上方")
 
 	# 详情弹窗显示「身份：无」
 	var popup = PlayerDetailPopup.create(root, game.players[0])
