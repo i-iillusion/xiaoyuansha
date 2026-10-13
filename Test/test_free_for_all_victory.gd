@@ -155,5 +155,6 @@ func _run():
 	var scene_restart_cases = load("res://Test/scene_restart_cases.gd").new()
 	await scene_restart_cases.run(self)
 	await load("res://Test/h01_layout_cases.gd").new().run(self)
+	await load("res://Test/i01_round_ledger_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
