@@ -211,6 +211,20 @@ func _state_changed(state: Dictionary) -> void:
 			if sub != null: equipment.append(str(slot) + ": " + CardData.get_type_name(sub))
 		var skill_text = "技能尚未实装（资料武将）" if GeneralData.get_implementation_status(player.general) == "metadata_only" else "\n".join(GeneralData.get_skills(player.general))
 		button.tooltip_text = "\n".join(equipment) + "\n" + skill_text
+	var units: Array = state.get("units", [])
+	if not units.is_empty():
+		var unit_board = GridContainer.new()
+		unit_board.name = "UnitBoard"
+		unit_board.columns = SeatLayout.columns(units.size(), get_viewport_rect().size.x - 36)
+		body.add_child(unit_board)
+		for unit in units:
+			var text = "%s · 召唤者%d号\n体力%d/%d · 手牌%d" % [unit.name, unit.summoner + 1, unit.hp, unit.max_hp, unit.hand_count]
+			if unit.controller >= 0: text += "\n操作控制者%d号" % [unit.controller + 1]
+			if unit.dying: text += "\n濒死中"
+			var own: Array[String] = []
+			for card in unit.own_cards: own.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))
+			if not own.is_empty(): text += "\n你控制的单位手牌：" + "、".join(own)
+			_label(unit_board, text).set_meta("unit", unit.id)
 	var cards: Array[String] = []
 	for card in state.own_cards:
 		cards.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))

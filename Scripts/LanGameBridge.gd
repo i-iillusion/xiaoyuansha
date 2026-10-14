@@ -83,6 +83,7 @@ func _refresh_commands() -> void:
 	for button in buttons:
 		shape.append([button.get_instance_id(), button.text, button.disabled, button.button_pressed])
 	shape.append(labels)
+	shape.append(UnitObservation.capture(game.unit_registry, game.players[input_owner()] if input_owner() >= 0 else null))
 	for p in game.players:
 		shape.append([p.hp, p.hand_size(), p.kneeling, p.kneel_used, p.is_dead()])
 	var signature = var_to_str(shape)
@@ -132,6 +133,7 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	state["count"] = game.players.size()
 	state["space"] = game.spatial_players().map(func(player): return player.seat_index)
 	state["round"] = game.turn_manager.rounds.round_id if game.turn_manager.rounds != null else 0
+	state["units"] = UnitObservation.capture(game.unit_registry, p)
 	state["targets"] = {}
 	state["kneel"] = ""
 	for token in _commands:

@@ -67,14 +67,21 @@ var _seat_banks: Dictionary = {}
 var _bank_owner := 0
 
 func _is_human(p: Player) -> bool:
+	if p != null and not unit_registry.id_for(p).is_empty():
+		p = unit_registry.controller(unit_registry.id_for(p))
 	return p != null and (lan_enabled or p.seat_index == 0)
 
 func _local_player() -> Player:
 	return players[_input_seat if lan_enabled else 0]
 
 func _set_input_player(p: Player) -> void:
+	if p != null and not unit_registry.id_for(p).is_empty():
+		p = unit_registry.controller(unit_registry.id_for(p))
 	if lan_enabled and p != null and players.has(p):
 		_input_seat = p.seat_index
+
+func _exit_tree() -> void:
+	unit_registry.reset() # Invalidate retained unit handles before Nodes disappear.
 
 func _select_time_bank(seat: int) -> void:
 	if not lan_enabled or seat == _bank_owner: return

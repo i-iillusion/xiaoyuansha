@@ -32,8 +32,13 @@ func register(kind: int, body: Player, summoner: Player) -> String:
 	if not is_instance_valid(body) or not is_instance_valid(summoner): return ""
 	if not _players.has(summoner) or summoner.is_dead() or _players.has(body) or body.is_dead(): return ""
 	if body.identity != "" or body.identity_max_hp_bonus != 0: return ""
+	var mountains := 0
 	for entry in _entries.values():
 		if entry.body == body: return "" # Removed bodies cannot be re-registered.
+		if entry.removed or not is_instance_valid(entry.body) or entry.body.is_dead(): continue
+		if kind == Kind.FIRE_DRAGON and entry.kind == kind and entry.summoner == summoner: return ""
+		if entry.kind == Kind.MOUNTAIN: mountains += 1
+	if kind == Kind.MOUNTAIN and mountains >= 2: return ""
 	_serial += 1
 	var id = "unit:%d:%d" % [_epoch, _serial]
 	_entries[id] = {"id": id, "kind": kind, "body": body, "summoner": summoner,
