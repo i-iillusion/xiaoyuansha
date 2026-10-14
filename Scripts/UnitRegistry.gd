@@ -10,6 +10,8 @@ var _entries: Dictionary = {}
 var _serial := 0
 var _epoch := 0
 
+func generation() -> int: return _epoch
+
 func initialize(roster: Array[Player]) -> bool:
 	if not _players.is_empty() or roster.is_empty(): return false
 	var ids: Array[int] = []
