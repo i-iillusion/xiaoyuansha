@@ -24,7 +24,7 @@ func run(t):
 		t.check(registry.controller(dragon_id) == roster[0] and registry.controller(mountain_id) == null, "I02b summoner attachment differs from intelligent control")
 		t.check(registry.turn_units() == [dragon], "I02b only intelligent unit has turn eligibility")
 		t.check(registry.strike_unit_candidates() == [dragon, mountain] and registry.character_unit_candidates() == [dragon], "I02b target categories distinct, not final legality")
-		for query in [registry.rps_participants, registry.science_count_participants, registry.yudaxi_candidates, registry.victory_roster]:
+		for query in [registry.zhuangsha_count_participants, registry.science_count_participants, registry.yudaxi_candidates, registry.victory_roster]:
 			t.check(query.call() == roster, "I02b explicit count/yudaxi/victory sets exclude units")
 		t.check(registry.register(99, dragon, roster[0]).is_empty() and registry.register(UnitRegistry.Kind.FIRE_DRAGON, dragon, roster[0]).is_empty(), "I02b unsupported and duplicate registration rejected")
 		t.check(registry.register(UnitRegistry.Kind.FIRE_DRAGON, roster[1], roster[0]).is_empty(), "I02b player cannot become a registered unit")

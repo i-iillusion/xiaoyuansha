@@ -65,7 +65,7 @@ func controller(id: String) -> Player:
 	return value.controller
 
 # Explicitly named query sets; do not reuse a single generic "all actors" list.
-func rps_participants() -> Array[Player]: return _living_players()
+func zhuangsha_count_participants() -> Array[Player]: return _living_players()
 func science_count_participants() -> Array[Player]: return _living_players()
 func yudaxi_candidates() -> Array[Player]: return _living_players()
 func victory_roster() -> Array[Player]: return players() # Dead player rows matter.
