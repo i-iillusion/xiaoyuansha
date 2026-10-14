@@ -172,7 +172,9 @@ func start_game():
 		rounds = RoundLedger.new()
 		var ids: Array[int] = []
 		for seat in player_count: ids.append(seat)
-		assert(rounds.initialize(ids))
+		var rounds_ready = rounds.initialize(ids)
+		assert(rounds_ready)
+		if not rounds_ready: return
 		current_player_idx = rounds.begin_next(live_seats.call())
 		if current_player_idx < 0: return
 	await _enter_ordinary()

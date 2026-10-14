@@ -81,6 +81,7 @@ func _set_input_player(p: Player) -> void:
 		_input_seat = p.seat_index
 
 func _exit_tree() -> void:
+	fire_dragon_state.reset()
 	unit_registry.reset() # Invalidate retained unit handles before Nodes disappear.
 
 func _select_time_bank(seat: int) -> void:
@@ -110,6 +111,7 @@ static var random_general: bool = true
 
 var players: Array[Player] = []
 var unit_registry := UnitRegistry.new()
+var fire_dragon_state := FireDragonState.new()
 var deck: Deck
 var turn_manager: TurnManager
 # 武器/防具唯一性管理（每种装备全场仅一张，装备过即永久占用）
@@ -831,10 +833,21 @@ func start_game():
 		# 【觉醒】监听手牌变化（史蒂芬·彼特先斯：手牌为 0 时立即觉醒）
 		p.hand_updated.connect(_on_hand_updated.bind(p))
 
-	assert(unit_registry.initialize(players), "Invalid unit player roster")
+	# Initialize outside assert: gameplay must not depend on assertion evaluation.
+	var units_ready = unit_registry.initialize(players)
+	var dragon_state_ready = units_ready and fire_dragon_state.initialize(unit_registry)
+	assert(dragon_state_ready, "Invalid unit/fire dragon state")
+	if not dragon_state_ready: return
+	for p in players:
+		if fire_dragon_state.grant_start_egg(p):
+			# _ready captured before registry initialization. Recapture now, before
+			# dealing any initial cards/awakening, so Sage restores the initial egg.
+			p.capture_game_start_state()
 	if game_mode == MODE_AMBITIOUS_IDENTITY:
 		_ambitious_state = AmbitiousIdentityState.new()
-		assert(_ambitious_state.initialize(players), "Invalid ambitious opening")
+		var ambitious_ready = _ambitious_state.initialize(players)
+		assert(ambitious_ready, "Invalid ambitious opening")
+		if not ambitious_ready: return
 	for p in players:
 		_draw_blank_cards(p, 4)
 
@@ -908,10 +921,12 @@ func _retire_final_unit(body: Player) -> bool:
 	return true
 
 func _reset_unit_registry() -> void:
+	fire_dragon_state.reset()
 	for body in unit_registry.all_bodies():
 		if body.get_parent() == self and not body.is_queued_for_deletion(): body.queue_free()
 	unit_registry.reset()
 	if not players.is_empty(): unit_registry.initialize(players)
+	if not players.is_empty(): fire_dragon_state.initialize(unit_registry)
 
 # ---- 阶段响应 ----
 
