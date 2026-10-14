@@ -336,14 +336,16 @@ func equip_hidden_card_to_slot(slot: String, card: CardBase) -> bool:
 	return true
 
 # 卸下指定槽位装备（同时重置对应属性），返回原始卡牌实例。
-func remove_equipment(slot: String) -> CardBase:
+func remove_equipment(slot: String, loss_effects: bool = true) -> CardBase:
 	var sub = equipment.get(slot, -1)
 	var card = get_hidden_equipment_card(slot) if sub == CardData.CardSubType.HIDDEN_EQUIPMENT else get_equipment_card(slot)
 	_save_equipment_persistent_state(card)
 	equipment.erase(slot)
 	equipment_cards.erase(slot)
 	# 【白银狮子】：当你失去装备区里的白银狮子时，回复 1 点体力（上限内，死亡角色不回复）
-	if sub == CardData.CardSubType.SILVER_LION and is_alive():
+	# I02-Q1: attached disappearance removes resources/state, not loss effects.
+	# Any future equipment-loss trigger must honor this flag as well.
+	if loss_effects and sub == CardData.CardSubType.SILVER_LION and is_alive():
 		heal(1)
 	match sub:
 		CardData.CardSubType.MOUNT_PLUS:

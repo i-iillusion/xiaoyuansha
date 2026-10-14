@@ -26,6 +26,9 @@ signal game_started()
 signal game_over(winner_identity: String)
 signal card_action_committed(event: CardActionEvent)
 signal card_action_completed(event: CardActionEvent)
+signal unit_registered(id: String)
+signal unit_removed(id: String, reason: int)
+signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
 var action_history := ActionHistory.new()
@@ -99,6 +102,7 @@ static var random_identity: bool = true
 static var random_general: bool = true
 
 var players: Array[Player] = []
+var unit_registry := UnitRegistry.new()
 var deck: Deck
 var turn_manager: TurnManager
 # 武器/防具唯一性管理（每种装备全场仅一张，装备过即永久占用）
@@ -820,6 +824,7 @@ func start_game():
 		# 【觉醒】监听手牌变化（史蒂芬·彼特先斯：手牌为 0 时立即觉醒）
 		p.hand_updated.connect(_on_hand_updated.bind(p))
 
+	assert(unit_registry.initialize(players), "Invalid unit player roster")
 	if game_mode == MODE_AMBITIOUS_IDENTITY:
 		_ambitious_state = AmbitiousIdentityState.new()
 		assert(_ambitious_state.initialize(players), "Invalid ambitious opening")
@@ -862,6 +867,44 @@ func start_game():
 	turn_manager.before_ordinary = _choose_ordinary_actor
 	turn_manager.start_game()
 	game_started.emit()
+
+# I02 internal registration primitive. I03/I04 callers must validate/pay their
+# skill, configure the body and place its spatial/turn node before opening play.
+# This does not authorize summoning or give the unit a turn/target button.
+func _register_unit_body(kind: int, body: Player, summoner: Player) -> String:
+	if _game_over or body == null or (body.get_parent() != null and body.get_parent() != self): return ""
+	if unit_registry.players().is_empty() and not unit_registry.initialize(players): return ""
+	var id = unit_registry.register(kind, body, summoner)
+	if id.is_empty(): return ""
+	body.seat_index = -1 # Never use a unit as a permanent player/index/input owner.
+	if body.get_parent() == null: add_child(body)
+	unit_registered.emit(id)
+	return id
+
+func _remove_summoner_units(summoner: Player) -> void:
+	for entry in unit_registry.detach_final_summoner(summoner):
+		var body: Player = entry.body
+		if is_instance_valid(body): _discard_all_cards(body, true, false)
+		_history_event("unit_removed", "附属单位随召唤者消失", null, [], {"unit": entry.id, "reason": "summoner_lost"})
+		unit_removed.emit(entry.id, UnitRegistry.Removal.SUMMONER_LOST)
+
+# Final-death notification, NOT a replacement for rescue/damage resolution.
+# I03/I04 commit the body's final death only after their legal dying pipeline.
+func _retire_final_unit(body: Player) -> bool:
+	var id = unit_registry.id_for(body)
+	var entry = unit_registry.retire_dead(id)
+	if entry.is_empty(): return false
+	_discard_all_cards(body, true)
+	_history_event("unit_death", "单位最终死亡", null, [], {"unit": id, "reason": "normal_death"})
+	unit_removed.emit(id, UnitRegistry.Removal.NORMAL_DEATH)
+	unit_death_committed.emit(id)
+	return true
+
+func _reset_unit_registry() -> void:
+	for body in unit_registry.all_bodies():
+		if body.get_parent() == self and not body.is_queued_for_deletion(): body.queue_free()
+	unit_registry.reset()
+	if not players.is_empty(): unit_registry.initialize(players)
 
 # ---- 阶段响应 ----
 
@@ -9736,6 +9779,7 @@ func _handle_death(victim: Player, killer: Player):
 	victim.mark_dead()
 	_dead_processed.append(victim)
 	_public_result("%s 阵亡！" % victim.player_name)
+	_remove_summoner_units(victim)
 
 	# ---- 阶段2 翻开身份：清牌及失去装备效果必须能观察到已公开状态 ----
 	if victim.identity != "":
@@ -9791,7 +9835,7 @@ func _resolve_ambitious_declaration() -> int:
 
 # 弃置一名角色的所有牌（死亡弃置 / 主公杀忠臣惩罚共用）
 # include_judgment 只控制判定区；已确定牌属于手牌，死亡和主公惩罚均须弃置。
-func _discard_all_cards(p: Player, include_judgment: bool):
+func _discard_all_cards(p: Player, include_judgment: bool, loss_effects: bool = true):
 	var discarded_hand = p.hand_size()
 	var discarded_equipment = p.get_equip_slots().size()
 	var discarded_judgment = p.judgment_cards.size() if include_judgment else 0
@@ -9802,7 +9846,7 @@ func _discard_all_cards(p: Player, include_judgment: bool):
 				deck.discard(card)
 		cards.clear()
 	for slot in p.get_equip_slots():
-		var equipment_card = p.remove_equipment(slot)
+		var equipment_card = p.remove_equipment(slot, loss_effects)
 		# 暗置装备也有原牌资源；最终死亡/惩罚弃置时保持暗置，不凭空明置。
 		if equipment_card != null:
 			deck.discard(equipment_card)
@@ -10018,6 +10062,7 @@ func _return_to_main_menu(button: Button):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	_reset_unit_registry()
 	if _history_panel != null: _history_panel.z_index = 50
 	# Local restart identity needs uniqueness, not a new crypto provider per
 	# fixture/restart. Network matches retain LanSession's cryptographic ID.

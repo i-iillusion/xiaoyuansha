@@ -159,5 +159,6 @@ func _run():
 	await load("res://Test/i01_turn_frame_cases.gd").new().run(self)
 	await load("res://Test/i01_timeweave_cases.gd").new().run(self)
 	await load("res://Test/i02_registry_cases.gd").new().run(self)
+	await load("res://Test/i02_lifecycle_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

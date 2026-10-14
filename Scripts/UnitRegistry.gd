@@ -45,6 +45,21 @@ func players() -> Array[Player]: return _players.duplicate()
 func entry(id: String) -> Dictionary:
 	return _entries[id].duplicate() if _entries.has(id) else {}
 
+func id_for(body: Player) -> String:
+	for id in _entries:
+		if _entries[id].body == body: return id
+	return ""
+
+func contains_active(body: Player) -> bool:
+	var id = id_for(body)
+	return not id.is_empty() and not _entries[id].removed and is_instance_valid(body) and not body.is_dead()
+
+func all_bodies() -> Array[Player]:
+	var result: Array[Player] = []
+	for value in _entries.values():
+		if is_instance_valid(value.body): result.append(value.body)
+	return result
+
 func active_units() -> Array[Player]:
 	var result: Array[Player] = []
 	for value in _entries.values():
