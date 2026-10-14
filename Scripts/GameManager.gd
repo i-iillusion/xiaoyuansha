@@ -69,7 +69,7 @@ var _bank_owner := 0
 func _is_human(p: Player) -> bool:
 	if p != null and not unit_registry.id_for(p).is_empty():
 		p = unit_registry.controller(unit_registry.id_for(p))
-	return p != null and (lan_enabled or p.seat_index == 0)
+	return p != null and p.seat_index >= 0 and (lan_enabled or p.seat_index == 0)
 
 func _local_player() -> Player:
 	return players[_input_seat if lan_enabled else 0]

@@ -32,7 +32,7 @@ func run(t):
 		receiver.history.reset(state.match)
 		receiver._receive_state(state)
 		t.check(not receiver.latest.is_empty(), "I02d actual receiver accepts valid separate unit state")
-		for bad in ["missing", "duplicate", "private", "controller", "identity", "sub", "summoner", "cap"]:
+		for bad in ["missing", "duplicate", "private", "controller", "identity", "sub", "object", "summoner", "cap"]:
 			var changed = state.duplicate(true)
 			match bad:
 				"missing": changed.erase("units")
@@ -41,6 +41,7 @@ func run(t):
 				"controller": changed.units[0].controller = 2
 				"identity": changed.units[0].identity = "反贼"
 				"sub": changed.units[0].own_cards[0].sub = 99999
+				"object": changed.units[0].own_cards[0].sub = dragon
 				"summoner": changed.units[0].summoner = 5
 				"cap":
 					for index in 2:
@@ -85,6 +86,8 @@ func run(t):
 			t.check(game.unit_registry.contains_active(second) and game._register_unit_body(UnitRegistry.Kind.MOUNTAIN,third,game.players[1]).is_empty(), "I02d global two-mountain membership cap enforced")
 			third.free()
 		var retained = game.unit_registry
+		game._reset_unit_registry()
+		t.check(not game._is_human(dragon) and retained.id_for(dragon).is_empty(), "I02e obsolete negative-ID unit cannot regain LAN human permission before deferred free")
 		game._game_over = true
 		game.queue_free()
 		room.queue_free()

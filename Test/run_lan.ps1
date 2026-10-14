@@ -4,7 +4,8 @@ param(
     [ValidateRange(2,10)][int]$Players = 2,
     [ValidateSet('','classic_identity','ambitious_identity','free_for_all')][string]$Mode = '',
     [switch]$DropCase,
-    [switch]$SpaceCase
+    [switch]$SpaceCase,
+    [switch]$UnitCase
 )
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path $PSScriptRoot -Parent
@@ -17,6 +18,7 @@ $info.Arguments = '--headless --disable-render-loop --path "' + $projectPath + '
 if ($Mode -ne '') { $info.Arguments += ' --mode=' + $Mode }
 if ($DropCase) { $info.Arguments += ' --drop-case' }
 if ($SpaceCase) { $info.Arguments += ' --space-case' }
+if ($UnitCase) { $info.Arguments += ' --unit-case' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $true

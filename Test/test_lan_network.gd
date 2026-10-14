@@ -24,6 +24,14 @@ var history_digest := ""
 var pace_checked := false
 var space_case := false
 var shifted_seen := false
+var unit_case := false
+var units_seen := false
+var owns_dragon := false
+var unit_reply_submitted := false
+var unit_removal_seen := false
+var unit_input_started := false
+var unit_input_result := -2
+var unit_dragon: Player
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -42,6 +50,7 @@ func _run() -> void:
 		if arg == "--drop-on-match": drop_on_match = true
 		if arg == "--drop-case": drop_case = true
 		if arg == "--space-case": space_case = true
+		if arg == "--unit-case": unit_case = true
 	var holder = Node.new()
 	holder.name = "LanHarness"
 	root.add_child(holder)
@@ -71,6 +80,7 @@ func _run() -> void:
 				"--script", "res://Test/test_lan_network.gd", "--", "--lan-child", "--port=" + str(port)])
 			if drop_case: args.append("--drop-on-match")
 			if space_case: args.append("--space-case")
+			if unit_case: args.append("--unit-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -79,6 +89,7 @@ func _run() -> void:
 			if session.begin_match():
 				started = true
 				check(true, "%d ready humans started" % size)
+				if unit_case: _seed_unit_case()
 				if space_case:
 					# Prepared legal spatial fixture; the actual skill window is tested
 					# independently. Do not alter fixed rows, roles, health or input.
@@ -89,6 +100,11 @@ func _run() -> void:
 				if drop_case:
 					saved_game = session.bridge.game
 					saved_game._rps_choice(saved_game.players[1], "disconnect case")
+		if not child and unit_case and started and not unit_input_started and session.bridge != null:
+			var game = session.bridge.game
+			if game.turn_manager.current_phase == TurnManager.Phase.PLAY and session.bridge._root() == null and not session.bridge._targeting():
+				unit_input_started = true
+				_run_unit_choice()
 		if drop_case and started and session.bridge == null:
 			interrupted = true
 			break
@@ -103,6 +119,11 @@ func _run() -> void:
 		check(final_seen, "full network game reaches real victory")
 		check(actions > 0, "local peer submitted real UI actions")
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
+		if unit_case:
+			check(units_seen, "peer received separate unit rows over real ENet")
+			check(unit_removal_seen, "peer received actual final-owner disappearance history")
+			if owns_dragon: check(unit_reply_submitted, "remote intelligent controller answered its real window")
+			if not child: check(unit_input_result == 0, "authority received unit-controller confirmation without advancing another player's turn")
 	if not child and final_seen:
 		var old_match = session.match_id
 		session.return_to_lobby()
@@ -125,7 +146,34 @@ func _run() -> void:
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(0 if failures == 0 else 1)
 
+func _seed_unit_case() -> void:
+	# Authorized post-registration fixture only, not an enabled summoning skill.
+	# Keep the ordinary roster, HP, identities, phases and victory rules intact.
+	var game = session.bridge.game
+	var dragon_owner = game.players[1]
+	var mountain_owner = game.players[0]
+	if game.game_mode != GameModes.FREE_FOR_ALL:
+		dragon_owner = game.players.filter(func(p): return p.identity == "反贼" and p.seat_index != 0)[0]
+		mountain_owner = game.players.filter(func(p): return p.identity == "主公")[0]
+	var helper = load("res://Test/i02_lifecycle_cases.gd").new()
+	unit_dragon = helper.add_unit(game, UnitRegistry.Kind.FIRE_DRAGON, dragon_owner)
+	helper.add_unit(game, UnitRegistry.Kind.MOUNTAIN, mountain_owner)
+	check(dragon_owner.seat_index != 0 and game.unit_registry.active_units().size() == 2, "unit transport fixture has independent remote controller")
+	check(unit_dragon.hand_size() == 0 and game.players.map(func(p): return p.seat_index) == range(size), "unit fixture keeps initial blank hand/fixed player IDs intact")
+
+func _run_unit_choice() -> void:
+	var game = session.bridge.game
+	game._set_input_player(unit_dragon)
+	unit_input_result = await game._show_choice_popup("单位登记联机控制者验收", ["确认", "取消"], func(): return game.unit_registry.contains_active(unit_dragon), false)
+	if is_instance_valid(game) and not game._game_over:
+		game._set_input_player(game.players[game.turn_manager.get_play_actor_idx()])
+		game._history_event("unit_input_verified", "单位控制者完成联机确认")
+
 func _state(state: Dictionary) -> void:
+	if unit_case:
+		if state.units.size() == 2: units_seen = true
+		for unit in state.units:
+			if unit.kind == UnitRegistry.Kind.FIRE_DRAGON and unit.controller == state.actor: owns_dragon = true
 	if space_case:
 		var expected: Array = [0, int(state.count)-1]
 		for seat in range(1,int(state.count)-1): expected.append(seat)
@@ -148,12 +196,18 @@ func _state(state: Dictionary) -> void:
 		if session.history.sequence < int(state.history.last): return
 		check(session.history.sequence > 0, "network history received through final result")
 		check(session.history.entries.any(func(e): return "游戏结束！" in e.text), "network history contains terminal result")
+		if unit_case:
+			# Cache only after the complete matched final history arrives; returning
+			# to the lobby intentionally clears the client's old match history.
+			unit_removal_seen = session.history.entries.any(func(e): return e.kind == "unit_removed" and e.details.get("reason") == "summoner_lost")
 		history_digest = var_to_str(session.history.entries).sha256_text()
 		print("LOG_DIGEST ", history_digest)
 		final_seen = true
 		return
 	var token = driver.choose(state)
 	if token.is_empty() or token == last_token: return
+	if unit_case and state.labels.has("单位登记联机控制者验收") and state.controls.any(func(control): return control.id == token and control.text == "确认"):
+		unit_reply_submitted = true
 	last_token = token
 	actions += 1
 	print("INPUT seat=", state.actor, " status=", state.status, " controls=", state.controls.map(func(x): return x.text))

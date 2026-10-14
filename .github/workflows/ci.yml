@@ -90,7 +90,7 @@ jobs:
       - name: Run LAN ownership and actual ENet process tests
         run: |
           set -euo pipefail
-          for spec in 'test_i01 2' 'test_h03 2' 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2' 'test_lan_network 2' 'test_lan_network 3' 'test_lan_network 5' 'test_lan_network 5 --space-case' 'test_lan_network 2 --drop-case'; do
+          for spec in 'test_i02 2' 'test_i01 2' 'test_h03 2' 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2' 'test_lan_network 2' 'test_lan_network 3' 'test_lan_network 5' 'test_lan_network 3 --unit-case' 'test_lan_network 5 --unit-case' 'test_lan_network 5 --space-case' 'test_lan_network 2 --drop-case'; do
             read -r test players extra <<< "$spec"
             log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
             status=0
