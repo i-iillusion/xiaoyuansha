@@ -5,7 +5,8 @@ param(
     [ValidateSet('','classic_identity','ambitious_identity','free_for_all')][string]$Mode = '',
     [switch]$DropCase,
     [switch]$SpaceCase,
-    [switch]$UnitCase
+    [switch]$UnitCase,
+    [switch]$MedicineCase
 )
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path $PSScriptRoot -Parent
@@ -19,6 +20,7 @@ if ($Mode -ne '') { $info.Arguments += ' --mode=' + $Mode }
 if ($DropCase) { $info.Arguments += ' --drop-case' }
 if ($SpaceCase) { $info.Arguments += ' --space-case' }
 if ($UnitCase) { $info.Arguments += ' --unit-case' }
+if ($MedicineCase) { $info.Arguments += ' --medicine-case' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $true

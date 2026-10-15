@@ -8,6 +8,7 @@ func run(t):
 		GameManager.selected_general = "克里斯·西弗"
 		var game = load("res://Scenes/Game.tscn").instantiate()
 		game.auto_start = false
+		game._medicine_choice_override = func(_p, _choices): return "cancel"
 		t.root.add_child(game)
 		game.start_game()
 		game._halt_countdown()

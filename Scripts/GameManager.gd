@@ -208,6 +208,11 @@ var _calamity_robe_target_override: Callable = Callable()
 # 贤者的加护濒死保命测试钩子（正常游戏不设置）：返回 true = 使用保命（弃所有牌复原摸四张）
 var _sage_save_override: Callable = Callable()
 
+# Test-only decision boundary; production uses the controller-owned timed UI.
+var _medicine_choice_override: Callable = Callable()
+var _medicine_pending: Dictionary = {}
+var _medicine_serial := 0
+
 # 凯文·罗本【你个壊货】发动测试钩子（正常游戏不设置）：返回 true = 发动拼点
 var _kaiwen_override: Callable = Callable()
 
@@ -1160,6 +1165,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 
 func _do_draw(pid: int):
 	var p = players[pid]
+	var revision = turn_manager.get_context_revision()
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的摸牌阶段：跳过自己的摸牌，目标角色立刻获得一个摸牌阶段
 	if turn_manager.granted_draw_target_idx >= 0:
 		var target = players[turn_manager.granted_draw_target_idx]
@@ -1167,16 +1173,25 @@ func _do_draw(pid: int):
 		var completed = turn_manager.granted_draw_completed
 		turn_manager.granted_draw_completed = false
 		if not completed and target.is_alive():
-			_draw_phase_cards(target, false)
+			if not await _draw_phase_cards(target, false): return
+		if revision != turn_manager.get_context_revision() or _game_over: return
 		_sync_all_ui()
 		turn_manager.advance_phase()
 		return
-	_draw_phase_cards(p)
+	if not await _draw_phase_cards(p): return
+	if revision != turn_manager.get_context_revision() or _game_over: return
 	_sync_all_ui()
 	turn_manager.advance_phase()
 
 # 获赠摸牌同样执行目标自己的锁定技/已有减益，但不消费源角色的兵粮状态。
-func _draw_phase_cards(p: Player, apply_supply: bool = true):
+func _draw_phase_cards(p: Player, apply_supply: bool = true) -> bool:
+	if _game_over: return false
+	if p.general_name == "克里斯·西弗":
+		var medicine = await _maybe_steal_medicine(p)
+		if medicine == CHOICE_INVALID: return false
+		if medicine == 1:
+			if apply_supply: turn_manager.supply_shortage_active = false
+			return true
 	var draw_count = 2
 	# 【丑态】仅改变摸牌阶段基数；兵粮等修改项继续在其后结算。
 	# 额外摸牌走_draw_blank_cards，不受这个阶段锁定技限制。
@@ -1200,6 +1215,126 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true):
 		_update_debug("%s 的【神速】摸牌减益结算：少摸 %d 张（实际摸 %d 张）" % [p.player_name, owed, draw_count])
 	_draw_blank_cards(p, draw_count)
 	_update_debug("%s 摸了 %d 张牌（手牌 %d 张）" % [p.player_name, draw_count, p.hand_size()])
+	return true
+
+func _medicine_candidates(p: Player) -> Array[Player]:
+	var result: Array[Player] = []
+	var characters: Array[Player] = players.duplicate()
+	characters.append_array(unit_registry.character_unit_candidates())
+	for target in characters:
+		if target == p or not target.is_alive() or _is_kneeling(target) or target.hand_size() == 0: continue
+		var id = unit_registry.id_for(target)
+		if not id.is_empty() and not fire_dragon_state.is_revealed_to(id, p): continue
+		result.append(target)
+	return result
+
+func _maybe_steal_medicine(p: Player) -> int:
+	if _medicine_pending.has(p): return CHOICE_INVALID
+	_medicine_serial += 1
+	var lease = _medicine_serial
+	_medicine_pending[p] = lease
+	var result = await _steal_medicine_pending(p, lease)
+	if _medicine_pending.get(p) == lease: _medicine_pending.erase(p)
+	return result
+
+func _steal_medicine_pending(p: Player, lease: int) -> int:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() \
+			and p.general_name == "克里斯·西弗" and not _is_kneeling(p) \
+			and turn_manager.current_phase == TurnManager.Phase.DRAW \
+			and revision == turn_manager.get_context_revision() and _medicine_pending.get(p) == lease
+	if not valid.call(): return CHOICE_INVALID
+	var candidates = _medicine_candidates(p)
+	var selections: Array = [[]] # Up to two includes deliberately selecting zero.
+	for i in candidates.size():
+		selections.append([candidates[i]])
+		for j in range(i + 1, candidates.size()): selections.append([candidates[i], candidates[j]])
+	var snapshots: Dictionary = {}
+	for target in candidates: snapshots[target] = HandSelection.new(target)
+	var unchanged = func():
+		if not valid.call(): return false
+		for target in candidates:
+			if not _medicine_candidates(p).has(target) or target.hand != snapshots[target].hand or target.determined_cards != snapshots[target].determined: return false
+		return true
+	var selected: Variant
+	if _medicine_choice_override.is_valid():
+		selected = await _medicine_choice_override.call(p, selections)
+	elif not _is_human(p):
+		# Strategy only: first two public legal candidates, without hidden roles.
+		selected = "cancel" if candidates.is_empty() else candidates.slice(0, mini(2, candidates.size()))
+	else:
+		_set_input_player(p)
+		var choice = await _show_medicine_picker(selections, unchanged)
+		selected = CHOICE_INVALID if choice == CHOICE_INVALID else ("cancel" if choice < 0 else selections[choice])
+	if not unchanged.call() or (typeof(selected) == TYPE_INT and selected == CHOICE_INVALID): return CHOICE_INVALID
+	if typeof(selected) == TYPE_STRING and selected == "cancel": return 0
+	if not selected is Array or selected.size() > 2: return CHOICE_INVALID
+	var checked: Array[Player] = []
+	for target in selected:
+		if not target is Player or not candidates.has(target) or checked.has(target): return CHOICE_INVALID
+		checked.append(target)
+	_history_event("skill", "%s 发动【偷药品】，放弃本阶段摸牌" % p.player_name, p, checked)
+	for target in checked:
+		if not valid.call() or not _medicine_candidates(p).has(target): return CHOICE_INVALID
+		# Existing hand-transfer policy; arbitrary stays null, concrete keeps ID.
+		var card: CardBase = target.take_hand_cards(1)[0]
+		p.hand.append(card)
+		_history_event("transfer", "%s 获得 %s 的1张手牌" % [p.player_name, target.player_name], p, [target], {"count": 1})
+		# Finish forced awakening before processing the next target/phase.
+		if target.general_name == "史蒂芬·彼特先斯" and target.hand_size() == 0 and not target.awoken:
+			target.awoken = true
+			await _do_awaken(target)
+		if not valid.call(): return CHOICE_INVALID
+	return 1
+
+func _show_medicine_picker(selections: Array, allowed: Callable) -> int:
+	var answer = ChoicePromptAnswer.new()
+	var overlay = ColorRect.new()
+	overlay.name = "MedicinePrompt"
+	overlay.color = Color(0, 0, 0, 0.6)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	$UI.add_child(overlay)
+	var box = VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	box.offset_left = -360
+	box.offset_top = -255
+	box.offset_right = 360
+	box.offset_bottom = 255
+	box.add_theme_constant_override("separation", 12)
+	overlay.add_child(box)
+	var title = Label.new()
+	title.text = "【偷药品】放弃摸牌，获得至多两名其他角色的各一张手牌"
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.custom_minimum_size = Vector2(700, 48)
+	box.add_child(title)
+	var scroll = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(720, 390)
+	box.add_child(scroll)
+	var grid = GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 8)
+	scroll.add_child(grid)
+	for i in selections.size():
+		var names: Array[String] = []
+		for target in selections[i]:
+			names.append(("%d号 " % (target.seat_index + 1) if target.seat_index >= 0 else "单位 ") + target.player_name)
+		var button = Button.new()
+		button.text = "发动：不选角色" if names.is_empty() else "获得：" + " / ".join(names)
+		button.custom_minimum_size = Vector2(340, 44)
+		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		button.pressed.connect(answer.submit.bind(i), CONNECT_ONE_SHOT)
+		grid.add_child(button)
+	var cancel = Button.new()
+	cancel.text = "不发动（正常摸牌）"
+	cancel.custom_minimum_size = Vector2(340, 44)
+	cancel.pressed.connect(answer.submit.bind(-1), CONNECT_ONE_SHOT)
+	box.add_child(cancel)
+	return await _wait_choice_prompt(overlay, answer, allowed)
 
 func _do_play(pid: int):
 	var p = players[pid]
@@ -8523,7 +8658,7 @@ func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, ph
 	if phase == TurnManager.Phase.JUDGE:
 		completed = await _run_judgment(target, true)
 	else:
-		_draw_phase_cards(target, false)
+		completed = await _draw_phase_cards(target, false)
 	if not completed or not turn_manager.complete_standalone_phase(frame):
 		turn_manager.cancel_standalone_play(frame)
 		return CHOICE_INVALID

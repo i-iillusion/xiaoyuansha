@@ -32,6 +32,11 @@ var unit_removal_seen := false
 var unit_input_started := false
 var unit_input_result := -2
 var unit_dragon: Player
+var medicine_case := false
+var medicine_seen := false
+var owns_medicine := false
+var medicine_replied := false
+var medicine_seeded := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -51,6 +56,7 @@ func _run() -> void:
 		if arg == "--drop-case": drop_case = true
 		if arg == "--space-case": space_case = true
 		if arg == "--unit-case": unit_case = true
+		if arg == "--medicine-case": medicine_case = true
 	var holder = Node.new()
 	holder.name = "LanHarness"
 	root.add_child(holder)
@@ -81,11 +87,18 @@ func _run() -> void:
 			if drop_case: args.append("--drop-on-match")
 			if space_case: args.append("--space-case")
 			if unit_case: args.append("--unit-case")
+			if medicine_case: args.append("--medicine-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
 	while Time.get_ticks_msec() < exit_at:
 		if not child and not started and session.members.size() == size:
+			if medicine_case and not medicine_seeded:
+				# Authorized metadata allocation fixture, not a released general menu.
+				# Same server bridge/opening, ordinary HP, roles, phases and victory.
+				var peers = session.members.keys().filter(func(peer): return peer != 1)
+				session.members[peers[0]].general = "克里斯·西弗"
+				medicine_seeded = true
 			if session.begin_match():
 				started = true
 				check(true, "%d ready humans started" % size)
@@ -118,6 +131,9 @@ func _run() -> void:
 	elif not drop_on_match:
 		check(final_seen, "full network game reaches real victory")
 		check(actions > 0, "local peer submitted real UI actions")
+		if medicine_case:
+			check(medicine_seen, "peer received actual medicine skill history over ENet")
+			if owns_medicine: check(medicine_replied, "remote Chris selected actual medicine combination")
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
 			check(units_seen, "peer received separate unit rows over real ENet")
@@ -170,6 +186,9 @@ func _run_unit_choice() -> void:
 		game._history_event("unit_input_verified", "单位控制者完成联机确认")
 
 func _state(state: Dictionary) -> void:
+	if medicine_case:
+		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
+		medicine_seen = medicine_seen or session.history.entries.any(func(event): return event.kind == "skill" and "【偷药品】" in event.text)
 	if unit_case:
 		if state.units.size() == 2: units_seen = true
 		for unit in state.units:
@@ -205,7 +224,13 @@ func _state(state: Dictionary) -> void:
 		final_seen = true
 		return
 	var token = driver.choose(state)
+	if medicine_case and not medicine_seen and state.actor == 0:
+		# Legal player strategy: let the remote first draw occur before attacking.
+		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)
+		if not end.is_empty(): token = end[0].id
 	if token.is_empty() or token == last_token: return
+	if medicine_case and state.controls.any(func(control): return control.id == token and control.text.begins_with("获得：")):
+		medicine_replied = true
 	if unit_case and state.labels.has("单位登记联机控制者验收") and state.controls.any(func(control): return control.id == token and control.text == "确认"):
 		unit_reply_submitted = true
 	last_token = token
