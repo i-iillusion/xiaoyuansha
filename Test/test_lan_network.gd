@@ -37,6 +37,7 @@ var medicine_seen := false
 var owns_medicine := false
 var medicine_replied := false
 var medicine_seeded := false
+var egg_seen := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -93,7 +94,7 @@ func _run() -> void:
 			if pid > 0: children.append(pid)
 	while Time.get_ticks_msec() < exit_at:
 		if not child and not started and session.members.size() == size:
-			if medicine_case and not medicine_seeded:
+			if medicine_case and not medicine_seeded and session.members.values().all(func(member): return bool(member.ready)):
 				# Authorized metadata allocation fixture, not a released general menu.
 				# Same server bridge/opening, ordinary HP, roles, phases and victory.
 				var peers = session.members.keys().filter(func(peer): return peer != 1)
@@ -133,6 +134,7 @@ func _run() -> void:
 		check(actions > 0, "local peer submitted real UI actions")
 		if medicine_case:
 			check(medicine_seen, "peer received actual medicine skill history over ENet")
+			check(egg_seen, "peer received actual egg payment and heal over ENet")
 			if owns_medicine: check(medicine_replied, "remote Chris selected actual medicine combination")
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
@@ -189,6 +191,7 @@ func _state(state: Dictionary) -> void:
 	if medicine_case:
 		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
 		medicine_seen = medicine_seen or session.history.entries.any(func(event): return event.kind == "skill" and "【偷药品】" in event.text)
+		egg_seen = egg_seen or session.history.entries.any(func(event): return event.kind == "skill" and "弃置1颗【火龙蛋】" in event.text)
 	if unit_case:
 		if state.units.size() == 2: units_seen = true
 		for unit in state.units:

@@ -146,6 +146,7 @@ var _player_positions: Array[Control] = []
 # --- 自建 UI 元素 ---
 var _play_btn: Button
 var _end_play_btn: Button
+var _egg_heal_btn: Button
 var _cancel_target_btn: Button
 var _confirm_target_btn: Button
 
@@ -212,6 +213,10 @@ var _sage_save_override: Callable = Callable()
 var _medicine_choice_override: Callable = Callable()
 var _medicine_pending: Dictionary = {}
 var _medicine_serial := 0
+const RESCUE_EGG := 1000001 # Skill response, deliberately outside CardSubType.
+var _egg_heal_override: Callable = Callable()
+var _egg_heal_pending := false
+var _egg_rescue_turns: Dictionary = {}
 
 # 凯文·罗本【你个壊货】发动测试钩子（正常游戏不设置）：返回 true = 发动拼点
 var _kaiwen_override: Callable = Callable()
@@ -510,6 +515,14 @@ func _create_ui():
 	_end_play_btn.pressed.connect(_on_end_play_pressed)
 	_end_play_btn.visible = false
 	_play_area_container.add_child(_end_play_btn)
+	_egg_heal_btn = Button.new()
+	_egg_heal_btn.text = "弃蛋回复2体力"
+	_egg_heal_btn.custom_minimum_size = Vector2(180, 40)
+	_egg_heal_btn.visible = false
+	_egg_heal_btn.pressed.connect(func(): _on_egg_heal_clicked(_local_player()))
+	# Separate quick-action column: three 40px buttons overflow the 110px
+	# central play area. Keep the existing play/end/target layout unchanged.
+	_quick_play_container.add_child(_egg_heal_btn)
 
 	# 取消目标选择按钮（平时隐藏）
 	_cancel_target_btn = Button.new()
@@ -1336,6 +1349,35 @@ func _show_medicine_picker(selections: Array, allowed: Callable) -> int:
 	box.add_child(cancel)
 	return await _wait_choice_prompt(overlay, answer, allowed)
 
+func _can_play_egg(p: Player) -> bool:
+	return _can_use_play_skill(p) and p.general_name == "克里斯·西弗" \
+		and fire_dragon_state.can_heal(p, p, TurnManager.Phase.PLAY)
+
+# Egg is a skill resource, not a Peach, card payment or staff-assisted heal.
+func _spend_egg_to_heal(p: Player) -> bool:
+	if not fire_dragon_state.spend_egg(p): return false
+	p.heal(2)
+	_history_event("skill", "%s 弃置1颗【火龙蛋】，回复2点体力（%d/%d）" % [p.player_name, p.hp, p.max_hp], p, [p])
+	_sync_all_ui()
+	return true
+
+func _on_egg_heal_clicked(p: Player) -> void:
+	if not _can_play_egg(p) or p != _local_player() or not _is_human(p) or _egg_heal_pending or _play_skill_execution_busy(): return
+	_egg_heal_pending = true
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var eggs = p.fire_dragon_eggs
+	var hp = p.hp
+	var valid = func(): return _can_play_egg(p) and revision == turn_manager.get_context_revision() \
+		and generation == _dying_lifecycle_generation and p.fire_dragon_eggs == eggs and p.hp == hp
+	_set_input_player(p)
+	var choice: int
+	if _egg_heal_override.is_valid(): choice = await _egg_heal_override.call()
+	else: choice = await _show_choice_popup("弃置1颗【火龙蛋】，回复2点体力？", ["弃蛋回复2体力", "取消"], valid, false)
+	if choice == 0 and valid.call(): _spend_egg_to_heal(p)
+	_egg_heal_pending = false
+	_sync_all_ui()
+
 func _do_play(pid: int):
 	var p = players[pid]
 	if turn_manager.granted_play_completed and turn_manager._standalone_play_frame.is_empty():
@@ -1561,6 +1603,12 @@ func _run_ai_play(actor: Player):
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
+	# Strategy only: heal self before cards when injured; normal skill eligibility
+	# and the same presentation delay are rechecked after every wait.
+	while valid.call() and _can_play_egg(actor) and actor.hp < actor.max_hp:
+		if not await ai_pacer.before_action(self, valid, func(): return _can_play_egg(actor) and actor.hp < actor.max_hp): break
+		if not valid.call() or not _can_play_egg(actor): break
+		_spend_egg_to_heal(actor)
 	var before_execute = func(action: Dictionary):
 		var snapshot = _ai_hand_snapshot
 		var target = players[int(action.target)] if int(action.target) >= 0 else null
@@ -10388,12 +10436,16 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 			continue
 		if HandPayment.has_card(rescuer, sub):
 			options.append(sub)
+	if rescuer == dying and _egg_rescue_turns.get(dying) == rescuer and rescuer.general_name == "克里斯·西弗" \
+		and fire_dragon_state.can_heal(rescuer, rescuer, turn_manager.current_phase):
+		options.append(RESCUE_EGG)
 	return options
 
 # 自救/救他人共用支付入口；确认时重验，不因过期选择丢牌或凭空治疗。
 func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if not _rescue_options(rescuer, dying).has(sub):
 		return false
+	if sub == RESCUE_EGG: return _spend_egg_to_heal(dying)
 	var card = HandPayment.take_card(rescuer, sub)
 	if card == null:
 		return false
@@ -10424,12 +10476,16 @@ func _run_rescue_round(dying: Player) -> int:
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
 	var order = _spatial_from(players[turn_manager.current_player_idx])
 	for rescuer in order:
+		_egg_rescue_turns[dying] = rescuer
 		while dying.is_dying() and not _game_over:
 			var sub = await _ask_rescue_card(rescuer, dying)
-			if sub == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
+			if sub == CHOICE_INVALID or not valid.call():
+				_egg_rescue_turns.erase(dying)
+				return CHOICE_INVALID
 			var hp_before = dying.hp
 			if not _use_rescue_card(rescuer, dying, sub) or dying.hp <= hp_before:
 				break # 本人可连续出牌；拒绝/无牌/过期选择则轮到下一人。
+		_egg_rescue_turns.erase(dying)
 		if not dying.is_dying() or _game_over:
 			break
 	return 0 if valid.call() else CHOICE_INVALID
@@ -10446,12 +10502,14 @@ func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
 	var revision = turn_manager.get_context_revision()
 	var context = _dying_contexts.get(dying)
 	var snapshot = HandSelection.new(rescuer)
+	var eggs = rescuer.fire_dragon_eggs
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation \
 			and players.has(rescuer) and players.has(dying) and not rescuer.is_dead() and not dying.is_dead() \
 			and revision == turn_manager.get_context_revision() and _dying_contexts.get(dying) == context \
 			and _rescue_choice_pending.get(dying) == owner \
-			and rescuer.hand == snapshot.hand and rescuer.determined_cards == snapshot.determined
+			and rescuer.hand == snapshot.hand and rescuer.determined_cards == snapshot.determined \
+			and rescuer.fire_dragon_eggs == eggs
 	var selected = await _ask_rescue_card_pending(rescuer, dying, options, valid)
 	if not valid.call(): selected = CHOICE_INVALID
 	elif dying.is_alive(): selected = -1 # 合法的外部救回不误当死亡流程技术失效。
@@ -10517,7 +10575,7 @@ func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int], al
 
 	for sub in options:
 		var button = Button.new()
-		button.text = "使用【%s】" % CardData.get_type_name(sub)
+		button.text = "弃蛋回复2体力" if sub == RESCUE_EGG else "使用【%s】" % CardData.get_type_name(sub)
 		button.custom_minimum_size = Vector2(160, 44)
 		button.pressed.connect(answer.submit.bind(sub))
 		hbox.add_child(button)
@@ -11007,8 +11065,14 @@ func _sync_all_ui():
 		_play_btn.disabled = ((play_actor.hand_size() <= 0 and play_actor.determined_cards.is_empty()) or _is_kneeling(play_actor))
 	else:
 		_play_btn.disabled = true
+	_egg_heal_btn.visible = _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
+		and _is_human(players[turn_manager.get_play_actor_idx()])
+	_egg_heal_btn.disabled = _egg_heal_pending
 
 func _process(delta: float):
+	if is_instance_valid(_egg_heal_btn) and turn_manager != null and not players.is_empty():
+		_egg_heal_btn.visible = not _game_over and _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
+			and _is_human(players[turn_manager.get_play_actor_idx()])
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
 	if _countdown_active:
 		_step_remaining -= delta

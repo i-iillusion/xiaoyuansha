@@ -10,6 +10,8 @@ var strike_revision := -1
 func choose(state: Dictionary) -> String:
 	if state.is_empty() or state.get("ended", false): return ""
 	var controls: Array = state.get("controls", [])
+	for control in controls:
+		if control.text == "弃蛋回复2体力" and not control.disabled: return control.id
 	if state.get("labels", []).any(func(label): return "【偷药品】" in label):
 		var choices = controls.filter(func(control): return control.text.begins_with("获得：") and not control.disabled)
 		var pairs = choices.filter(func(control): return " / " in control.text)
