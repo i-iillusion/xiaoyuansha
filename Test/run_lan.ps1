@@ -6,7 +6,8 @@ param(
     [switch]$DropCase,
     [switch]$SpaceCase,
     [switch]$UnitCase,
-    [switch]$MedicineCase
+    [switch]$MedicineCase,
+    [switch]$SummonCase
 )
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path $PSScriptRoot -Parent
@@ -21,6 +22,7 @@ if ($DropCase) { $info.Arguments += ' --drop-case' }
 if ($SpaceCase) { $info.Arguments += ' --space-case' }
 if ($UnitCase) { $info.Arguments += ' --unit-case' }
 if ($MedicineCase) { $info.Arguments += ' --medicine-case' }
+if ($SummonCase) { $info.Arguments += ' --summon-case' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $true

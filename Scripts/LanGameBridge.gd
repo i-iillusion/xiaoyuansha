@@ -73,7 +73,7 @@ func _refresh_commands() -> void:
 	if root != null:
 		_walk(root, buttons, labels)
 	else:
-		for button in [game._play_btn, game._end_play_btn, game._egg_heal_btn, game._cancel_target_btn, game._confirm_target_btn]:
+		for button in [game._play_btn, game._end_play_btn, game._egg_heal_btn, game._summon_dragon_btn, game._cancel_target_btn, game._confirm_target_btn]:
 			if is_instance_valid(button) and button.is_visible_in_tree(): buttons.append(button)
 	# Timing text deliberately excluded: a ticking clock must not expire a click.
 	var shape: Array = [input_owner(), game.turn_manager.get_context_revision(),

@@ -147,6 +147,7 @@ var _player_positions: Array[Control] = []
 var _play_btn: Button
 var _end_play_btn: Button
 var _egg_heal_btn: Button
+var _summon_dragon_btn: Button
 var _cancel_target_btn: Button
 var _confirm_target_btn: Button
 
@@ -217,6 +218,8 @@ const RESCUE_EGG := 1000001 # Skill response, deliberately outside CardSubType.
 var _egg_heal_override: Callable = Callable()
 var _egg_heal_pending := false
 var _egg_rescue_turns: Dictionary = {}
+var _summon_dragon_pending: Dictionary = {}
+var _summon_dragon_serial := 0
 
 # 凯文·罗本【你个壊货】发动测试钩子（正常游戏不设置）：返回 true = 发动拼点
 var _kaiwen_override: Callable = Callable()
@@ -502,12 +505,21 @@ func _create_ui():
 	_self_info_container.mouse_filter = 0
 
 	# 底栏 - 中间：出牌区
+	var play_row = HBoxContainer.new()
+	_play_area_container.add_child(play_row)
 	_play_btn = Button.new()
 	_play_btn.text = "出牌"
 	_play_btn.custom_minimum_size = Vector2(120, 40)
 	_play_btn.pressed.connect(_on_play_btn_pressed)
 	_play_btn.visible = false
-	_play_area_container.add_child(_play_btn)
+	_play_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	play_row.add_child(_play_btn)
+	_summon_dragon_btn = Button.new()
+	_summon_dragon_btn.text = "召唤火龙"
+	_summon_dragon_btn.custom_minimum_size = Vector2(180, 40)
+	_summon_dragon_btn.visible = false
+	_summon_dragon_btn.pressed.connect(func(): _on_summon_dragon_clicked(_local_player()))
+	play_row.add_child(_summon_dragon_btn)
 
 	_end_play_btn = Button.new()
 	_end_play_btn.text = "结束出牌"
@@ -1377,6 +1389,56 @@ func _on_egg_heal_clicked(p: Player) -> void:
 	if choice == 0 and valid.call(): _spend_egg_to_heal(p)
 	_egg_heal_pending = false
 	_sync_all_ui()
+
+func _can_summon_dragon(p: Player) -> bool:
+	return _can_use_play_skill(p) and p.general_name == "克里斯·西弗" and fire_dragon_state.can_summon(p)
+
+func _on_summon_dragon_clicked(p: Player) -> int:
+	if not _can_summon_dragon(p) or _play_skill_execution_busy() or not _play_btn.visible \
+		or p != _local_player() or not _is_human(p): return CHOICE_INVALID
+	_summon_dragon_serial += 1
+	var lease = _summon_dragon_serial
+	_summon_dragon_pending[p] = lease
+	var result = await _summon_dragon_pending_choice(p, lease)
+	if _summon_dragon_pending.get(p) == lease: _summon_dragon_pending.erase(p)
+	_sync_all_ui()
+	return result
+
+func _summon_dragon_pending_choice(p: Player, lease: int) -> int:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var eggs = p.fire_dragon_eggs
+	# Deliberately independent of remaining hand count: after PAID the three
+	# selected originals have left the hand, but all other conditions must hold.
+	var valid = func():
+		return _summon_dragon_pending.get(p) == lease and generation == _dying_lifecycle_generation \
+			and _can_use_play_skill(p) and p.general_name == "克里斯·西弗" \
+			and revision == turn_manager.get_context_revision() and registry_generation == unit_registry.generation() \
+			and p.fire_dragon_eggs == eggs and fire_dragon_state.can_heal(p, p, TurnManager.Phase.PLAY) \
+			and not fire_dragon_state.has_dragon(p)
+	var payment = await _select_hand_discard_result(p, 3, false, valid)
+	if payment != HandDiscardOutcome.PAID:
+		return 0 if payment == HandDiscardOutcome.DECLINED else CHOICE_INVALID
+	if not valid.call():
+		push_error("Summon context changed during synchronous fee commit")
+		return CHOICE_INVALID
+	# No await from committed cards through egg/body/attachment. These calls
+	# have prevalidated membership/capacity and cannot be deferred to asserts.
+	var paid_egg = fire_dragon_state.spend_egg(p)
+	assert(paid_egg, "Validated summon must pay its egg")
+	if not paid_egg: return CHOICE_INVALID
+	var body = FireDragonState.create_body()
+	var id = _register_unit_body(UnitRegistry.Kind.FIRE_DRAGON, body, p)
+	if id.is_empty():
+		body.free()
+		push_error("Validated summon failed unit registration")
+		return CHOICE_INVALID
+	var attached = fire_dragon_state.attach(id)
+	assert(attached, "Newly registered dragon must attach initial state")
+	if not attached: return CHOICE_INVALID
+	_history_event("unit_summoned", "%s 弃置3张手牌及1颗【火龙蛋】，召唤【火龙】" % p.player_name, p, [], {"unit": id, "count": 3})
+	return 1
 
 func _do_play(pid: int):
 	var p = players[pid]
@@ -7391,8 +7453,9 @@ func _show_paixiong_prompt(source_name: String, allowed: Callable = Callable()) 
 var _play_skill_target_revision: int = -1
 var _play_skill_selection_generation: int = 0
 
-# 只序列化四种主动出牌入口；响应、觉醒与保命仍可在原执行中正常发生。
+# 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if _egg_heal_pending or not _summon_dragon_pending.is_empty(): return true
 	if _gay_execution_owner != -1 or _campus_execution_owner != -1 or _lanzhonghou_execution_owner != -1:
 		return true
 	if _zhuangbi_execution_owner != -1 and _zhuangbi_execution_owner != continuing_zhuangbi:
@@ -11068,10 +11131,15 @@ func _sync_all_ui():
 	_egg_heal_btn.visible = _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
 		and _is_human(players[turn_manager.get_play_actor_idx()])
 	_egg_heal_btn.disabled = _egg_heal_pending
+	_summon_dragon_btn.visible = _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
+		and _is_human(players[turn_manager.get_play_actor_idx()])
+	_summon_dragon_btn.disabled = not _summon_dragon_pending.is_empty()
 
 func _process(delta: float):
 	if is_instance_valid(_egg_heal_btn) and turn_manager != null and not players.is_empty():
 		_egg_heal_btn.visible = not _game_over and _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
+			and _is_human(players[turn_manager.get_play_actor_idx()])
+		_summon_dragon_btn.visible = not _game_over and _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
 			and _is_human(players[turn_manager.get_play_actor_idx()])
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
 	if _countdown_active:

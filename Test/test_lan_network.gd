@@ -38,6 +38,10 @@ var owns_medicine := false
 var medicine_replied := false
 var medicine_seeded := false
 var egg_seen := false
+var summon_case := false
+var summon_seen := false
+var summoned_body_seen := false
+var summon_paid := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -58,6 +62,7 @@ func _run() -> void:
 		if arg == "--space-case": space_case = true
 		if arg == "--unit-case": unit_case = true
 		if arg == "--medicine-case": medicine_case = true
+		if arg == "--summon-case": summon_case = true
 	var holder = Node.new()
 	holder.name = "LanHarness"
 	root.add_child(holder)
@@ -89,12 +94,13 @@ func _run() -> void:
 			if space_case: args.append("--space-case")
 			if unit_case: args.append("--unit-case")
 			if medicine_case: args.append("--medicine-case")
+			if summon_case: args.append("--summon-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
 	while Time.get_ticks_msec() < exit_at:
 		if not child and not started and session.members.size() == size:
-			if medicine_case and not medicine_seeded and session.members.values().all(func(member): return bool(member.ready)):
+			if (medicine_case or summon_case) and not medicine_seeded and session.members.values().all(func(member): return bool(member.ready)):
 				# Authorized metadata allocation fixture, not a released general menu.
 				# Same server bridge/opening, ordinary HP, roles, phases and victory.
 				var peers = session.members.keys().filter(func(peer): return peer != 1)
@@ -136,6 +142,9 @@ func _run() -> void:
 			check(medicine_seen, "peer received actual medicine skill history over ENet")
 			check(egg_seen, "peer received actual egg payment and heal over ENet")
 			if owns_medicine: check(medicine_replied, "remote Chris selected actual medicine combination")
+		if summon_case:
+			check(summon_seen and summoned_body_seen, "peer received paid actual summon and independent body over ENet")
+			if owns_medicine: check(summon_paid, "remote Chris confirmed three original fee cards")
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
 			check(units_seen, "peer received separate unit rows over real ENet")
@@ -188,6 +197,10 @@ func _run_unit_choice() -> void:
 		game._history_event("unit_input_verified", "单位控制者完成联机确认")
 
 func _state(state: Dictionary) -> void:
+	if summon_case:
+		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
+		summon_seen = summon_seen or session.history.entries.any(func(event): return event.kind == "unit_summoned")
+		summoned_body_seen = summoned_body_seen or state.units.any(func(unit): return unit.kind == UnitRegistry.Kind.FIRE_DRAGON and unit.hp == 3 and unit.hand_count == 0 and unit.summoner == unit.controller)
 	if medicine_case:
 		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
 		medicine_seen = medicine_seen or session.history.entries.any(func(event): return event.kind == "skill" and "【偷药品】" in event.text)
@@ -226,8 +239,24 @@ func _state(state: Dictionary) -> void:
 		print("LOG_DIGEST ", history_digest)
 		final_seen = true
 		return
-	var token = driver.choose(state)
-	if medicine_case and not medicine_seen and state.actor == 0:
+	var token: String
+	if summon_case:
+		# Test strategy uses only the same owner-filtered controls as a client.
+		# Select three fee slots; never overwrite HP, hand contents or phases.
+		var summon = state.controls.filter(func(control): return control.text == "召唤火龙" and not control.disabled)
+		var fee = state.labels.any(func(label): return label == "选择弃置 3 张手牌（技能费用，可取消）")
+		if not summon.is_empty(): token = summon[0].id
+		elif fee:
+			var cards = state.controls.filter(func(control): return control.toggle and not control.pressed and not control.disabled)
+			var chosen = state.controls.filter(func(control): return control.toggle and control.pressed)
+			if chosen.size() < 3 and not cards.is_empty(): token = cards[0].id
+			else:
+				var confirm = state.controls.filter(func(control): return control.text == "确认弃牌" and not control.disabled)
+				if not confirm.is_empty():
+					token = confirm[0].id
+					summon_paid = true
+	if token.is_empty(): token = driver.choose(state)
+	if ((medicine_case and not medicine_seen) or (summon_case and not summon_seen)) and state.actor == 0:
 		# Legal player strategy: let the remote first draw occur before attacking.
 		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)
 		if not end.is_empty(): token = end[0].id
