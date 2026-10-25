@@ -101,8 +101,16 @@ func stealth_allows_target(id: String, source: Player) -> bool:
 	if not _registry.players().has(source) and not _registry.turn_units().has(source): return false
 	return is_revealed_to(id, source)
 
-# Positive receipt IDs from actual unit START, not the controller's START or a
-# WAITING->PLAY resume. Never count round boundaries as a unit's own turns.
+# Q7: consume a skipped opportunity without running START or advancing the egg
+# counter. The turn scheduler still owns completing its ordinary-round quota.
+func note_skipped_turn(id: String, receipt_id: int) -> bool:
+	var entry = _live_entry(id)
+	if entry.is_empty() or not entry.body.is_alive() or receipt_id <= int(_dragons[id].last_turn): return false
+	_dragons[id].last_turn = receipt_id
+	return true
+
+# Positive receipt IDs from actual, non-skipped unit START, not the controller's
+# START or a WAITING->PLAY resume. Skipped receipts cannot later replay as START.
 func begin_turn(id: String, receipt_id: int) -> bool:
 	var entry = _live_entry(id)
 	if entry.is_empty() or not entry.body.is_alive() or receipt_id <= int(_dragons[id].last_turn): return false
