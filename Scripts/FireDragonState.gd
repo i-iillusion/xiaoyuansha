@@ -92,6 +92,15 @@ func record_use(id: String, action_id: int, targets: Array[Player]) -> bool:
 func is_revealed_to(id: String, source: Player) -> bool:
 	return not _live_entry(id).is_empty() and is_instance_valid(source) and _dragons[id].revealed.has(source)
 
+# Only the stealth gate, not card/phase/range authorization. Q6 permits self
+# targeting without creating a USE fact or revealing the dragon to anyone else.
+func stealth_allows_target(id: String, source: Player) -> bool:
+	var entry = _live_entry(id)
+	if entry.is_empty() or not is_instance_valid(source) or source.is_dead(): return false
+	if source == entry.body: return true
+	if not _registry.players().has(source) and not _registry.turn_units().has(source): return false
+	return is_revealed_to(id, source)
+
 # Positive receipt IDs from actual unit START, not the controller's START or a
 # WAITING->PLAY resume. Never count round boundaries as a unit's own turns.
 func begin_turn(id: String, receipt_id: int) -> bool:

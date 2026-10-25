@@ -40,6 +40,8 @@ func run(t):
 		t.check(dragon.hp == 3 and dragon.max_hp == 3 and dragon.hand_size() == 0 and dragon.identity == "" and dragon.seat_index == -1, "I03 dragon starts three HP, zero cards, no player identity")
 		var id = registry.register(UnitRegistry.Kind.FIRE_DRAGON, dragon, roster[0])
 		t.check(state.attach(id) and not state.attach(id), "I03 dragon attaches once")
+		t.check(state.stealth_allows_target(id, dragon) and not state.is_revealed_to(id, dragon), "I03 Q6 self targeting is permitted without recording a USE or revelation")
+		t.check(roster.all(func(p): return not state.stealth_allows_target(id, p)), "I03 self exemption never permits another character to target hidden dragon")
 		t.check(state.has_dragon(roster[0]) and not state.can_summon(roster[0]), "I03 registered living dragon prevents another summon")
 		t.check(state.draw_count(id) == 1 and dragon.hand_size() == 0 and roster[0].hand_size() == 3, "I03 own DRAW basis is one, never owner cards")
 		for source in roster:
@@ -47,11 +49,17 @@ func run(t):
 		var target_list: Array[Player] = [roster[1]]
 		t.check(state.record_use(id, 10, target_list), "I03 established unit USE reveals specified target")
 		t.check(state.is_revealed_to(id, roster[1]) and not state.is_revealed_to(id, roster[0]), "I03 revelation to B never reveals to A")
+		dragon.hp = 1
+		t.check(state.stealth_allows_target(id, dragon) and state.stealth_allows_target(id, roster[1]) and not state.stealth_allows_target(id, roster[0]), "I03 Q6 wounded dragon self Peach passes stealth gate while owner still cannot target it")
+		dragon.hp = 3
 		var outsider = Player.new()
 		outsider.hp = 3
 		var bad_targets: Array[Player] = [roster[0], outsider]
 		t.check(not state.record_use(id, 11, bad_targets) and not state.is_revealed_to(id, roster[0]), "I03 invalid batch has no partial revelation")
+		t.check(not state.stealth_allows_target(id, outsider) and not state.stealth_allows_target(id, null), "I03 self exemption cannot authorize outsider or null source")
 		outsider.free()
+		var self_targets: Array[Player] = [dragon]
+		t.check(state.record_use(id, 11, self_targets) and state.is_revealed_to(id, dragon) and not state.is_revealed_to(id, roster[0]), "I03 actual self USE records only self, never globally reveals")
 		var all_targets: Array[Player] = roster.duplicate()
 		t.check(not state.record_use(id, 10, all_targets) and not state.is_revealed_to(id, roster[0]), "I03 replayed USE does not reveal new targets")
 		t.check(state.record_use(id, 12, all_targets) and roster.all(func(p): return state.is_revealed_to(id, p)), "I03 AOE USE reveals all designated characters")
@@ -66,8 +74,10 @@ func run(t):
 		registry.detach_final_summoner(roster[0])
 		t.check(not state.begin_turn(id, 130) and not state.record_use(id, 13, all_targets) and state.draw_count(id) == 0, "I03 final summoner loss rejects old actions and START")
 		t.check(not state.is_revealed_to(id, roster[1]) and not state.spend_egg(roster[0]), "I03 detached objects have no live relation or spend permission")
+		t.check(not state.stealth_allows_target(id, dragon), "I03 self exemption cannot revive detached unit permission")
 		state.reset()
 		t.check(state.turn_count(id) == 0 and not state.attach(id) and not state.begin_turn(id, 140), "I03 reset invalidates all state handles")
+		t.check(not state.stealth_allows_target(id, dragon), "I03 reset rejects old self target handles")
 		dragon.free()
 		for p in roster: p.free()
 	await _replacement_cases(t)
