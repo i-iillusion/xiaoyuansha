@@ -148,6 +148,7 @@ var _play_btn: Button
 var _end_play_btn: Button
 var _egg_heal_btn: Button
 var _summon_dragon_btn: Button
+var _roar_btn: Button
 var _cancel_target_btn: Button
 var _confirm_target_btn: Button
 
@@ -220,6 +221,8 @@ var _egg_heal_pending := false
 var _egg_rescue_turns: Dictionary = {}
 var _summon_dragon_pending: Dictionary = {}
 var _summon_dragon_serial := 0
+var _roar_pending := false
+var _roar_choice_override: Callable = Callable()
 
 # 凯文·罗本【你个壊货】发动测试钩子（正常游戏不设置）：返回 true = 发动拼点
 var _kaiwen_override: Callable = Callable()
@@ -520,6 +523,12 @@ func _create_ui():
 	_summon_dragon_btn.visible = false
 	_summon_dragon_btn.pressed.connect(func(): _on_summon_dragon_clicked(_local_player()))
 	play_row.add_child(_summon_dragon_btn)
+	_roar_btn = Button.new()
+	_roar_btn.text = "恶龙咆哮"
+	_roar_btn.custom_minimum_size = Vector2(180, 40)
+	_roar_btn.visible = false
+	_roar_btn.pressed.connect(func(): _on_roar_clicked(_local_player()))
+	play_row.add_child(_roar_btn)
 
 	_end_play_btn = Button.new()
 	_end_play_btn.text = "结束出牌"
@@ -1439,6 +1448,66 @@ func _summon_dragon_pending_choice(p: Player, lease: int) -> int:
 	if not attached: return CHOICE_INVALID
 	_history_event("unit_summoned", "%s 弃置3张手牌及1颗【火龙蛋】，召唤【火龙】" % p.player_name, p, [], {"unit": id, "count": 3})
 	return 1
+
+func _roar_options(p: Player) -> Array:
+	var options: Array = []
+	if not _can_use_play_skill(p) or p.general_name != "克里斯·西弗" or p.fire_dragon_eggs <= 0: return options
+	for body in unit_registry.turn_units():
+		var id = unit_registry.id_for(body)
+		if unit_registry.entry(id).kind != UnitRegistry.Kind.FIRE_DRAGON or not body.is_alive(): continue
+		# Q5: the sacrificed body is a cost, not an effect target. No stealth check.
+		# Unit damage targets are connected with the actual actor pipeline in I03c.
+		for target in players:
+			if target.is_alive() and not _is_kneeling(target): options.append({"id": id, "body": body, "target": target})
+	return options
+
+func _on_roar_clicked(p: Player) -> int:
+	if _roar_options(p).is_empty() or _play_skill_execution_busy() or p != _local_player() or not _is_human(p) or not _play_btn.visible: return CHOICE_INVALID
+	_roar_pending = true
+	var result = await _roar_pending_choice(p)
+	_roar_pending = false
+	_sync_all_ui()
+	return result
+
+func _roar_pending_choice(p: Player) -> int:
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var eggs = p.fire_dragon_eggs
+	var valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+		and revision == turn_manager.get_context_revision() and registry_generation == unit_registry.generation()
+	var eligible = func(): return valid.call() and _can_use_play_skill(p) and p.general_name == "克里斯·西弗" and p.fire_dragon_eggs == eggs and eggs > 0
+	var options = _roar_options(p)
+	var choice: int
+	if _roar_choice_override.is_valid(): choice = await _roar_choice_override.call(p, options)
+	else:
+		_set_input_player(p)
+		var prompt = load("res://Scripts/RoarChoicePrompt.gd").new()
+		$UI.add_child(prompt)
+		prompt.setup(options)
+		var answer = ChoicePromptAnswer.new()
+		prompt.chosen.connect(answer.submit)
+		choice = await _wait_choice_prompt(prompt, answer, eligible)
+	if not eligible.call() or choice == CHOICE_INVALID: return CHOICE_INVALID
+	if choice == -1: return 0
+	if choice < 0 or choice >= options.size() or not _roar_options(p).has(options[choice]): return CHOICE_INVALID
+	var option: Dictionary = options[choice]
+	var paid = fire_dragon_state.spend_egg(p)
+	assert(paid, "Validated roar must pay one egg")
+	if not paid: return CHOICE_INVALID
+	# Q4: direct final mechanism death, no damage, rescue or Sage window.
+	option.body.mark_dead()
+	var retired = _retire_final_unit(option.body)
+	assert(retired, "Validated roar body must retire once")
+	if not retired: return CHOICE_INVALID
+	_history_event("roar", "%s 发动【恶龙咆哮】，牺牲火龙、弃置1颗蛋" % p.player_name, p, [option.target], {"unit": option.id})
+	var context = DyingContext.new(option.body, p, "roar_cost", null)
+	context.stage = DyingContext.Stage.FINAL_DEATH
+	if not await rule_scheduler.checkpoint(context, "unit_after_death") or not valid.call(): return CHOICE_INVALID
+	context.stage = DyingContext.Stage.FINISHED
+	if option.target.is_dead(): return 1
+	var damage = await _deal_damage_result(p, option.target, 6, EffectChain.DamageType.FIRE)
+	return CHOICE_INVALID if damage.invalidated and not _game_over else 1
 
 func _do_play(pid: int):
 	var p = players[pid]
@@ -7455,7 +7524,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
-	if _egg_heal_pending or not _summon_dragon_pending.is_empty(): return true
+	if _egg_heal_pending or _roar_pending or not _summon_dragon_pending.is_empty(): return true
 	if _gay_execution_owner != -1 or _campus_execution_owner != -1 or _lanzhonghou_execution_owner != -1:
 		return true
 	if _zhuangbi_execution_owner != -1 and _zhuangbi_execution_owner != continuing_zhuangbi:
@@ -11134,6 +11203,8 @@ func _sync_all_ui():
 	_summon_dragon_btn.visible = _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
 		and _is_human(players[turn_manager.get_play_actor_idx()])
 	_summon_dragon_btn.disabled = not _summon_dragon_pending.is_empty()
+	_roar_btn.visible = _play_btn.visible and not _roar_options(players[turn_manager.get_play_actor_idx()]).is_empty() and _is_human(players[turn_manager.get_play_actor_idx()])
+	_roar_btn.disabled = _roar_pending
 
 func _process(delta: float):
 	if is_instance_valid(_egg_heal_btn) and turn_manager != null and not players.is_empty():
@@ -11141,6 +11212,7 @@ func _process(delta: float):
 			and _is_human(players[turn_manager.get_play_actor_idx()])
 		_summon_dragon_btn.visible = not _game_over and _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
 			and _is_human(players[turn_manager.get_play_actor_idx()])
+		_roar_btn.visible = not _game_over and _play_btn.visible and not _roar_options(players[turn_manager.get_play_actor_idx()]).is_empty() and _is_human(players[turn_manager.get_play_actor_idx()])
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
 	if _countdown_active:
 		_step_remaining -= delta

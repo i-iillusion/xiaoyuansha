@@ -42,6 +42,10 @@ var summon_case := false
 var summon_seen := false
 var summoned_body_seen := false
 var summon_paid := false
+var roar_case := false
+var roar_seeded := false
+var roar_seen := false
+var roar_paid := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -63,6 +67,9 @@ func _run() -> void:
 		if arg == "--unit-case": unit_case = true
 		if arg == "--medicine-case": medicine_case = true
 		if arg == "--summon-case": summon_case = true
+		if arg == "--roar-case":
+			roar_case = true
+			summon_case = true
 	var holder = Node.new()
 	holder.name = "LanHarness"
 	root.add_child(holder)
@@ -95,6 +102,7 @@ func _run() -> void:
 			if unit_case: args.append("--unit-case")
 			if medicine_case: args.append("--medicine-case")
 			if summon_case: args.append("--summon-case")
+			if roar_case: args.append("--roar-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -120,6 +128,17 @@ func _run() -> void:
 				if drop_case:
 					saved_game = session.bridge.game
 					saved_game._rps_choice(saved_game.players[1], "disconnect case")
+		if not child and roar_case and started and not roar_seeded and session.bridge != null:
+			var game = session.bridge.game
+			var bodies = game.unit_registry.turn_units()
+			if not bodies.is_empty():
+				# Explicit state-component fixture: actual paid summon above, then
+				# two START receipts to prepare an egg. Not an actual unit-turn test.
+				var id = game.unit_registry.id_for(bodies[0])
+				check(game.fire_dragon_state.begin_turn(id, 1), "roar setup accepts first modeled unit START receipt")
+				check(game.fire_dragon_state.begin_turn(id, 2), "roar setup awards egg at second modeled unit START receipt")
+				roar_seeded = true
+				game._sync_all_ui()
 		if not child and unit_case and started and not unit_input_started and session.bridge != null:
 			var game = session.bridge.game
 			if game.turn_manager.current_phase == TurnManager.Phase.PLAY and session.bridge._root() == null and not session.bridge._targeting():
@@ -145,6 +164,9 @@ func _run() -> void:
 		if summon_case:
 			check(summon_seen and summoned_body_seen, "peer received paid actual summon and independent body over ENet")
 			if owns_medicine: check(summon_paid, "remote Chris confirmed three original fee cards")
+		if roar_case:
+			check(roar_seen, "peer received actual roar payment over ENet")
+			if owns_medicine: check(roar_paid, "remote Chris selected sacrifice and damage target")
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
 			check(units_seen, "peer received separate unit rows over real ENet")
@@ -197,6 +219,7 @@ func _run_unit_choice() -> void:
 		game._history_event("unit_input_verified", "单位控制者完成联机确认")
 
 func _state(state: Dictionary) -> void:
+	if roar_case: roar_seen = roar_seen or session.history.entries.any(func(event): return event.kind == "roar")
 	if summon_case:
 		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
 		summon_seen = summon_seen or session.history.entries.any(func(event): return event.kind == "unit_summoned")
@@ -240,7 +263,18 @@ func _state(state: Dictionary) -> void:
 		final_seen = true
 		return
 	var token: String
-	if summon_case:
+	if roar_case and state.labels.any(func(label): return "【恶龙咆哮】" in label):
+		for player in state.players:
+			if player.seat == state.actor or player.dead: continue
+			var options = state.controls.filter(func(control): return control.text.ends_with(" → %d号 %s" % [player.seat + 1, player.name]) and not control.disabled)
+			if not options.is_empty():
+				token = options[0].id
+				roar_paid = true
+				break
+	if roar_case and token.is_empty():
+		var roar = state.controls.filter(func(control): return control.text == "恶龙咆哮" and not control.disabled)
+		if not roar.is_empty(): token = roar[0].id
+	if summon_case and token.is_empty():
 		# Test strategy uses only the same owner-filtered controls as a client.
 		# Select three fee slots; never overwrite HP, hand contents or phases.
 		var summon = state.controls.filter(func(control): return control.text == "召唤火龙" and not control.disabled)
