@@ -8,6 +8,7 @@ func check(value: bool, message: String):
 	print(("PASS: " if value else "FAIL: ") + message)
 func _run():
 	await load("res://Test/i03_state_cases.gd").new().run(self)
+	await load("res://Test/i03_actor_identity_cases.gd").new().run(self)
 	await load("res://Test/i03_opening_cases.gd").new().run(self)
 	await load("res://Test/i03_medicine_cases.gd").new().run(self)
 	await load("res://Test/i03_egg_cases.gd").new().run(self)

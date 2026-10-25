@@ -67,16 +67,14 @@ var _seat_banks: Dictionary = {}
 var _bank_owner := 0
 
 func _is_human(p: Player) -> bool:
-	if p != null and not unit_registry.id_for(p).is_empty():
-		p = unit_registry.controller(unit_registry.id_for(p))
+	p = ActorIdentity.controller(players, unit_registry, p)
 	return p != null and p.seat_index >= 0 and (lan_enabled or p.seat_index == 0)
 
 func _local_player() -> Player:
 	return players[_input_seat if lan_enabled else 0]
 
 func _set_input_player(p: Player) -> void:
-	if p != null and not unit_registry.id_for(p).is_empty():
-		p = unit_registry.controller(unit_registry.id_for(p))
+	p = ActorIdentity.controller(players, unit_registry, p)
 	if lan_enabled and p != null and players.has(p):
 		_input_seat = p.seat_index
 
