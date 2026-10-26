@@ -363,7 +363,7 @@ func remove_equipment(slot: String, loss_effects: bool = true) -> CardBase:
 		CardData.CardSubType.MOUNT_MINUS:
 			mount_minus = maxi(mount_minus - 1, 0)
 		CardData.CardSubType.MULE_MINUS, CardData.CardSubType.MULE_PLUS:
-			pass  # 劣马是全局效果，无个人计数
+			pass  # 劣马不计入普通马，由双方身体的定向劣马修正计算。
 		CardData.CardSubType.LIANNU, CardData.CardSubType.ZHUGE_LIANNU, CardData.CardSubType.QINGLONG_BLADE, CardData.CardSubType.ZHANGBA_SPEAR, CardData.CardSubType.CHIXIONG_SHUANGGU, CardData.CardSubType.ICE_SWORD, CardData.CardSubType.QINGGANG_SWORD, CardData.CardSubType.GUDING_BLADE, CardData.CardSubType.GUANSHI_AXE, CardData.CardSubType.QILING_BOW, CardData.CardSubType.FANGTIAN_HALBERD, CardData.CardSubType.FATE_BLADE, CardData.CardSubType.GOU_LIAN_CLAW, CardData.CardSubType.BLOODTHIRSTY_BLADE, CardData.CardSubType.CALAMITY_SWORD, CardData.CardSubType.HEAL_STAFF, CardData.CardSubType.RAGING_AXE, CardData.CardSubType.SOUL_BLADE:
 			pass  # 武器无攻击距离加成，属性无需重置（唯一性由 EquipmentPool 管理）
 		CardData.CardSubType.POFENG_SPEAR:
@@ -470,14 +470,14 @@ func seat_distance_to(other: Player) -> int:
 	var diff = abs(seat_index - other.seat_index)
 	return mini(diff, _total_players - diff)
 
-# 是否装备了 -1劣马（全局距离修正）
+# 是否装备了 -1劣马（仅其他角色到本人的距离减1）
 func has_mule_minus() -> bool:
 	for s in MOUNT_SLOTS:
 		if equipment.get(s, -1) == CardData.CardSubType.MULE_MINUS:
 			return true
 	return false
 
-# 是否装备了 +1劣马（全局距离修正）
+# 是否装备了 +1劣马（仅本人到其他角色的距离加1）
 func has_mule_plus() -> bool:
 	for s in MOUNT_SLOTS:
 		if equipment.get(s, -1) == CardData.CardSubType.MULE_PLUS:
@@ -486,12 +486,12 @@ func has_mule_plus() -> bool:
 
 # 攻击此目标需要的实际距离（计数制：自己的 -1 马数量缩短距离，目标的 +1 马数量增加距离）
 # 武器无攻击距离加成；距离最小为 1
-# 【劣马】全局修正：其他玩家视作额外装备了劣马（-1劣马→攻击距离额外-1；+1劣马→目标被攻击距离额外+1）
+# 【劣马】仅对持有者生效：目标的-1劣马减距，自己的+1劣马加距。
 func attack_distance_to(target: Player) -> int:
 	var dist = seat_distance_to(target)
 	dist -= mount_minus     # 每匹 -1 马缩短 1 距离
 	dist += target.mount_plus  # 目标的每匹 +1 马增加 1 距离
-	# 劣马全局效果：由 GameManager 提供（玩家是 GameManager 的子节点）
+	# 读取实际双方的劣马，不遍历第三方；单位不借用控制者的装备。
 	var parent_node = get_parent()
 	if parent_node != null and parent_node.has_method("_mule_distance_mod"):
 		var mod: Vector2i = parent_node._mule_distance_mod(self, target)

@@ -2048,18 +2048,12 @@ func _choose_ordinary_actor(nominee: int) -> int:
 		if actor.seat_index == nominee: return ledger.next_pending_except(nominee)
 	return nominee
 
-# 【劣马】全局距离修正：-1劣马 → 其他玩家（非持有者）视作额外装备 -1马（攻击距离-1）；
-# +1劣马 → 其他玩家（非持有者）视作额外装备 +1马（被攻击距离+1）
+# 【劣马】虚拟坐骑仅针对持有者，不修正两名非持有者之间的距离。
+# 目标持-1劣马时来源视为有-1马；来源持+1劣马时目标视为有+1马。
 # 返回 Vector2i(minus, plus)；由 Player.attack_distance_to 调用（玩家是 GameManager 子节点）
 func _mule_distance_mod(attacker: Player, target: Player) -> Vector2i:
-	var minus = 0
-	var plus = 0
-	for p in players:
-		if p != attacker and p.has_mule_minus():
-			minus += 1
-		if p != target and p.has_mule_plus():
-			plus += 1
-	return Vector2i(minus, plus)
+	if not is_instance_valid(attacker) or not is_instance_valid(target) or attacker == target: return Vector2i.ZERO
+	return Vector2i(1 if target.has_mule_minus() else 0, 1 if attacker.has_mule_plus() else 0)
 
 func _get_all_alive_targets(attacker: Player) -> Array[Player]:
 	var targets: Array[Player] = []

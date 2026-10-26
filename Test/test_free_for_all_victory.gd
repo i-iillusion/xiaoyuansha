@@ -171,6 +171,7 @@ func _run():
 	await load("res://Test/i03_skill_targets_cases.gd").new().run(self)
 	await load("res://Test/i03_delayed_chain_cases.gd").new().run(self)
 	await load("res://Test/i03_input_cases.gd").new().run(self)
+	await load("res://Test/mule_distance_cases.gd").new().run(self)
 	await load("res://Test/i03_source_disappearance_cases.gd").new().run(self)
 	await load("res://Test/i03_opening_cases.gd").new().run(self)
 	await load("res://Test/i03_medicine_cases.gd").new().run(self)
