@@ -1184,11 +1184,13 @@ func _last_pending_judgment(p: Player, deferred: Array[CardBase]) -> CardBase:
 	return null
 
 func _move_lightning(p: Player, card: CardBase) -> Player:
-	var circle = LivingTable.ordered(spatial_players(), true)
-	var start = circle.find(p)
+	# UNIT-20: follow actual character order, but skip a dragon still hidden
+	# from the current judgment holder. This is movement, never a new card USE.
+	var circle = _character_order_from(p)
 	for offset in range(1, circle.size()):
-		var target = circle[(start + offset) % circle.size()]
-		if not target.is_alive() or _is_kneeling(target) or _has_delayed_card(target, card.sub_type): continue
+		var target = circle[offset]
+		if not target.is_alive() or _is_kneeling(target) or not _can_target_body(p, target) \
+			or _has_delayed_card(target, card.sub_type): continue
 		target.judgment_cards.append(card)
 		_public_result("【闪电】原牌移至 %s 的判定区，等待其判定" % target.player_name)
 		return target
