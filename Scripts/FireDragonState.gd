@@ -54,6 +54,7 @@ static func create_body() -> Player:
 	var body = Player.new()
 	body.player_name = "火龙"
 	body.general_name = "火龙"
+	body.gender = "none" # UNIT-19: no gender; never inherit Player's male default.
 	body.identity = ""
 	body.seat_index = -1
 	body.max_hp = 3

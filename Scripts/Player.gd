@@ -23,8 +23,12 @@ var identity_revealed: bool = false
 # 武将（以同学为原型）：默认稻草人（5 血无技能）
 var general_name: String = "稻草人"
 
-# 性别（雌雄双股剑判定用）："male" / "female"
+# 性别（雌雄双股剑判定用）："male" / "female" / "none"（火龙）
 var gender: String = "male"
+
+func is_opposite_gender_to(other: Player) -> bool:
+	return other != null and gender in ["male", "female"] \
+		and other.gender in ["male", "female"] and gender != other.gender
 
 var hp: int : set = _set_hp
 enum LifeState { ACTIVE, DYING, DEAD }

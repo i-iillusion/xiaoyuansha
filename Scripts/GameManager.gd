@@ -2707,7 +2707,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 
 	# 雌雄双股剑：使用【杀】指定异性目标后，可令其选择：弃一张手牌 / 令你摸一张牌
 	# 时机在目标响应（出闪）之前，先于伤害结算（与方天画戟互斥武器，正常不会同时触发）
-	if target.is_alive() and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU and target.gender != p.gender \
+	if target.is_alive() and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU and p.is_opposite_gender_to(target) \
 			and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
 		var original_weapon = p.get_equipment_card("weapon")
 		var revision = turn_manager.get_context_revision()
@@ -2717,7 +2717,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 		var choice_valid = func():
 			return hit_valid.call() and _has_character_body(p) and p.is_alive() \
 				and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU \
-				and p.get_equipment_card("weapon") == original_weapon and p.gender != target.gender \
+				and p.get_equipment_card("weapon") == original_weapon and p.is_opposite_gender_to(target) \
 				and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		var activate = 1
 		if _is_human(p):
@@ -3725,7 +3725,9 @@ func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int,
 		if sub != current_sub and turn_manager.can_use(category): candidates.append(sub)
 	return candidates
 
-# 两人例外按存活玩家判断，不能把“AOE只有一人实际受伤”当两人局。
+# UNIT-18: a dragon's AOE designating both players cannot shrink to a single
+# target. Keep the declared actor roster, not just the fixed-player headcount.
+# Nor may later immunity/effectiveness turn an AOE into a single-target card.
 func _prep_other_single(attacker: Player, roster: Array[Player] = []) -> Player:
 	var alive: Array[Player] = roster.duplicate()
 	if roster.is_empty():
