@@ -277,6 +277,7 @@ func _run():
 	await check_cross_zone_payments()
 	game.queue_free()
 	await process_frame
+	await load("res://Test/full_game_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
 

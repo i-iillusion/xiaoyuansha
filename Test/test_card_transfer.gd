@@ -126,5 +126,10 @@ func _run():
 
 	game.queue_free()
 	await process_frame
+	# Balance existing seven fixed-budget suites, without removing cases,
+	# changing fixtures or weakening timeout/assertion checks.
+	await load("res://Test/equipment_response_suite.gd").new().run(self)
+	await load("res://Test/ai_pace_cases.gd").new().run(self)
+	await load("res://Test/ai_pace_settings_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

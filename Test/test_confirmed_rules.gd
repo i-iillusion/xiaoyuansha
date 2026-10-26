@@ -326,8 +326,8 @@ func _run():
 	await mule_full_slot_cases.run(self)
 	# G03: four whole unchanged soul-blade modules now run exactly once in the
 	# identity suite's isolated host, preserving every old assertion and timeout.
-	await load("res://Test/ai_pace_cases.gd").new().run(self)
-	await load("res://Test/ai_pace_settings_cases.gd").new().run(self)
+	# I03c: complete unchanged pacing modules run once in card_transfer's
+	# isolated host, preserving every assertion and the fixed 60s suite budget.
 	_flush_check_log()
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

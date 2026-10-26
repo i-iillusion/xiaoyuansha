@@ -164,6 +164,8 @@ func _run():
 	await load("res://Test/i03_state_cases.gd").new().run(self)
 	await load("res://Test/i03_actor_identity_cases.gd").new().run(self)
 	await load("res://Test/i03_turn_cases.gd").new().run(self)
+	await load("res://Test/i03_burning_cases.gd").new().run(self)
+	await load("res://Test/i03_granted_cases.gd").new().run(self)
 	await load("res://Test/i03_source_disappearance_cases.gd").new().run(self)
 	await load("res://Test/i03_opening_cases.gd").new().run(self)
 	await load("res://Test/i03_medicine_cases.gd").new().run(self)

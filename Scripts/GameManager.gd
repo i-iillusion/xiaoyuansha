@@ -83,7 +83,7 @@ func _phase_actor(pid: int) -> Player:
 	return players[pid] if pid >= 0 and pid < players.size() else null
 
 func _play_actor() -> Player:
-	if turn_manager.current_unit_id.is_empty():
+	if turn_manager.current_unit_id.is_empty() and turn_manager.play_actor_unit_id.is_empty():
 		var seat = turn_manager.get_play_actor_idx()
 		return players[seat] if seat >= 0 and seat < players.size() else null
 	var key = turn_manager.get_play_actor_key()
@@ -127,6 +127,11 @@ func _character_targets(source: Player) -> Array[Player]:
 	for unit in units:
 		if fire_dragon_state.stealth_allows_target(unit_registry.id_for(unit), source): result.append(unit)
 	return result
+
+func _can_target_body(source: Player, target: Player) -> bool:
+	if players.has(target): return true
+	if not is_instance_valid(target) or not unit_registry.contains_active(target): return false
+	return fire_dragon_state.stealth_allows_target(unit_registry.id_for(target), source)
 
 func _rescue_order_for_turn() -> Array[Player]:
 	var order = _character_order_from(_phase_actor(turn_manager.current_player_idx))
@@ -435,6 +440,7 @@ var _is_shensu_targeting: bool = false
 var _shensu_execution_generation: int = 0
 var _shensu_execution_owner: int = -1
 var _shensu_target_generation: int = 0
+var _shensu_target_bodies: Array[Player] = []
 var _shensu_target_answer: ChoicePromptAnswer
 var _start_phase_generation: int = 0
 var _start_phase_owner: int = -1
@@ -470,6 +476,7 @@ var _is_meiyong_targeting: bool = false             # 选择目标中
 var _meiyong_execution_generation: int = 0
 var _meiyong_execution_owner: int = -1
 var _meiyong_target_generation: int = 0
+var _meiyong_target_bodies: Array[Player] = []
 var _meiyong_target_answer: ChoicePromptAnswer
 var _meiyong_combined_state: Dictionary = {}
 var _meiyong_option: int = -1                       # 0=判定 / 1=摸牌 / 2=出牌
@@ -988,6 +995,7 @@ func start_game():
 		return seats
 	turn_manager.before_ordinary = _choose_ordinary_actor
 	turn_manager.attached_actor = _attached_turn_actor
+	turn_manager.actor_exists = func(key): return ActorIdentity.resolve_live(players, unit_registry, key) != null
 	turn_manager.start_game()
 	game_started.emit()
 
@@ -1141,12 +1149,12 @@ func _do_judge(pid: int):
 		return
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的判定阶段：跳过自己的判定，目标角色立刻进行判定阶段
 	# （其乐不思蜀/兵粮寸断失效，闪电/火烧连营正常生效）
-	if turn_manager.granted_judge_target_idx >= 0:
-		var target = players[turn_manager.granted_judge_target_idx]
+	if turn_manager.granted_judge_target_idx >= 0 or turn_manager.granted_judge_completed:
+		var target = players[turn_manager.granted_judge_target_idx] if turn_manager.granted_judge_target_idx >= 0 else null
 		turn_manager.granted_judge_target_idx = -1
 		var completed = turn_manager.granted_judge_completed
 		turn_manager.granted_judge_completed = false
-		if not completed and target.is_alive():
+		if not completed and target != null and target.is_alive():
 			if not await _run_judgment(target, true):
 				return
 		_sync_all_ui()
@@ -1275,12 +1283,12 @@ func _do_draw(pid: int):
 	var p = _phase_actor(pid)
 	var revision = turn_manager.get_context_revision()
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的摸牌阶段：跳过自己的摸牌，目标角色立刻获得一个摸牌阶段
-	if turn_manager.granted_draw_target_idx >= 0:
-		var target = players[turn_manager.granted_draw_target_idx]
+	if turn_manager.granted_draw_target_idx >= 0 or turn_manager.granted_draw_completed:
+		var target = players[turn_manager.granted_draw_target_idx] if turn_manager.granted_draw_target_idx >= 0 else null
 		turn_manager.granted_draw_target_idx = -1
 		var completed = turn_manager.granted_draw_completed
 		turn_manager.granted_draw_completed = false
-		if not completed and target.is_alive():
+		if not completed and target != null and target.is_alive():
 			if not await _draw_phase_cards(target, false): return
 		if revision != turn_manager.get_context_revision() or _game_over: return
 		_sync_all_ui()
@@ -1592,7 +1600,10 @@ func _do_play(pid: int):
 		turn_manager.advance_phase()
 		return
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的出牌阶段：跳过自己的出牌，目标角色立刻获得一个出牌阶段
-	if turn_manager.granted_play_target_idx >= 0:
+	if not turn_manager._standalone_play_frame.is_empty() and turn_manager._standalone_play_frame.phase == TurnManager.Phase.PLAY:
+		p = _play_actor()
+		if p == null: return
+	elif turn_manager.granted_play_target_idx >= 0:
 		var target = players[turn_manager.granted_play_target_idx]
 		turn_manager.granted_play_target_idx = -1
 		turn_manager.skip_play_phase = false  # 自己已不出牌，乐不思蜀的跳过效果无意义（已判定消耗）
@@ -5194,7 +5205,7 @@ func _enter_iron_chain_mode():
 func _on_iron_chain_target_click(target: Player):
 	if not _is_iron_chain_targeting or _card_target_confirm_owner == _card_target_generation:
 		return
-	var actor = _local_player()
+	var actor = _play_actor()
 	if not _can_use_play_skill(actor) or not _has_character_body(target): return
 	var generation = _card_target_generation
 	var revision = turn_manager.get_context_revision()
@@ -5563,22 +5574,26 @@ func _show_duel_second_strike_prompt() -> int:
 # Q2：中心伤害及其传导/濒死结束后，按存活圆桌选下家、上家。
 # 即使中心最终死亡，也以其原空间位置为锚；不修改固定座号。
 func _burning_camp_neighbors(center: Player) -> Array[Player]:
-	var circle = LivingTable.ordered(spatial_players(), true)
-	circle.erase(center)
+	# UNIT-17: effect adjacency follows A->F->B, not F's base-distance
+	# anchor A. Keep a finally-dead center only as its original position anchor.
+	var circle: Array[Player] = []
+	var units = unit_registry.all_bodies()
+	for fixed in spatial_players():
+		circle.append(fixed)
+		for body in units:
+			var entry = unit_registry.entry(unit_registry.id_for(body))
+			if entry.kind == UnitRegistry.Kind.FIRE_DRAGON and entry.summoner == fixed \
+				and (body == center or unit_registry.contains_active(body)):
+				circle.append(body)
 	var result: Array[Player] = []
-	if circle.is_empty(): return result
-	var next = circle[0]
-	var previous = circle.back()
-	for p in circle:
-		if p.seat_index > center.seat_index:
-			next = p
+	var origin = circle.find(center)
+	if origin < 0: return result
+	for direction in [1, -1]:
+		for offset in range(1, circle.size()):
+			var body = circle[posmod(origin + direction * offset, circle.size())]
+			if body.is_dead() or body.unit_disappeared: continue
+			if not result.has(body): result.append(body)
 			break
-	for i in range(circle.size() - 1, -1, -1):
-		if circle[i].seat_index < center.seat_index:
-			previous = circle[i]
-			break
-	result.append(next)
-	if previous != next: result.append(previous)
 	return result
 
 # 兼容入口也始终无来源；生产调用使用局部结果携带邻居快照，避免异步共享状态。
@@ -5590,7 +5605,7 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var result = {"outcome": 0, "neighbors": []}
-	var valid = func(): return revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation and players.has(center)
+	var valid = func(): return revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation and _has_character_body(center)
 	if not valid.call():
 		result.outcome = CHOICE_INVALID
 		return result
@@ -6792,7 +6807,7 @@ func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool
 		and turn_manager.current_phase == TurnManager.Phase.PLAY \
 		and turn_manager.get_play_actor_idx() >= 0 and turn_manager.get_play_actor_idx() < players.size() \
 		and _play_actor() == actor \
-		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target)))
+		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target) and _can_target_body(actor, target)))
 
 # ============================
 #  【是~啊~】锦囊白嫖（安普提·斯丢皮得）
@@ -8124,6 +8139,9 @@ func _show_shensu_option_prompt(p: Player, allowed: Callable = Callable()) -> in
 
 # 神速杀目标选择（单选，点击即执行）：返回目标（null=取消）
 func _pick_shensu_strike_target(p: Player, allowed: Callable = Callable()):
+	var bodies: Array[Player] = players.duplicate()
+	bodies.append_array(unit_registry.turn_units())
+	_shensu_target_bodies = bodies
 	_shensu_target_generation += 1
 	var generation = _shensu_target_generation
 	var revision = turn_manager.get_context_revision()
@@ -8155,11 +8173,12 @@ func _pick_shensu_strike_target(p: Player, allowed: Callable = Callable()):
 		_cancel_target_btn.visible = false
 	if selected == CHOICE_INVALID: return CHOICE_INVALID
 	if selected < 0: return null
-	if selected >= players.size() or not _shensu_strike_target_valid(p, players[selected]): return CHOICE_INVALID
-	return players[selected]
+	if selected >= bodies.size() or not _shensu_strike_target_valid(p, bodies[selected]): return CHOICE_INVALID
+	return bodies[selected]
 
 func _shensu_strike_target_valid(p: Player, target: Player) -> bool:
 	return target != null and _has_character_body(target) and target != p and target.is_alive() and not _is_kneeling(target) \
+		and _can_target_body(p, target) \
 		and target.get_armor() != CardData.CardSubType.TENGJIA and not _is_bare_running(target) and not _awake_blocks(target, 1)
 
 # 神速杀目标点击（分发器在 _on_player_panel_click）
@@ -8179,7 +8198,8 @@ func _on_shensu_target_click(target: Player):
 	if target.get_armor() == CardData.CardSubType.TENGJIA or _is_bare_running(target) or _awake_blocks(target, 1):
 		_update_debug("%s 不能成为【杀】的目标！" % target.player_name)
 		return
-	if _shensu_target_answer != null and _has_character_body(target): _shensu_target_answer.submit(players.find(target))
+	if _shensu_target_answer != null and _shensu_strike_target_valid(p, target) and _shensu_target_bodies.has(target):
+		_shensu_target_answer.submit(_shensu_target_bodies.find(target))
 
 # 神速杀：视为使用普通【杀】（无距离限制）；不耗手牌、不占杀次数；酒/武器/防具正常结算
 func _execute_shensu_strike(p: Player, target: Player) -> void:
@@ -8929,7 +8949,7 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 	return 1
 
 func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, phase: TurnManager.Phase) -> int:
-	var frame = turn_manager.begin_standalone_phase(target.seat_index, phase)
+	var frame = turn_manager.begin_standalone_phase(ActorIdentity.key_for(players, unit_registry, target), phase)
 	if frame.is_empty(): return CHOICE_INVALID
 	var revision: int = frame.revision
 	frame.allowed = func():
@@ -8948,7 +8968,7 @@ func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, ph
 	return 1
 
 func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> int:
-	var frame = turn_manager.begin_standalone_play(target.seat_index)
+	var frame = turn_manager.begin_standalone_play(ActorIdentity.key_for(players, unit_registry, target))
 	if frame.is_empty(): return CHOICE_INVALID
 	var play_revision: int = frame.revision
 	frame.allowed = func():
@@ -9064,7 +9084,10 @@ func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()
 		var reply = await _meiyong_target_override.call()
 		return reply if not allowed.is_valid() or allowed.call() else CHOICE_INVALID
 	var candidates: Array[Player] = []
-	for pl in players:
+	var bodies: Array[Player] = players.duplicate()
+	bodies.append_array(unit_registry.turn_units())
+	_meiyong_target_bodies = bodies
+	for pl in _character_targets(p):
 		if pl == p or not pl.is_alive() or _is_kneeling(pl):
 			continue
 		if option == 0 and pl.judgment_cards.is_empty():
@@ -9103,11 +9126,12 @@ func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()
 		_cancel_target_btn.visible = false
 	if selected == CHOICE_INVALID: return CHOICE_INVALID
 	if selected < 0: return null
-	if selected >= players.size() or not candidates.has(players[selected]) or not _meiyong_target_valid(p, players[selected], option): return CHOICE_INVALID
-	return players[selected]
+	if selected >= bodies.size() or not candidates.has(bodies[selected]) or not _meiyong_target_valid(p, bodies[selected], option): return CHOICE_INVALID
+	return bodies[selected]
 
 func _meiyong_target_valid(p: Player, target: Player, option: int) -> bool:
 	return target != null and _has_character_body(target) and target != p and target.is_alive() and not _is_kneeling(target) \
+		and _can_target_body(p, target) \
 		and (option != 0 or not target.judgment_cards.is_empty())
 
 # 烂忠厚联合界面：头像仅选人，最终阶段按钮才提交。
@@ -9136,7 +9160,8 @@ func _on_meiyong_target_click(target: Player):
 	if _meiyong_option == 0 and target.judgment_cards.is_empty():
 		_update_debug("%s 判定区没有牌，不能选择" % target.player_name)
 		return
-	if _meiyong_target_answer != null and _has_character_body(target): _meiyong_target_answer.submit(players.find(target))
+	if _meiyong_target_answer != null and _meiyong_target_valid(p, target, _meiyong_option) and _meiyong_target_bodies.has(target):
+		_meiyong_target_answer.submit(_meiyong_target_bodies.find(target))
 
 # 是否发动【烂忠厚】（玩家0弹窗）
 func _show_meiyong_activate_prompt(allowed: Callable = Callable(), remaining: Array = [STEP_SECONDS]) -> int:
@@ -11369,7 +11394,7 @@ func _refresh_status_line():
 	_halt_countdown()
 	match turn_manager.current_phase:
 		TurnManager.Phase.PLAY:
-			if _is_human(players[pid]):
+			if _is_human(_play_actor()):
 				_start_play_countdown()
 			else:
 				_set_status_line("%s 出牌阶段" % pname)
@@ -11382,7 +11407,8 @@ func _refresh_status_line():
 
 # 出牌阶段倒计时：每次成功出牌重置每步 30 秒（整局储备不重置），超时自动结束出牌
 func _start_play_countdown():
-	_select_time_bank(turn_manager.get_play_actor_idx())
+	var controller = ActorIdentity.controller(players, unit_registry, _play_actor())
+	if controller != null: _select_time_bank(controller.seat_index)
 	_halt_countdown()
 	_set_status_line("%s 出牌阶段" % _play_actor().player_name)
 	_step_remaining = STEP_SECONDS

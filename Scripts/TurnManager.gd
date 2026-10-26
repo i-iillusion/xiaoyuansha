@@ -31,6 +31,7 @@ var before_ordinary: Callable = Callable()
 # The caller returns a registered unit key, never a player-array index. This
 # tail belongs to the current ordinary quota; it is not an extra turn.
 var attached_actor: Callable = Callable()
+var actor_exists: Callable = Callable()
 var current_unit_id: String = "":
 	set(value):
 		if value != current_unit_id: _context_revision += 1
@@ -39,7 +40,7 @@ var _ordinary_selecting := false
 var _extra_frames: Array[Dictionary] = []
 var _turn_sequence := 0
 # Explicit state ownership for suspended turns, not Player/general-card state.
-const TURN_FRAME_FIELDS = ["current_player_idx", "current_unit_id", "current_phase", "play_actor_idx", "turn_id", "phase_id",
+const TURN_FRAME_FIELDS = ["current_player_idx", "current_unit_id", "current_phase", "play_actor_idx", "play_actor_unit_id", "turn_id", "phase_id",
 	"_turn_card_counts", "_strike_actors_this_turn", "_phase_skill_uses",
 	"skip_play_phase", "skip_judge_phase", "skip_play_discard_phase", "supply_shortage_active", "skip_full_turn",
 	"granted_judge_target_idx", "granted_draw_target_idx", "granted_judge_completed", "granted_draw_completed",
@@ -63,12 +64,17 @@ var current_phase: Phase = Phase.START:
 		current_phase = value
 		if value not in [Phase.PLAY, Phase.WAITING]:
 			play_actor_idx = -1
+			play_actor_unit_id = ""
 # 单独出牌阶段的操作者，不改变当前回合角色或发放额外回合。
 var play_actor_idx: int = -1:
 	set(value):
 		if value != play_actor_idx:
 			_context_revision += 1
 		play_actor_idx = value
+var play_actor_unit_id: String = "":
+	set(value):
+		if value != play_actor_unit_id: _context_revision += 1
+		play_actor_unit_id = value
 # 本回合已使用的【杀】次数（回合开始重置；上限由武器决定，-1 = 无限制）
 var strike_count_this_turn: int:
 	get: return _get_turn_count("strike")
@@ -127,17 +133,26 @@ var granted_play_completed: bool = false
 var _standalone_play_frame: Dictionary = {}
 
 # 烂忠厚在START插入单独出牌阶段；不发回合开始/弃牌/结束事件。
-func begin_standalone_play(actor: int) -> Dictionary:
+func begin_standalone_play(actor: Variant) -> Dictionary:
 	return begin_standalone_phase(actor, Phase.PLAY)
 
-func begin_standalone_phase(actor: int, phase: Phase) -> Dictionary:
-	if current_phase != Phase.START or not _standalone_play_frame.is_empty() or actor < 0 or actor >= player_count or actor == current_player_idx: return {}
+func begin_standalone_phase(actor: Variant, phase: Phase) -> Dictionary:
+	if current_phase != Phase.START or not _standalone_play_frame.is_empty(): return {}
+	if typeof(actor) == TYPE_INT:
+		if actor < 0 or actor >= player_count: return {}
+	elif typeof(actor) == TYPE_STRING:
+		if actor.is_empty() or not actor_exists.is_valid() or not actor_exists.call(actor): return {}
+	else: return {}
+	var source = get_turn_actor_key()
+	if typeof(actor) == typeof(source) and actor == source: return {}
 	if phase not in [Phase.JUDGE, Phase.DRAW, Phase.PLAY]: return {}
 	var frame = {"source": current_player_idx, "turn": turn_id, "actor": actor, "phase": phase, "completed": false}
 	_standalone_play_frame = frame
 	current_phase = phase
 	phase_id += 1
-	if phase == Phase.PLAY: play_actor_idx = actor
+	if phase == Phase.PLAY:
+		if typeof(actor) == TYPE_INT: play_actor_idx = actor
+		else: play_actor_unit_id = actor
 	frame.revision = _context_revision
 	return frame
 
@@ -145,7 +160,10 @@ func complete_standalone_phase(frame: Dictionary) -> bool:
 	if not is_same(_standalone_play_frame, frame) or current_phase != frame.phase \
 		or current_player_idx != frame.source or turn_id != frame.turn or _context_revision != frame.revision:
 		return false
-	if frame.phase == Phase.PLAY and play_actor_idx != frame.actor: return false
+	if frame.phase == Phase.PLAY:
+		var actor = get_play_actor_key()
+		if typeof(actor) != typeof(frame.actor) or actor != frame.actor: return false
+	if typeof(frame.actor) == TYPE_STRING and (not actor_exists.is_valid() or not actor_exists.call(frame.actor)): return false
 	var allowed: Callable = frame.get("allowed", Callable())
 	if allowed.is_valid() and not allowed.call(): return false
 	frame["allowed"] = Callable()
@@ -177,6 +195,7 @@ func get_turn_actor_key() -> Variant:
 	return current_unit_id if not current_unit_id.is_empty() else current_player_idx
 
 func get_play_actor_key() -> Variant:
+	if not play_actor_unit_id.is_empty() and current_phase in [Phase.PLAY, Phase.WAITING]: return play_actor_unit_id
 	if play_actor_idx >= 0 and current_phase in [Phase.PLAY, Phase.WAITING]: return play_actor_idx
 	return get_turn_actor_key()
 

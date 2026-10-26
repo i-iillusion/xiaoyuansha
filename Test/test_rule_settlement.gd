@@ -765,8 +765,8 @@ func _run():
 	await ai_response_cases.run(self)
 	var ai_trick_cases = load("res://Test/ai_trick_cases.gd").new()
 	await ai_trick_cases.run(self)
-	var full_game_cases = load("res://Test/full_game_cases.gd").new()
-	await full_game_cases.run(self)
+	# I03c: this whole independent replay module runs once in hand_payment,
+	# preserving its original frame limits, seed, assertions and trace files.
 	var max_skill_names_cases = load("res://Test/max_skill_names_cases.gd").new()
 	await max_skill_names_cases.run(self)
 	var general_state_cases = load("res://Test/general_state_cases.gd").new()

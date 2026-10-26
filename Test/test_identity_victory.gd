@@ -200,7 +200,7 @@ func check_integration():
 func _run():
 	check_pure_matrix()
 	await check_integration()
-	await load("res://Test/equipment_response_suite.gd").new().run(self)
+	# I03c: whole equipment-response host now runs once in card_transfer.
 	await load("res://Test/action_history_cases.gd").new().run(self)
 	await load("res://Test/h02_mode_catalog_cases.gd").new().run(self)
 	await load("res://Test/h02_integration_cases.gd").new().run(self)
