@@ -941,7 +941,9 @@ func _register_unit_body(kind: int, body: Player, summoner: Player) -> String:
 func _remove_summoner_units(summoner: Player) -> void:
 	for entry in unit_registry.detach_final_summoner(summoner):
 		var body: Player = entry.body
-		if is_instance_valid(body): _discard_all_cards(body, true, false)
+		if is_instance_valid(body):
+			body.unit_disappeared = true
+			_discard_all_cards(body, true, false)
 		_history_event("unit_removed", "附属单位随召唤者消失", null, [], {"unit": entry.id, "reason": "summoner_lost"})
 		unit_removed.emit(entry.id, UnitRegistry.Removal.SUMMONER_LOST)
 

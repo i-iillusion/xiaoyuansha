@@ -29,6 +29,9 @@ var gender: String = "male"
 var hp: int : set = _set_hp
 enum LifeState { ACTIVE, DYING, DEAD }
 var life_state: LifeState = LifeState.ACTIVE
+# Runtime unit membership, not a general-card field or a death. Q9 invalidates
+# only future damage-source attribution when a summoner's final death removes us.
+var unit_disappeared: bool = false
 var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。

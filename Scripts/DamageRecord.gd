@@ -42,8 +42,9 @@ func _init(attacker: Player, victim: Player, source_card: CardBase, value: int):
 		CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]
 
 func refresh_source():
-	# 阵亡与濒死不同：只有完成死亡结算才将后续伤害改为无来源。
-	if source != null and source.is_dead():
+	# TIME-04 / I03-Q9: dying is not final death. Attached disappearance also
+	# removes future attribution, without faking unit death or cancelling the card.
+	if source != null and (not is_instance_valid(source) or source.is_dead() or source.unit_disappeared):
 		source = null
 
 func commit() -> bool:
