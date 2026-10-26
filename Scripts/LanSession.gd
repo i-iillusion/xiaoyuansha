@@ -5,7 +5,7 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-8"
+const PROTOCOL := "campus-lan-9"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
 	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊"]
@@ -227,6 +227,7 @@ func _receive_state(state: Dictionary) -> void:
 	if typeof(state.get("round")) != TYPE_INT or state.round < 1: return
 	if typeof(state.get("actor")) != TYPE_INT or state.actor < 0 or state.actor >= count: return
 	if not UnitObservation.valid(state.get("units"), count, state.actor): return
+	if not UnitObservation.valid_acting_unit(state.get("acting_unit"), state.units): return
 	if not AiActionPacer.valid_speed(state.get("pace", null)): return
 	if not history.receive(state.get("history", {})): return
 	pace = state.pace

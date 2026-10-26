@@ -46,6 +46,14 @@ var roar_case := false
 var roar_seeded := false
 var roar_seen := false
 var roar_paid := false
+var dragon_turn_case := false
+var dragon_turn_seen := false
+var dragon_action_seen := false
+var dragon_control_used := false
+var dragon_lifecycle_case := false
+var host_controller := false
+var dragon_egg_seen := false
+var dragon_lifecycle_events: Array = []
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -67,6 +75,14 @@ func _run() -> void:
 		if arg == "--unit-case": unit_case = true
 		if arg == "--medicine-case": medicine_case = true
 		if arg == "--summon-case": summon_case = true
+		if arg == "--dragon-turn-case":
+			dragon_turn_case = true
+			summon_case = true
+		if arg == "--dragon-lifecycle-case":
+			dragon_lifecycle_case = true
+			dragon_turn_case = true
+			summon_case = true
+		if arg == "--host-controller": host_controller = true
 		if arg == "--roar-case":
 			roar_case = true
 			summon_case = true
@@ -103,6 +119,9 @@ func _run() -> void:
 			if medicine_case: args.append("--medicine-case")
 			if summon_case: args.append("--summon-case")
 			if roar_case: args.append("--roar-case")
+			if dragon_turn_case: args.append("--dragon-turn-case")
+			if dragon_lifecycle_case: args.append("--dragon-lifecycle-case")
+			if host_controller: args.append("--host-controller")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -112,10 +131,11 @@ func _run() -> void:
 				# Authorized metadata allocation fixture, not a released general menu.
 				# Same server bridge/opening, ordinary HP, roles, phases and victory.
 				var peers = session.members.keys().filter(func(peer): return peer != 1)
-				session.members[peers[0]].general = "克里斯·西弗"
+				session.members[1 if host_controller else peers[0]].general = "克里斯·西弗"
 				medicine_seeded = true
 			if session.begin_match():
 				started = true
+				if dragon_turn_case: session.bridge.game._unit_turns_enabled = true
 				check(true, "%d ready humans started" % size)
 				if unit_case: _seed_unit_case()
 				if space_case:
@@ -167,6 +187,11 @@ func _run() -> void:
 		if roar_case:
 			check(roar_seen, "peer received actual roar payment over ENet")
 			if owns_medicine: check(roar_paid, "remote Chris selected sacrifice and damage target")
+		if dragon_turn_case:
+			check(dragon_turn_seen, "peer received actual independently scheduled dragon PLAY after paid summon")
+			check(dragon_action_seen, "peer received actual unit USE through ENet public history")
+			if owns_medicine: check(dragon_control_used, "unit controller submitted actual unit PLAY, not a modeled START receipt")
+		if dragon_lifecycle_case: _check_dragon_lifecycle()
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
 			check(units_seen, "peer received separate unit rows over real ENet")
@@ -219,7 +244,13 @@ func _run_unit_choice() -> void:
 		game._history_event("unit_input_verified", "单位控制者完成联机确认")
 
 func _state(state: Dictionary) -> void:
-	if roar_case: roar_seen = roar_seen or session.history.entries.any(func(event): return event.kind == "roar")
+	if dragon_turn_case:
+		dragon_turn_seen = dragon_turn_seen or (not state.get("acting_unit", "").is_empty() and state.phase == TurnManager.Phase.PLAY)
+		dragon_action_seen = dragon_action_seen or session.history.entries.any(func(event): return event.kind == "use" and not str(event.details.get("actor_unit", "")).is_empty())
+	if dragon_lifecycle_case and not state.get("acting_unit", "").is_empty():
+		var unit = state.units.filter(func(row): return row.id == state.acting_unit)[0]
+		dragon_egg_seen = dragon_egg_seen or (state.phase == TurnManager.Phase.PLAY and state.players[unit.controller].eggs == 1)
+	if roar_case or dragon_lifecycle_case: roar_seen = roar_seen or session.history.entries.any(func(event): return event.kind == "roar")
 	if summon_case:
 		owns_medicine = owns_medicine or state.players[state.actor].general == "克里斯·西弗"
 		summon_seen = summon_seen or session.history.entries.any(func(event): return event.kind == "unit_summoned")
@@ -252,6 +283,7 @@ func _state(state: Dictionary) -> void:
 	if state.ended:
 		# Consume all bounded reliable batches before treating the client as done.
 		if session.history.sequence < int(state.history.last): return
+		if dragon_lifecycle_case: dragon_lifecycle_events = session.history.entries.duplicate(true)
 		check(session.history.sequence > 0, "network history received through final result")
 		check(session.history.entries.any(func(e): return "游戏结束！" in e.text), "network history contains terminal result")
 		if unit_case:
@@ -263,7 +295,7 @@ func _state(state: Dictionary) -> void:
 		final_seen = true
 		return
 	var token: String
-	if roar_case and state.labels.any(func(label): return "【恶龙咆哮】" in label):
+	if (roar_case or dragon_lifecycle_case) and state.labels.any(func(label): return "【恶龙咆哮】" in label):
 		for player in state.players:
 			if player.seat == state.actor or player.dead: continue
 			var options = state.controls.filter(func(control): return control.text.ends_with(" → %d号 %s" % [player.seat + 1, player.name]) and not control.disabled)
@@ -271,7 +303,7 @@ func _state(state: Dictionary) -> void:
 				token = options[0].id
 				roar_paid = true
 				break
-	if roar_case and token.is_empty():
+	if (roar_case or dragon_lifecycle_case) and token.is_empty():
 		var roar = state.controls.filter(func(control): return control.text == "恶龙咆哮" and not control.disabled)
 		if not roar.is_empty(): token = roar[0].id
 	if summon_case and token.is_empty():
@@ -290,7 +322,17 @@ func _state(state: Dictionary) -> void:
 					token = confirm[0].id
 					summon_paid = true
 	if token.is_empty(): token = driver.choose(state)
-	if ((medicine_case and not medicine_seen) or (summon_case and not summon_seen)) and state.actor == 0:
+	if dragon_turn_case and owns_medicine and state.get("acting_unit", "").is_empty() and summon_seen and (not dragon_lifecycle_case or not roar_seen) \
+			and not (dragon_lifecycle_case and state.controls.any(func(control): return control.text == "恶龙咆哮" and not control.disabled)):
+		# Legal controller strategy lets the attached turn happen before attacking.
+		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)
+		if not end.is_empty(): token = end[0].id
+	if dragon_lifecycle_case and not roar_seen and (not owns_medicine or not state.get("acting_unit", "").is_empty() and dragon_egg_seen):
+		# Legal test strategy: other players wait; second unit PLAY banks its card.
+		# No HP, cards, phases, egg counters or model START receipts are rewritten.
+		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)
+		if not end.is_empty(): token = end[0].id
+	if ((medicine_case and not medicine_seen) or (summon_case and not summon_seen)) and not owns_medicine:
 		# Legal player strategy: let the remote first draw occur before attacking.
 		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)
 		if not end.is_empty(): token = end[0].id
@@ -300,6 +342,24 @@ func _state(state: Dictionary) -> void:
 	if unit_case and state.labels.has("单位登记联机控制者验收") and state.controls.any(func(control): return control.id == token and control.text == "确认"):
 		unit_reply_submitted = true
 	last_token = token
+	if dragon_turn_case and not state.get("acting_unit", "").is_empty() and state.owner == state.actor:
+		dragon_control_used = true
 	actions += 1
 	print("INPUT seat=", state.actor, " status=", state.status, " controls=", state.controls.map(func(x): return x.text))
 	session.act.call_deferred(token)
+
+func _check_dragon_lifecycle() -> void:
+	var events = dragon_lifecycle_events # Lobby reset must not erase final evidence.
+	var summons = events.filter(func(event): return event.kind == "unit_summoned")
+	var roars = events.filter(func(event): return event.kind == "roar")
+	check(summons.size() == 1 and roars.size() == 1, "actual lifecycle has one paid summon and one paid roar")
+	if summons.size() != 1 or roars.size() != 1: return
+	var id = summons[0].details.unit
+	var starts = events.filter(func(event): return event.kind == "phase" and event.phase == TurnManager.Phase.START and event.details.get("actor_unit", "") == id)
+	var ends = events.filter(func(event): return event.kind == "phase" and event.phase == TurnManager.Phase.END and event.details.get("actor_unit", "") == id)
+	var draws = events.filter(func(event): return event.kind == "draw" and event.details.get("actor_unit", "") == id)
+	var deaths = events.filter(func(event): return event.kind == "unit_death" and event.details.get("unit", "") == id)
+	check(starts.size() == 2 and ends.size() == 2 and starts[1].seq < ends[1].seq and ends[1].seq < roars[0].seq, "two real unit turns finish before owner's subsequent roar")
+	check(draws.size() == 2 and draws.all(func(event): return event.details.count == 1), "each real unit DRAW gives exactly its own one card")
+	check(dragon_egg_seen and roars[0].details.unit == id and deaths.size() == 1 and deaths[0].seq < roars[0].seq, "second real START egg funds roar and mechanism cost retires same unit once")
+	if owns_medicine: check(roar_paid, "host or remote controller selected actual roar cost and victim")

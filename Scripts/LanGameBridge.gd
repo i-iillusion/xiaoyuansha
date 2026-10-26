@@ -66,6 +66,17 @@ func _targeting() -> bool:
 		or game._is_shensu_targeting or game._is_lanzhonghou_targeting or game._is_meiyong_targeting \
 		or game._is_sage_targeting
 
+func acting_unit() -> String:
+	var frame = game.turn_manager._standalone_play_frame
+	var key = frame.actor if not frame.is_empty() else game.turn_manager.get_play_actor_key()
+	return key if typeof(key) == TYPE_STRING and ActorIdentity.resolve_live(game.players, game.unit_registry, key) != null else ""
+
+func _unit_targets() -> Array[Player]:
+	var result: Array[Player] = []
+	for unit in game.unit_registry.turn_units():
+		if not _targeting() or game._can_target_body(game._play_actor(), unit): result.append(unit)
+	return result
+
 func _refresh_commands() -> void:
 	var buttons: Array = []
 	var labels: Array = []
@@ -80,6 +91,8 @@ func _refresh_commands() -> void:
 		root.get_instance_id() if root != null else 0, _targeting(), game._game_over]
 	var selector_busy = root is CardSelector and root._confirm_pending
 	shape.append(selector_busy)
+	shape.append(acting_unit())
+	shape.append(_unit_targets().map(func(unit): return game.unit_registry.id_for(unit)))
 	for button in buttons:
 		shape.append([button.get_instance_id(), button.text, button.disabled, button.button_pressed])
 	shape.append(labels)
@@ -102,6 +115,8 @@ func _refresh_commands() -> void:
 	if root == null or game._is_meiyong_targeting:
 		for p in game.players:
 			_add_command(owner, "target", p.seat_index)
+		for unit in _unit_targets():
+			_add_command(owner, "target", game.unit_registry.id_for(unit))
 	# Out-of-turn 下跪 is not an AI decision. It gets a separate, owner-only input.
 	for p in game.players:
 		if p.general_name == "布鲁斯·萨维奇" and p.is_alive() and (p.kneeling or game._kneel_conditions_met(p)):
@@ -119,6 +134,7 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 		game.turn_manager.get_context_revision())
 	state["owner"] = input_owner()
 	state["turn"] = game.turn_manager.get_play_actor_idx()
+	state["acting_unit"] = acting_unit()
 	state["winner"] = winner
 	state["ended"] = game._game_over
 	state["targeting"] = _targeting()
@@ -147,6 +163,7 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 		row["kneeling"] = subject.kneeling
 		row["prep"] = subject.prep_tokens
 		row["wine"] = subject.wine_stacks
+		row["eggs"] = subject.fire_dragon_eggs
 	return state
 
 func submit(seat: int, token: String) -> bool:
@@ -169,8 +186,16 @@ func submit(seat: int, token: String) -> bool:
 			if button.toggle_mode: button.button_pressed = not button.button_pressed
 			button.pressed.emit()
 		"target":
+			var target: Player
+			if typeof(command.value) == TYPE_INT:
+				if command.value < 0 or command.value >= game.players.size(): return false
+				target = game.players[command.value]
+			elif typeof(command.value) == TYPE_STRING:
+				target = ActorIdentity.resolve_live(game.players, game.unit_registry, command.value)
+				if target == null or (_targeting() and not game._can_target_body(game._play_actor(), target)): return false
+			else: return false
 			var panel = Control.new()
-			panel.set_meta("player", game.players[int(command.value)])
+			panel.set_meta("player", target)
 			var event = InputEventMouseButton.new()
 			event.pressed = true
 			event.button_index = MOUSE_BUTTON_LEFT

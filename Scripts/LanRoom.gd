@@ -181,7 +181,9 @@ func _state_changed(state: Dictionary) -> void:
 	var me: Dictionary = state.players[int(state.actor)]
 	_label(body, "你是 %d号 %s · %s · 身份：%s" % [int(state.actor) + 1, me.name, me.general, me.identity if me.identity != "" else "无"])
 	if not state.ended:
-		_label(body, "当前行动：%d号 · 当前窗口：%d号" % [int(state.turn) + 1, int(state.owner) + 1])
+		var acting = state.get("units", []).filter(func(unit): return unit.id == state.get("acting_unit", ""))
+		var acting_name = "%d号" % [int(state.turn) + 1] if acting.is_empty() else "%s（%d号控制）" % [acting[0].name, acting[0].controller + 1]
+		_label(body, "当前行动：%s · 当前窗口：%d号" % [acting_name, int(state.owner) + 1])
 	var board = GridContainer.new()
 	board.name = "PlayerBoard"
 	_board = board
@@ -199,6 +201,7 @@ func _state_changed(state: Dictionary) -> void:
 		if player.dying: text += "\n濒死求救中"
 		if int(player.prep) > 0: text += "\n预习标记：%d" % player.prep
 		if int(player.wine) > 0: text += "\n酒：%d" % player.wine
+		if player.general == "克里斯·西弗": text += "\n火龙蛋：%d" % int(player.get("eggs", 0))
 		var token: String = state.targets.get(str(player.seat), "")
 		var button = _button(board, text, func(): _send(token))
 		button.set_meta("seat", int(player.seat))
@@ -221,10 +224,27 @@ func _state_changed(state: Dictionary) -> void:
 			var text = "%s · 召唤者%d号\n体力%d/%d · 手牌%d" % [unit.name, unit.summoner + 1, unit.hp, unit.max_hp, unit.hand_count]
 			if unit.controller >= 0: text += "\n操作控制者%d号" % [unit.controller + 1]
 			if unit.dying: text += "\n濒死中"
+			if unit.facedown: text += "\n翻面"
+			if unit.chained: text += "\n横置"
+			if unit.gender == "none": text += "\n无性别"
+			var judgments: Array[String] = []
+			for sub in unit.judgments: judgments.append(CardData.get_type_name(int(sub)))
+			text += "\n判定：" + ("、".join(judgments) if not judgments.is_empty() else "无")
 			var own: Array[String] = []
 			for card in unit.own_cards: own.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))
 			if not own.is_empty(): text += "\n你控制的单位手牌：" + "、".join(own)
-			_label(unit_board, text).set_meta("unit", unit.id)
+			if unit.kind == UnitRegistry.Kind.FIRE_DRAGON:
+				var token: String = state.targets.get(unit.id, "")
+				var button = _button(unit_board, text, func(): _send(token))
+				button.set_meta("unit", unit.id)
+				button.custom_minimum_size = Vector2(240, 150)
+				button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				button.disabled = token.is_empty()
+				var equipment: Array[String] = []
+				for slot in unit.equipment:
+					if unit.equipment[slot] != null: equipment.append(str(slot) + ": " + CardData.get_type_name(int(unit.equipment[slot])))
+				button.tooltip_text = "\n".join(equipment)
+			else: _label(unit_board, text).set_meta("unit", unit.id)
 	var cards: Array[String] = []
 	for card in state.own_cards:
 		cards.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))

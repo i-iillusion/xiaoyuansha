@@ -8,7 +8,10 @@ param(
     [switch]$UnitCase,
     [switch]$MedicineCase,
     [switch]$SummonCase,
-    [switch]$RoarCase
+    [switch]$RoarCase,
+    [switch]$DragonTurnCase,
+    [switch]$DragonLifecycleCase,
+    [switch]$HostController
 )
 $ErrorActionPreference = 'Stop'
 $projectPath = Split-Path $PSScriptRoot -Parent
@@ -25,6 +28,9 @@ if ($UnitCase) { $info.Arguments += ' --unit-case' }
 if ($MedicineCase) { $info.Arguments += ' --medicine-case' }
 if ($SummonCase) { $info.Arguments += ' --summon-case' }
 if ($RoarCase) { $info.Arguments += ' --roar-case' }
+if ($DragonTurnCase) { $info.Arguments += ' --dragon-turn-case' }
+if ($DragonLifecycleCase) { $info.Arguments += ' --dragon-lifecycle-case' }
+if ($HostController) { $info.Arguments += ' --host-controller' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true
 $info.RedirectStandardOutput = $true

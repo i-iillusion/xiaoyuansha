@@ -38,9 +38,19 @@ var _history_panel: ActionHistoryPanel
 func _history_event(kind: String, text: String, actor: Player = null, targets: Array = [], details: Dictionary = {}) -> void:
 	if action_history.match_key.is_empty() or turn_manager == null: return
 	var seats: Array = []
+	details = details.duplicate(true)
+	var unit_targets: Array[String] = []
+	if actor != null and not players.has(actor):
+		var unit_id = unit_registry.id_for(actor)
+		if not unit_id.is_empty(): details["actor_unit"] = unit_id
 	for target in targets:
-		if target is Player: seats.append(target.seat_index)
+		if target is Player:
+			if players.has(target): seats.append(target.seat_index)
+			else:
+				var unit_id = unit_registry.id_for(target)
+				if not unit_id.is_empty(): unit_targets.append(unit_id)
 		elif target is int: seats.append(target)
+	if not unit_targets.is_empty(): details["unit_targets"] = unit_targets
 	action_history.append(kind, text, turn_manager.turn_id, turn_manager.current_phase,
 		actor.seat_index if actor != null else -1, seats, details)
 
@@ -66,6 +76,7 @@ var lan_enabled := false
 var _unit_turns_enabled := false
 var lan_roster: Array[Dictionary] = []
 var _input_seat := 0
+var _native_unit_board: NativeUnitBoard
 var _seat_banks: Dictionary = {}
 var _bank_owner := 0
 
@@ -878,8 +889,8 @@ func _update_player_panel(panel: Control, player: Player):
 		judgment_indicator.text = "⚖×%d" % player.judgment_cards.size()
 
 	var prep_indicator: Label = panel.get_meta("prep_indicator")
-	prep_indicator.visible = player.general_name == "里奥·普利威尔"
-	prep_indicator.text = "预习:%d" % player.prep_tokens
+	prep_indicator.visible = player.general_name in ["里奥·普利威尔", "克里斯·西弗"]
+	prep_indicator.text = "火龙蛋:%d" % player.fire_dragon_eggs if player.general_name == "克里斯·西弗" else "预习:%d" % player.prep_tokens
 
 	panel.set_meta("player", player)
 
@@ -1009,6 +1020,8 @@ func _register_unit_body(kind: int, body: Player, summoner: Player) -> String:
 	if id.is_empty(): return ""
 	body.seat_index = -1 # Never use a unit as a permanent player/index/input owner.
 	if body.get_parent() == null: add_child(body)
+	_history_hp[body] = body.hp
+	body.hp_changed.connect(_history_hp_changed.bind(body))
 	unit_registered.emit(id)
 	return id
 
@@ -11012,7 +11025,7 @@ func _on_target_click(target: Player):
 	if not _is_targeting or _card_target_confirm_owner == _card_target_generation: return
 	if turn_manager.get_play_actor_idx() < 0 or turn_manager.get_play_actor_idx() >= players.size(): return
 	var attacker = _play_actor()
-	if not _can_use_play_skill(attacker) or not _has_character_body(target): return
+	if not _can_use_play_skill(attacker) or not _has_character_body(target) or not _can_target_body(attacker, target): return
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -11328,6 +11341,7 @@ func _layout_player_panels():
 func _sync_all_ui():
 	# 【觉醒】（史蒂芬·彼特先斯）：手牌为 0 时立即自动觉醒（觉醒技）
 	_check_awaken_trigger()
+	_sync_unit_board()
 	_update_player_panel(_self_info_panel, _local_player())
 
 	for i in _other_player_panels.size():
@@ -11351,6 +11365,7 @@ func _sync_all_ui():
 	_roar_btn.disabled = _roar_pending
 
 func _process(delta: float):
+	if turn_manager != null and not players.is_empty(): _sync_unit_board()
 	if is_instance_valid(_egg_heal_btn) and turn_manager != null and not players.is_empty():
 		_egg_heal_btn.visible = not _game_over and _play_btn.visible and _can_play_egg(_play_actor()) \
 			and _is_human(_play_actor())
@@ -11382,6 +11397,13 @@ func _process(delta: float):
 		_toast_remaining -= delta
 		if _toast_remaining <= 0.0 and _toast_label != null:
 			_toast_label.modulate = Color(1, 1, 1, 0)
+
+func _sync_unit_board():
+	if not is_instance_valid(_native_unit_board):
+		if unit_registry.active_units().is_empty(): return
+		_native_unit_board = NativeUnitBoard.new()
+		$UI.add_child(_native_unit_board)
+	_native_unit_board.refresh(self)
 
 # ============================
 #  倒计时 / 提示句 / 实时日志

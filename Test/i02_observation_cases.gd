@@ -56,7 +56,7 @@ func run(t):
 		t.root.add_child(room)
 		room._state_changed(state)
 		var board = room.body.get_node("UnitBoard")
-		t.check(board.get_child_count() == 2 and board.get_child(0) is Label and board.get_child(0).get_meta("unit") == id, "I02d actual client renders separate readonly unit board")
+		t.check(board.get_child_count() == 2 and board.get_child(0) is Button and board.get_child(0).get_meta("unit") == id and board.get_child(1) is Label, "I02d protocol9 intelligent unit is clickable separately; mountain stays readonly")
 		t.check("连弩" in board.get_child(0).text and "任意牌" in board.get_child(0).text, "I02d controller can read its real concrete/blank unit hand")
 		room._state_changed(bridge.snapshot(1))
 		t.check(not "连弩" in room.body.get_node("UnitBoard").get_child(0).text, "I02d other client unit panel does not leak unit hand name")

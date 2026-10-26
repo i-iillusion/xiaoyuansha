@@ -2,7 +2,7 @@
 class_name UnitObservation
 extends RefCounted
 
-const FIELDS = ["id", "kind", "name", "summoner", "controller", "hp", "max_hp", "dying", "hand_count", "equipment", "judgments", "own_cards"]
+const FIELDS = ["id", "kind", "name", "summoner", "controller", "hp", "max_hp", "dying", "hand_count", "equipment", "judgments", "own_cards", "facedown", "chained", "gender"]
 const NAMES = ["火龙", "山"]
 
 static func capture(registry: UnitRegistry, viewer: Player = null) -> Array:
@@ -19,7 +19,9 @@ static func capture(registry: UnitRegistry, viewer: Player = null) -> Array:
 		rows.append({"id": entry.id, "kind": entry.kind, "name": NAMES[entry.kind],
 			"summoner": entry.summoner.seat_index, "controller": controller.seat_index if controller != null else -1,
 			"hp": body.hp, "max_hp": body.max_hp, "dying": body.is_dying(), "hand_count": body.hand_size(),
-			"equipment": body.equipment.duplicate(), "judgments": judgments, "own_cards": own_cards})
+			"equipment": body.equipment.duplicate(), "judgments": judgments, "own_cards": own_cards,
+			"facedown": body.facedown, "chained": body.chained,
+			"gender": body.gender if entry.kind == UnitRegistry.Kind.FIRE_DRAGON else ""})
 	return rows
 
 static func valid(rows: Variant, count: int, viewer: int) -> bool:
@@ -43,6 +45,9 @@ static func valid(rows: Variant, count: int, viewer: int) -> bool:
 		for field in ["hp", "max_hp", "hand_count"]:
 			if typeof(row[field]) != TYPE_INT: return false
 		if row.max_hp <= 0 or row.hand_count < 0 or typeof(row.dying) != TYPE_BOOL: return false
+		if typeof(row.facedown) != TYPE_BOOL or typeof(row.chained) != TYPE_BOOL: return false
+		if typeof(row.gender) != TYPE_STRING: return false
+		if row.gender not in (["male", "female", "none"] if row.kind == UnitRegistry.Kind.FIRE_DRAGON else [""]): return false
 		if typeof(row.equipment) != TYPE_DICTIONARY or typeof(row.judgments) != TYPE_ARRAY or typeof(row.own_cards) != TYPE_ARRAY: return false
 		for slot in row.equipment:
 			if slot not in Player.EQUIP_SLOTS or typeof(row.equipment[slot]) != TYPE_INT or row.equipment[slot] not in CardData.CardSubType.values(): return false
@@ -58,3 +63,7 @@ static func valid(rows: Variant, count: int, viewer: int) -> bool:
 			if choices.has(key): return false
 			choices.append(key)
 	return true
+
+static func valid_acting_unit(key: Variant, rows: Array) -> bool:
+	if typeof(key) != TYPE_STRING: return false
+	return key.is_empty() or rows.any(func(row): return row.id == key and row.kind == UnitRegistry.Kind.FIRE_DRAGON)
