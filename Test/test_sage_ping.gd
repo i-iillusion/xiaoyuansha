@@ -61,6 +61,9 @@ func _run() -> void:
 
 	# ---- 用例 5：3 标记激活 ----
 	p0.sage_tokens = 2
+	# Previous cases left target-selection mode. Re-enter through the real
+	# equipment button before the third activation; do not bypass its guard.
+	game._on_detail_equip_clicked(CardData.CardSubType.SAGE_PROTECTION, p0)
 	await game._on_sage_target_click(p1)
 	_check(p0.sage_tokens == 0 and p0.sage_activated, "3 标记激活装备")
 	# 激活后不能再拼点

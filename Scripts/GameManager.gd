@@ -2296,7 +2296,8 @@ func _start_sage_ping_mode(p: Player):
 # 拼点目标点击（任意其他存活角色，无距离限制）
 func _on_sage_target_click(target: Player):
 	var p = _play_actor()
-	if not _is_sage_targeting or not _can_use_play_skill(p) or not _has_character_body(target) or target == p or not target.is_alive():
+	if not _is_sage_targeting or not _can_use_play_skill(p) or not _has_character_body(target) or target == p or not target.is_alive() \
+		or _is_kneeling(target) or not _can_target_body(p, target):
 		_update_debug("目标无效")
 		return
 	_is_sage_targeting = false
@@ -2315,7 +2316,7 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return false
 	if wearer.hand_size() <= 0:
 		return false
-	if target == wearer or not target.is_alive():
+	if target == wearer or not target.is_alive() or _is_kneeling(target) or not _can_target_body(wearer, target):
 		return false
 	var original = wearer.get_equipment_card("armor")
 	var revision = turn_manager.get_context_revision()
@@ -2324,6 +2325,7 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and lifecycle == _dying_lifecycle_generation and _has_character_body(wearer) and _has_character_body(target) \
 			and wearer.is_alive() and target != wearer and target.is_alive() \
+			and not _is_kneeling(target) and _can_target_body(wearer, target) \
 			and wearer.get_equipment_card("armor") == original \
 			and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
 	if not await _select_hand_discard(wearer, 1, false, valid):
