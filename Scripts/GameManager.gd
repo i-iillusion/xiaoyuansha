@@ -7286,7 +7286,7 @@ func _wait_choice_prompt(overlay: Control, answer: ChoicePromptAnswer, allowed: 
 			overlay.queue_free()
 	_choice_prompt_stack.erase(pending)
 	if lan_enabled:
-		_input_seat = int(_choice_prompt_stack.back().seat) if not _choice_prompt_stack.is_empty() else turn_manager.get_play_actor_idx()
+		_restore_input_owner()
 	if pending.generation == _countdown_generation:
 		if not _game_over and not _choice_prompt_stack.is_empty():
 			_start_choice_countdown(_choice_prompt_stack.back())
@@ -7691,9 +7691,19 @@ func _play_skill_target_is_current() -> bool:
 	return false
 
 func _restore_play_skill_buttons():
-	var allowed = _can_use_play_skill(_local_player())
+	_restore_input_owner()
+	var allowed = _is_human(_play_actor()) and _can_use_play_skill(_play_actor())
 	_play_btn.visible = allowed
 	_end_play_btn.visible = allowed
+
+# A pending response owns input until it ends. Otherwise restore the actual
+# acting body's controller, not the permanent source of a gifted phase.
+func _restore_input_owner() -> void:
+	if not lan_enabled: return
+	if not _choice_prompt_stack.is_empty():
+		_input_seat = int(_choice_prompt_stack.back().seat)
+	else:
+		_set_input_player(_play_actor())
 
 func _on_zhuangbi_skill_clicked(p: Player) -> void:
 	if not _can_use_play_skill(p):
