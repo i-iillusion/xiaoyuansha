@@ -7712,7 +7712,7 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 		return
 	# 至少有一个可选目标（存活且有手牌的其他角色）
 	var any = false
-	for pl in players:
+	for pl in _character_targets(p):
 		if pl != p and pl.is_alive() and pl.hand_size() > 0 and not _is_kneeling(pl):
 			any = true
 			break
@@ -7751,6 +7751,7 @@ func _on_zhuangbi_target_click(target: Player):
 	if not _is_zhuangbi_targeting or not _play_skill_target_is_current():
 		return
 	var p = _local_player()
+	if not _can_target_body(p, target): return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -7811,7 +7812,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 			and _has_character_body(p) and p.general_name == "史蒂芬·彼特先斯" \
 			and _paid_skill_rps_valid(p, null, revision)
 	var target_valid = func(t):
-		return action_valid.call() and players.has(t) and t != p and _paid_skill_rps_valid(p, t, revision)
+		return action_valid.call() and _has_character_body(t) and t != p and _paid_skill_rps_valid(p, t, revision)
 	if not action_valid.call():
 		return
 	# 过滤：当前无手牌的目标剔除（选择时已保证，执行时防变化）
@@ -7828,7 +7829,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		return
 	# 发动者确认目标后，自己与全部目标都必须支付；只能选择牌，不能拒绝。
 	if not await _select_hand_discard(p, 1, true, func():
-		return action_valid.call()):
+		return action_valid.call() and valid.all(func(t): return target_valid.call(t))):
 		return
 	# 选牌快照直接移除手牌，不经 hand_updated；本人的最后一张牌一旦支付，
 	# 必须先完成强制觉醒的三选一，再继续其他目标支付或拼点。
@@ -7943,7 +7944,7 @@ func _on_campus_skill_clicked(p: Player) -> void:
 		return
 	# 至少有一个可选目标（存活且有手牌的其他角色）
 	var any = false
-	for pl in players:
+	for pl in _character_targets(p):
 		if pl != p and pl.is_alive() and pl.hand_size() > 0 and not _is_kneeling(pl):
 			any = true
 			break
@@ -7971,6 +7972,7 @@ func _on_campus_target_click(target: Player):
 	if not _is_campus_targeting or not _play_skill_target_is_current():
 		return
 	var p = _local_player()
+	if not _can_target_body(p, target): return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -8417,6 +8419,7 @@ func _start_lanzhonghou_mode():
 func _on_lanzhonghou_target_click(target: Player):
 	if not _is_lanzhonghou_targeting or not _play_skill_target_is_current():
 		return
+	if not _can_target_body(_local_player(), target): return
 	if not target.is_alive():
 		_update_debug("目标已阵亡")
 		return
@@ -8468,7 +8471,8 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 		return _lanzhonghou_execution_owner == owner and _lanzhonghou_execution_generation == owner \
 			and selection == _play_skill_selection_generation and revision == turn_manager.get_context_revision() \
 			and _can_use_play_skill(p) and p.general_name == "麦克斯·欧尼斯特" \
-			and players.has(a) and players.has(b) and a != b and a.is_alive() and b.is_alive() \
+			and _has_character_body(a) and _has_character_body(b) and a != b and a.is_alive() and b.is_alive() \
+			and _can_target_body(p, a) and _can_target_body(p, b) \
 			and not _is_kneeling(a) and not _is_kneeling(b)
 	if not action_valid.call():
 		return
@@ -8639,7 +8643,8 @@ func _ask_lanzhonghou_zone(a: Player, b: Player, picked: Array, max_pick: int, a
 	var valid = func():
 		if allowed.is_valid() and not allowed.call(): return false
 		for entry in originals:
-			if not players.has(entry.owner) or not entry.owner.is_alive() or _is_kneeling(entry.owner): return false
+			if not _has_character_body(entry.owner) or not entry.owner.is_alive() or _is_kneeling(entry.owner) \
+				or not _can_target_body(_play_actor(), entry.owner): return false
 			for slot in entry.slots:
 				if entry.owner.equipment.get(slot, -1) != entry.slots[slot][0] or _equipment_resource_for_pick(entry.owner, slot) != entry.slots[slot][1]: return false
 		return true

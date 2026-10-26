@@ -14,6 +14,7 @@ func _run():
 	await load("res://Test/i03_granted_cases.gd").new().run(self)
 	await load("res://Test/i03_adjudication_cases.gd").new().run(self)
 	await load("res://Test/i03_sage_targets_cases.gd").new().run(self)
+	await load("res://Test/i03_skill_targets_cases.gd").new().run(self)
 	await load("res://Test/i03_source_disappearance_cases.gd").new().run(self)
 	await load("res://Test/i03_opening_cases.gd").new().run(self)
 	await load("res://Test/i03_medicine_cases.gd").new().run(self)
