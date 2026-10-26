@@ -10,9 +10,10 @@ static func choose(view: Dictionary, kind: String, options: Array) -> int:
 	if kind != "rescue":
 		# 无懈/舍己默认保守放弃；可注入策略不会改变规则入口。
 		return -1
-	var target = int(view.response.get("target", -1))
-	if target == view.actor:
+	var target: Variant = view.response.get("target", -1)
+	if typeof(target) == typeof(view.actor) and target == view.actor:
 		return options[0]
+	if typeof(target) != TYPE_INT or typeof(view.actor) != TYPE_INT: return -1
 	if view.mode != GameManager.MODE_CLASSIC_IDENTITY:
 		return -1
 	var own: Dictionary = {}

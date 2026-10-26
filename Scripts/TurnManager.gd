@@ -28,11 +28,18 @@ var _context_revision: int = 0
 var rounds: RoundLedger
 var live_seats: Callable = Callable()
 var before_ordinary: Callable = Callable()
+# The caller returns a registered unit key, never a player-array index. This
+# tail belongs to the current ordinary quota; it is not an extra turn.
+var attached_actor: Callable = Callable()
+var current_unit_id: String = "":
+	set(value):
+		if value != current_unit_id: _context_revision += 1
+		current_unit_id = value
 var _ordinary_selecting := false
 var _extra_frames: Array[Dictionary] = []
 var _turn_sequence := 0
 # Explicit state ownership for suspended turns, not Player/general-card state.
-const TURN_FRAME_FIELDS = ["current_player_idx", "current_phase", "play_actor_idx", "turn_id", "phase_id",
+const TURN_FRAME_FIELDS = ["current_player_idx", "current_unit_id", "current_phase", "play_actor_idx", "turn_id", "phase_id",
 	"_turn_card_counts", "_strike_actors_this_turn", "_phase_skill_uses",
 	"skip_play_phase", "skip_judge_phase", "skip_play_discard_phase", "supply_shortage_active", "skip_full_turn",
 	"granted_judge_target_idx", "granted_draw_target_idx", "granted_judge_completed", "granted_draw_completed",
@@ -164,8 +171,18 @@ func get_context_revision() -> int:
 func get_play_actor_idx() -> int:
 	return play_actor_idx if play_actor_idx >= 0 and current_phase in [Phase.PLAY, Phase.WAITING] else current_player_idx
 
+# Keep the integer accessor for the fixed-seat wire contract. New rule/card
+# callers use these keys so the controller cannot spend cards for its unit.
+func get_turn_actor_key() -> Variant:
+	return current_unit_id if not current_unit_id.is_empty() else current_player_idx
+
+func get_play_actor_key() -> Variant:
+	if play_actor_idx >= 0 and current_phase in [Phase.PLAY, Phase.WAITING]: return play_actor_idx
+	return get_turn_actor_key()
+
 func start_game():
 	_context_revision += 1
+	current_unit_id = ""
 	current_player_idx = 0
 	_extra_frames.clear()
 	if live_seats.is_valid():
@@ -237,6 +254,18 @@ func advance_phase():
 func next_turn():
 	if _ordinary_selecting: return
 	_context_revision += 1
+	# Q8: only a completed whole ordinary turn admits its attached actor.
+	# Standalone phase completion never reaches this boundary. Hold the ordinary
+	# ledger frame until the unit finishes, including a flipped/skipped unit.
+	if current_unit_id.is_empty() and rounds != null and rounds.current().get("kind", -1) == RoundLedger.Kind.ORDINARY \
+			and current_phase == Phase.END and attached_actor.is_valid():
+		var key = attached_actor.call(current_player_idx)
+		if typeof(key) == TYPE_STRING and not key.is_empty():
+			current_unit_id = key
+			_begin_turn()
+			_change_phase(Phase.START)
+			return
+	current_unit_id = ""
 	if not _extra_frames.is_empty():
 		rounds.finish()
 		var frame = _extra_frames.pop_back()
@@ -262,6 +291,7 @@ func begin_extra_turn(seat: int) -> bool:
 		frame[field] = value if field == "_standalone_play_frame" else (value.duplicate(true) if value is Dictionary or value is Array else value)
 	if not rounds.begin_extra(seat): return false
 	_extra_frames.append(frame)
+	current_unit_id = ""
 	current_player_idx = seat
 	_begin_turn()
 	_change_phase(Phase.START)
@@ -291,25 +321,25 @@ func _reset_turn_counts():
 	_turn_card_counts.clear()
 	_strike_actors_this_turn.clear()
 
-func _get_turn_count(key: String, seat: int = -1) -> int:
-	if seat < 0:
-		seat = get_play_actor_idx()
+func _get_turn_count(key: String, seat: Variant = -1) -> int:
+	if typeof(seat) == TYPE_INT and seat < 0:
+		seat = get_play_actor_key()
 	return int(_turn_card_counts.get(seat, {}).get(key, 0))
 
 func _set_turn_count(key: String, value: int):
-	var seat = get_play_actor_idx()
+	var seat = get_play_actor_key()
 	if not _turn_card_counts.has(seat):
 		_turn_card_counts[seat] = {}
 	_turn_card_counts[seat][key] = value
 
-func phase_skill_used(key: String, seat: int = -1) -> bool:
-	if seat < 0:
-		seat = get_play_actor_idx()
+func phase_skill_used(key: String, seat: Variant = -1) -> bool:
+	if typeof(seat) == TYPE_INT and seat < 0:
+		seat = get_play_actor_key()
 	return _phase_skill_uses.get(key, {}).get(seat, -1) == phase_id
 
-func set_phase_skill_used(key: String, used: bool, seat: int = -1):
-	if seat < 0:
-		seat = get_play_actor_idx()
+func set_phase_skill_used(key: String, used: bool, seat: Variant = -1):
+	if typeof(seat) == TYPE_INT and seat < 0:
+		seat = get_play_actor_key()
 	if not _phase_skill_uses.has(key):
 		_phase_skill_uses[key] = {}
 	if used:
@@ -330,11 +360,11 @@ func can_play_strike(limit: int = 1) -> bool:
 func use_strike():
 	strike_count_this_turn += 1
 
-func can_play_wine(unlimited: bool = false, seat: int = -1) -> bool:
+func can_play_wine(unlimited: bool = false, seat: Variant = -1) -> bool:
 	return current_phase == Phase.PLAY and (unlimited or _get_turn_count("wine", seat) < 1)
 
 # 成功使用/打出后调用；返回是否为此角色在当前回合的第一次。
-func record_strike_played(seat: int) -> bool:
+func record_strike_played(seat: Variant) -> bool:
 	var first := not _strike_actors_this_turn.has(seat)
 	_strike_actors_this_turn[seat] = true
 	return first

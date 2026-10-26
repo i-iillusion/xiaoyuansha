@@ -10,6 +10,9 @@ var turn_id: int
 var phase_id: int
 var actor_seat: int
 var turn_owner_seat: int
+var actor_body: Player
+var actor_key: Variant
+var turn_owner_key: Variant
 var kind: Kind
 var sub_type: CardData.CardSubType
 var card: CardBase
@@ -25,6 +28,9 @@ func _init(serial: int, tm: TurnManager, actor: Player, resource: CardBase,
 	phase_id = tm.phase_id
 	actor_seat = actor.seat_index
 	turn_owner_seat = tm.current_player_idx
+	actor_body = actor
+	actor_key = actor_seat
+	turn_owner_key = tm.get_turn_actor_key()
 	kind = action_kind
 	sub_type = resource.sub_type
 	card = resource

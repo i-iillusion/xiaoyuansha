@@ -61,6 +61,9 @@ func _history_hp_changed(value: int, p: Player) -> void:
 # LAN keeps the existing authoritative rules; only input ownership changes.
 # Never rotate players/seat indices to make a remote player look like seat zero.
 var lan_enabled := false
+# Internal rollout gate until I03d's unit-aware wire and I03e's full acceptance.
+# Metadata-only random generals must not silently enable an incomplete turn UI.
+var _unit_turns_enabled := false
 var lan_roster: Array[Dictionary] = []
 var _input_seat := 0
 var _seat_banks: Dictionary = {}
@@ -73,9 +76,71 @@ func _is_human(p: Player) -> bool:
 func _local_player() -> Player:
 	return players[_input_seat if lan_enabled else 0]
 
+func _phase_actor(pid: int) -> Player:
+	if not turn_manager.current_unit_id.is_empty():
+		var entry = unit_registry.entry(turn_manager.current_unit_id)
+		return entry.get("body")
+	return players[pid] if pid >= 0 and pid < players.size() else null
+
+func _play_actor() -> Player:
+	if turn_manager.current_unit_id.is_empty():
+		var seat = turn_manager.get_play_actor_idx()
+		return players[seat] if seat >= 0 and seat < players.size() else null
+	var key = turn_manager.get_play_actor_key()
+	if typeof(key) == TYPE_STRING: return unit_registry.entry(key).get("body")
+	return players[key] if typeof(key) == TYPE_INT and key >= 0 and key < players.size() else null
+
+# Same retained-body membership semantics as players.has for a fixed player.
+# Active authorization still checks life/phase/revision separately. A removed
+# source can complete an established action, but cannot start a new one.
+func _has_character_body(body: Player) -> bool:
+	if players.has(body): return true
+	if not is_instance_valid(body): return false
+	var entry = unit_registry.entry(unit_registry.id_for(body))
+	return not entry.is_empty() and entry.kind == UnitRegistry.Kind.FIRE_DRAGON and not body.unit_disappeared
+
+func _attached_turn_actor(seat: int) -> String:
+	if not _unit_turns_enabled or _game_over or seat < 0 or seat >= players.size(): return ""
+	for body in unit_registry.turn_units():
+		var id = unit_registry.id_for(body)
+		if unit_registry.controller(id) == players[seat] and body.is_alive() and fire_dragon_state.draw_count(id) == 1: return id
+	return ""
+
+func _character_order_from(actor: Player) -> Array[Player]:
+	var units = unit_registry.turn_units()
+	if units.is_empty(): return _spatial_from(actor)
+	var circle: Array[Player] = []
+	for fixed in spatial_players():
+		circle.append(fixed)
+		for unit in units:
+			if unit_registry.controller(unit_registry.id_for(unit)) == fixed: circle.append(unit)
+	var start = circle.find(actor)
+	var result: Array[Player] = []
+	if start < 0: return result
+	for offset in circle.size(): result.append(circle[(start + offset) % circle.size()])
+	return result
+
+func _character_targets(source: Player) -> Array[Player]:
+	var units = unit_registry.turn_units()
+	if units.is_empty(): return players
+	var result: Array[Player] = players.duplicate()
+	for unit in units:
+		if fire_dragon_state.stealth_allows_target(unit_registry.id_for(unit), source): result.append(unit)
+	return result
+
+func _rescue_order_for_turn() -> Array[Player]:
+	var order = _character_order_from(_phase_actor(turn_manager.current_player_idx))
+	if not order.is_empty(): return order
+	# Q9: an established card can outlive its unit source. Rescue still starts
+	# at the next remaining actor after that unit's retained controller anchor.
+	if turn_manager.current_unit_id.is_empty(): return order
+	order = _character_order_from(players[turn_manager.current_player_idx])
+	if not order.is_empty(): order.append(order.pop_front())
+	return order
+
 func _set_input_player(p: Player) -> void:
 	p = ActorIdentity.controller(players, unit_registry, p)
-	if lan_enabled and p != null and players.has(p):
+	if lan_enabled and p != null and _has_character_body(p):
 		_input_seat = p.seat_index
 
 func _exit_tree() -> void:
@@ -922,6 +987,7 @@ func start_game():
 			if not p.is_dead(): seats.append(p.seat_index)
 		return seats
 	turn_manager.before_ordinary = _choose_ordinary_actor
+	turn_manager.attached_actor = _attached_turn_actor
 	turn_manager.start_game()
 	game_started.emit()
 
@@ -970,17 +1036,19 @@ func _reset_unit_registry() -> void:
 # ---- 阶段响应 ----
 
 func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phase, pid: int):
+	var body = _phase_actor(pid)
+	if body == null: return
 	if not _game_over and new_phase != TurnManager.Phase.WAITING and not (old_phase == TurnManager.Phase.WAITING and new_phase == TurnManager.Phase.PLAY):
-		_history_event("phase", "%s · %s" % [players[pid].player_name, ["回合开始", "判定", "摸牌", "出牌", "弃牌", "回合结束", "响应"][new_phase]], players[pid])
+		_history_event("phase", "%s · %s" % [body.player_name, ["回合开始", "判定", "摸牌", "出牌", "弃牌", "回合结束", "响应"][new_phase]], body)
 	if lan_enabled and not players.is_empty() and _choice_prompt_stack.is_empty():
-		_set_input_player(players[pid])
+		_set_input_player(body)
 	# 胜负已分：不再推进任何阶段逻辑（当前结算链由各调用方的 _game_over 检查自行收尾）
 	if _game_over:
 		return
 	# 当前效果已返回并请求推进时，最终死亡者不再获得摸牌/出牌/弃牌。
 	# 不在伤害窗口中跳回合，以免吞掉当前判定/群体效果的后续结算。
 	if new_phase in [TurnManager.Phase.DRAW, TurnManager.Phase.PLAY, TurnManager.Phase.DISCARD] \
-			and players[pid].is_dead():
+			and (body.is_dead() or body.unit_disappeared):
 		turn_manager._change_phase(TurnManager.Phase.END)
 		return
 	match new_phase:
@@ -988,7 +1056,7 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 			# 阵亡角色跳过自己的回合：推进到下一位存活角色
 			# （next_turn 会同步触发 START 回调 → 用 _skipping_dead 挡重入；
 			#   胜负判定保证至少还有一名对手存活，guard 仅兜底防死循环）
-			if players[pid].is_dead():
+			if body.is_dead() or body.unit_disappeared:
 				if _skipping_dead: return
 				_skipping_dead = true
 				turn_manager.next_turn()
@@ -1011,10 +1079,10 @@ func _do_start(pid: int):
 	if _start_phase_owner == generation: _start_phase_owner = -1
 
 func _do_start_pending(pid: int, generation: int):
-	var p = players[pid]
+	var p = _phase_actor(pid)
 	var revision: Array = [turn_manager.get_context_revision()]
 	var current = func():
-		return not _game_over and generation == _start_phase_generation and players.has(p) \
+		return not _game_over and generation == _start_phase_generation and _has_character_body(p) and _phase_actor(pid) == p \
 			and turn_manager.current_player_idx == pid and turn_manager.current_phase == TurnManager.Phase.START \
 			and revision[0] == turn_manager.get_context_revision()
 	if not current.call(): return
@@ -1023,6 +1091,10 @@ func _do_start_pending(pid: int, generation: int):
 		p.facedown = false
 		_public_result("%s 武将牌翻回正面，本回合被跳过！" % p.player_name)
 		turn_manager.skip_full_turn = true
+	if not turn_manager.current_unit_id.is_empty():
+		var accepted = fire_dragon_state.note_skipped_turn(turn_manager.current_unit_id, turn_manager.turn_id) if turn_manager.skip_full_turn \
+			else fire_dragon_state.begin_turn(turn_manager.current_unit_id, turn_manager.turn_id)
+		if not accepted: return
 	_update_debug("%s 回合开始（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	# 每回合重置回合级标志（治疗权杖桃计数 / 酒层数——狂暴战斧装备者的酒跨回合保留）
 	_reset_turn_flags()
@@ -1046,7 +1118,9 @@ func _do_start_pending(pid: int, generation: int):
 
 # 回合开始统一重置（测试可直接调用）：治疗权杖桃计数全清；酒层数——未装备狂暴战斧的玩家清零
 func _reset_turn_flags():
-	for pl in players:
+	var characters: Array[Player] = players.duplicate()
+	characters.append_array(unit_registry.turn_units())
+	for pl in characters:
 		pl.heal_staff_peach_used = false
 		pl.shensu_used_this_turn = false  # 【神速】选2 标记每回合重置
 		if pl.get_weapon() != CardData.CardSubType.RAGING_AXE:
@@ -1057,7 +1131,7 @@ func _reset_turn_flags():
 func _do_judge(pid: int):
 	# 已终局的迟到阶段入口不能消费跳过标记或继续推进阶段。
 	if _game_over: return
-	var p = players[pid]
+	var p = _phase_actor(pid)
 	# 【神速】（比尔·盖伊）选项1：跳过判定阶段（判定区延时锦囊保留，下回合再判）
 	if turn_manager.skip_judge_phase:
 		turn_manager.skip_judge_phase = false
@@ -1125,7 +1199,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		_update_debug("%s 判定阶段：判定区 %d 张牌（后放置的先判定）" % [p.player_name, p.judgment_cards.size()])
 
 	while not p.judgment_cards.is_empty() and p.is_alive():
-		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not players.has(p):
+		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not _has_character_body(p):
 			return false
 		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
 		var card = _last_pending_judgment(p, deferred)
@@ -1134,7 +1208,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
-			var valid = func(): return generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
+			var valid = func(): return generation == _dying_lifecycle_generation and _has_character_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
 			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
@@ -1198,7 +1272,7 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 	return not _game_over and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation
 
 func _do_draw(pid: int):
-	var p = players[pid]
+	var p = _phase_actor(pid)
 	var revision = turn_manager.get_context_revision()
 	# 【烂忠厚】（麦克斯·欧尼斯特）授予的摸牌阶段：跳过自己的摸牌，目标角色立刻获得一个摸牌阶段
 	if turn_manager.granted_draw_target_idx >= 0:
@@ -1226,7 +1300,8 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true) -> bool:
 		if medicine == 1:
 			if apply_supply: turn_manager.supply_shortage_active = false
 			return true
-	var draw_count = 2
+	var dragon_id = unit_registry.id_for(p)
+	var draw_count = fire_dragon_state.draw_count(dragon_id) if not dragon_id.is_empty() else 2
 	# 【丑态】仅改变摸牌阶段基数；兵粮等修改项继续在其后结算。
 	# 额外摸牌走_draw_blank_cards，不受这个阶段锁定技限制。
 	if p.general_name == "里奥·普利威尔" and p.is_alive():
@@ -1275,7 +1350,7 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(p) and p.is_alive() \
 			and p.general_name == "克里斯·西弗" and not _is_kneeling(p) \
 			and turn_manager.current_phase == TurnManager.Phase.DRAW \
 			and revision == turn_manager.get_context_revision() and _medicine_pending.get(p) == lease
@@ -1456,8 +1531,7 @@ func _roar_options(p: Player) -> Array:
 		var id = unit_registry.id_for(body)
 		if unit_registry.entry(id).kind != UnitRegistry.Kind.FIRE_DRAGON or not body.is_alive(): continue
 		# Q5: the sacrificed body is a cost, not an effect target. No stealth check.
-		# Unit damage targets are connected with the actual actor pipeline in I03c.
-		for target in players:
+		for target in _character_targets(p):
 			if target.is_alive() and not _is_kneeling(target): options.append({"id": id, "body": body, "target": target})
 	return options
 
@@ -1510,7 +1584,7 @@ func _roar_pending_choice(p: Player) -> int:
 	return CHOICE_INVALID if damage.invalidated and not _game_over else 1
 
 func _do_play(pid: int):
-	var p = players[pid]
+	var p = _phase_actor(pid)
 	if turn_manager.granted_play_completed and turn_manager._standalone_play_frame.is_empty():
 		turn_manager.granted_play_completed = false
 		turn_manager.granted_play_target_idx = -1
@@ -1534,18 +1608,19 @@ func _do_play(pid: int):
 		pid = turn_manager.get_play_actor_idx()
 		p = players[pid]
 	_set_input_player(p)
-	_play_btn.visible = (_is_human(players[pid]))
-	_end_play_btn.visible = (_is_human(players[pid]))
+	_play_btn.visible = _is_human(p)
+	_end_play_btn.visible = _is_human(p)
 	_sync_all_ui()
 	_refresh_status_line()
 	_update_debug("%s 出牌阶段 — 点击「出牌」选择牌型，或「结束出牌」" % p.player_name)
-	if not _is_human(players[pid]):
+	if not _is_human(p):
 		await _run_ai_play(p)
 
 func _ai_observation(actor: Player) -> Dictionary:
 	var view = PlayerObservation.capture(players, actor, turn_manager.current_phase,
 		turn_manager.get_context_revision())
 	view["mode"] = game_mode
+	view["actor"] = ActorIdentity.key_for(players, unit_registry, actor)
 	return view
 
 # 决策只接收白名单值快照；合法选项是牌型，-1表示自愿放弃。
@@ -1565,7 +1640,7 @@ func can_declare_basic(p: Player, sub: int) -> bool:
 		CardData.CardSubType.PEACH:
 			return p.hp < p.max_hp
 		CardData.CardSubType.WINE:
-			return turn_manager.can_play_wine(p.get_weapon() == CardData.CardSubType.RAGING_AXE, p.seat_index)
+			return turn_manager.can_play_wine(p.get_weapon() == CardData.CardSubType.RAGING_AXE, ActorIdentity.key_for(players, unit_registry, p))
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
 			return turn_manager.can_play_strike(p.strike_limit()) and not _get_strike_targets(p).is_empty()
 	return false
@@ -1583,7 +1658,7 @@ func _has_delayed_card(p: Player, sub: int) -> bool:
 
 func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 	var result: Array[Player] = []
-	for target in players:
+	for target in _character_targets(p):
 		if not target.is_alive() or _is_kneeling(target) or (target == p and sub != CardData.CardSubType.IRON_CHAIN):
 			continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
@@ -1630,11 +1705,12 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
-	var seat = int(observation.actor)
-	if seat < 0 or seat >= players.size() or seat != turn_manager.get_play_actor_idx() \
+	var seat: Variant = observation.actor
+	if typeof(seat) != typeof(turn_manager.get_play_actor_key()) or seat != turn_manager.get_play_actor_key() \
 			or observation.revision != turn_manager.get_context_revision():
 		return []
-	var p = players[seat]
+	var p = ActorIdentity.resolve_live(players, unit_registry, seat)
+	if p == null: return []
 	_ai_hand_snapshot = HandSelection.new(p)
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
@@ -1651,7 +1727,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 				choices.append({"sub": sub, "target": -1, "priority": 110})
 		else:
 			for target in _get_strike_targets(p):
-				choices.append({"sub": sub, "target": target.seat_index, "priority": 120 if p.wine_stacks > 0 else 80})
+				choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 120 if p.wine_stacks > 0 else 80})
 	for sub in TARGET_TRICKS + GLOBAL_TRICKS:
 		if not can_declare_trick(p, sub):
 			continue
@@ -1665,7 +1741,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 					if judgment.sub_type == sub:
 						duplicate = true
 				if not duplicate:
-					choices.append({"sub": sub, "target": target.seat_index, "priority": 60})
+					choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 60})
 		else:
 			var useful = false
 			for target in players:
@@ -1702,12 +1778,14 @@ func _execute_ai_action(action: Dictionary):
 		return
 	var p = _ai_hand_snapshot.owner
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or action.actor != turn_manager.get_play_actor_idx() or action.revision != turn_manager.get_context_revision() \
+			or typeof(action.actor) != typeof(turn_manager.get_play_actor_key()) \
+			or action.actor != turn_manager.get_play_actor_key() or action.revision != turn_manager.get_context_revision() \
 			or p.hand != _ai_hand_snapshot.hand or p.determined_cards != _ai_hand_snapshot.determined:
 		return
 	var sub = int(action.sub)
-	if action.target >= 0:
-		var target = players[action.target]
+	if typeof(action.target) == TYPE_STRING or action.target >= 0:
+		var target = ActorIdentity.resolve_live(players, unit_registry, action.target)
+		if target == null: return
 		if sub in TARGET_TRICKS:
 			if not can_declare_trick(p, sub) or not get_trick_targets(p, sub).has(target):
 				return
@@ -1728,9 +1806,9 @@ func _run_ai_play(actor: Player):
 	_ai_running_revisions[revision] = generation
 	var valid = func():
 		return is_inside_tree() and not is_queued_for_deletion() and not _game_over \
-			and generation == _dying_lifecycle_generation and is_instance_valid(actor) and players.has(actor) \
+			and generation == _dying_lifecycle_generation and is_instance_valid(actor) and _has_character_body(actor) \
 			and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
-			and turn_manager.get_play_actor_idx() == actor.seat_index \
+			and _play_actor() == actor \
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
@@ -1742,22 +1820,22 @@ func _run_ai_play(actor: Player):
 		_spend_egg_to_heal(actor)
 	var before_execute = func(action: Dictionary):
 		var snapshot = _ai_hand_snapshot
-		var target = players[int(action.target)] if int(action.target) >= 0 else null
+		var target = ActorIdentity.resolve_live(players, unit_registry, action.target)
 		var eligible = func():
 			if snapshot == null or snapshot != _ai_hand_snapshot or not _ai_offered_actions.has(action): return false
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
 			if target == null: return true
-			if not is_instance_valid(target) or not players.has(target) or not target.is_alive(): return false
-			if players[int(action.target)] != target: return false
+			if not is_instance_valid(target) or not _has_character_body(target) or not target.is_alive(): return false
+			if ActorIdentity.resolve_live(players, unit_registry, action.target) != target: return false
 			return get_trick_targets(actor, int(action.sub)).has(target) if int(action.sub) in TARGET_TRICKS \
 				else _get_strike_targets(actor).has(target)
 		return await ai_pacer.before_action(self, valid, eligible)
 	var result = await ai_driver.run(func(): return _ai_observation(actor),
 		_ai_play_candidates, _execute_ai_action, valid, before_execute)
 	if _ai_running_revisions.get(revision, -1) == generation: _ai_running_revisions.erase(revision)
-	if not _game_over and generation == _dying_lifecycle_generation and players.has(actor) \
-			and actor.is_dead() and turn_manager.get_context_revision() == revision \
-			and turn_manager.current_phase == TurnManager.Phase.PLAY and turn_manager.get_play_actor_idx() == actor.seat_index:
+	if not _game_over and generation == _dying_lifecycle_generation and is_instance_valid(actor) \
+			and (actor.is_dead() or actor.unit_disappeared) and turn_manager.get_context_revision() == revision \
+			and turn_manager.current_phase == TurnManager.Phase.PLAY and _play_actor() == actor:
 		turn_manager.advance_phase()
 		return
 	if result.reason != "stale" and valid.call():
@@ -1765,12 +1843,12 @@ func _run_ai_play(actor: Player):
 		turn_manager.advance_phase()
 
 func _do_discard(pid: int):
-	var p = players[pid]
+	var p = _phase_actor(pid)
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var current = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive()
+			and generation == _dying_lifecycle_generation and _has_character_body(p) and p.is_alive() and _phase_actor(pid) == p
 	# 跳过出牌阶段时按钮可能仍可见，统一隐藏
 	_play_btn.visible = false
 	_end_play_btn.visible = false
@@ -1824,7 +1902,7 @@ func _do_end(pid: int):
 	_lanzhonghou_pending.clear()
 	_is_meiyong_targeting = false
 	_refresh_status_line()
-	_update_debug("%s 回合结束" % players[pid].player_name)
+	_update_debug("%s 回合结束" % _phase_actor(pid).player_name)
 	turn_manager.advance_phase()
 
 func _on_turn_ended(pid: int):
@@ -1848,7 +1926,7 @@ func _draw_blank_cards(p: Player, count: int):
 
 func _get_attackable_targets(attacker: Player) -> Array[Player]:
 	var targets: Array[Player] = []
-	for p in players:
+	for p in _character_targets(attacker):
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if p != attacker and p.is_alive() and attacker.can_attack(p) and not _is_kneeling(p):
 			targets.append(p)
@@ -1899,7 +1977,14 @@ func _kneel_conditions_met(p: Player) -> bool:
 
 # 固定座号的存活圆桌；濒死待救者仍占座位。
 func ordinary_seat_distance(source: Player, target: Player) -> int:
-	return LivingTable.distance(spatial_players(), source, target, true)
+	# Fixed-player queries keep the existing hot path. LivingTable verifies the
+	# object references, so a copied seat field still cannot impersonate a seat.
+	if source != null and target != null and source.seat_index >= 0 and target.seat_index >= 0:
+		return LivingTable.distance(spatial_players(), source, target, true)
+	var origin = ActorIdentity.position_body(players, unit_registry, source)
+	var destination = ActorIdentity.position_body(players, unit_registry, target)
+	if origin == null or destination == null: return LivingTable.UNREACHABLE
+	return LivingTable.distance(spatial_players(), origin, destination, true)
 
 func spatial_players() -> Array[Player]:
 	if turn_manager.rounds == null: return players.duplicate()
@@ -1925,7 +2010,7 @@ func _choose_ordinary_actor(nominee: int) -> int:
 		# silently acquire one of its unimplemented skills in I01.
 		candidates = players.filter(func(p): return p.general_name == "桑尼·泰姆" and GeneralData.get_implementation_status(p.general_name) == "prototype")
 	for actor in candidates:
-		if not players.has(actor) or not actor.is_alive() or not ledger.pending_seats().has(actor.seat_index): continue
+		if not _has_character_body(actor) or not actor.is_alive() or not ledger.pending_seats().has(actor.seat_index): continue
 		if ledger.pending_seats().size() == 1: return actor.seat_index
 		var generation = _dying_lifecycle_generation
 		var revision = turn_manager.get_context_revision()
@@ -1965,7 +2050,7 @@ func _mule_distance_mod(attacker: Player, target: Player) -> Vector2i:
 
 func _get_all_alive_targets(attacker: Player) -> Array[Player]:
 	var targets: Array[Player] = []
-	for p in players:
+	for p in _character_targets(attacker):
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if p != attacker and p.is_alive() and not _is_kneeling(p):
 			targets.append(p)
@@ -1977,7 +2062,7 @@ func _get_duel_targets(attacker: Player) -> Array[Player]:
 	if attacker.general_name == "杰基·斯特朗":
 		return _get_all_alive_targets(attacker)
 	var targets: Array[Player] = []
-	for p in players:
+	for p in _character_targets(attacker):
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if p != attacker and p.is_alive() and not _is_kneeling(p) and attacker.attack_distance_to(p) <= 2:
 			targets.append(p)
@@ -2104,7 +2189,7 @@ func _exit_multi_target_mode():
 
 # 方天画戟：点击角色头像 toggle 加入/移除目标
 func _on_multi_target_click(target: Player):
-	var attacker = players[turn_manager.get_play_actor_idx()]
+	var attacker = _play_actor()
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -2170,7 +2255,7 @@ func _on_confirm_multi_target():
 func _on_detail_equip_clicked(sub: CardData.CardSubType, owner_player: Player):
 	if sub != CardData.CardSubType.SAGE_PROTECTION:
 		return
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	if owner_player != p or not _is_human(p):
 		_update_debug("只有装备者本人（你）能发动【贤者的加护】")
 		return
@@ -2199,8 +2284,8 @@ func _start_sage_ping_mode(p: Player):
 
 # 拼点目标点击（任意其他存活角色，无距离限制）
 func _on_sage_target_click(target: Player):
-	var p = players[turn_manager.get_play_actor_idx()]
-	if not _is_sage_targeting or not _can_use_play_skill(p) or not players.has(target) or target == p or not target.is_alive():
+	var p = _play_actor()
+	if not _is_sage_targeting or not _can_use_play_skill(p) or not _has_character_body(target) or target == p or not target.is_alive():
 		_update_debug("目标无效")
 		return
 	_is_sage_targeting = false
@@ -2226,7 +2311,7 @@ func _sage_ping(wearer: Player, target: Player) -> bool:
 	var lifecycle = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and lifecycle == _dying_lifecycle_generation and players.has(wearer) and players.has(target) \
+			and lifecycle == _dying_lifecycle_generation and _has_character_body(wearer) and _has_character_body(target) \
 			and wearer.is_alive() and target != wearer and target.is_alive() \
 			and wearer.get_equipment_card("armor") == original \
 			and wearer.get_armor() == CardData.CardSubType.SAGE_PROTECTION and not wearer.sage_activated
@@ -2302,7 +2387,7 @@ func _restore_equipment_payment(receipt: Dictionary, card: CardBase):
 func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.CardSubType,
 		old_sub: CardData.CardSubType, old_card: CardBase, context_revision: int) -> bool:
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or turn_manager.get_play_actor_idx() != p.seat_index \
+			or _play_actor() != p \
 			or turn_manager.get_context_revision() != context_revision \
 			or p.equipment.get(slot, -1) != old_sub or p.get_equipment_card(slot) != old_card \
 			or not _can_play_equipment_instance(p, sub):
@@ -2336,9 +2421,14 @@ func _clear_pending_determined_card():
 
 # 仅在具体规则入口确认使用/打出后调用，不能放进通用取牌/弃牌函数。
 func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind = CardActionEvent.Kind.USE,
-		from_hand: bool = true, is_virtual: bool = false) -> CardActionEvent:
+		from_hand: bool = true, is_virtual: bool = false, declared_targets: Array = []) -> CardActionEvent:
 	_card_action_serial += 1
 	var event = CardActionEvent.new(_card_action_serial, turn_manager, p, card, kind, from_hand, is_virtual)
+	event.actor_key = ActorIdentity.key_for(players, unit_registry, p)
+	if kind == CardActionEvent.Kind.USE and typeof(event.actor_key) == TYPE_STRING:
+		var unit_targets: Array[Player] = []
+		unit_targets.assign(declared_targets)
+		fire_dragon_state.record_use(event.actor_key, event.id, unit_targets)
 	_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
 	var name = "暗置" + card.hidden_category if card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else card.card_name
 	_history_event("response" if kind == CardActionEvent.Kind.RESPONSE else "use", "%s %s【%s】%s" % [p.player_name,
@@ -2353,16 +2443,25 @@ func _complete_card_actions(events: Array):
 		var receipt: Dictionary = _pending_card_actions[event.id]
 		if receipt.event != event: continue
 		_pending_card_actions.erase(event.id)
-		if receipt.generation != _dying_lifecycle_generation or not players.has(receipt.actor): continue
+		if receipt.generation != _dying_lifecycle_generation or not is_instance_valid(receipt.actor): continue
+		if ActorIdentity.key_for(players, unit_registry, receipt.actor) == null: continue
 		if event.settlement_completed: continue
 		event.settlement_completed = true
 		_apply_prep_card_action(receipt.actor, event)
 		completed.append(event)
 	# 全批计数先完成，再通知观察者；无懈链迁移可共用该批量边界。
 	for event in completed:
-		_history_event("completed", "%s 的【%s】结算完成" % [players[event.actor_seat].player_name,
-			"暗置" + event.card.hidden_category if event.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else CardData.get_type_name(event.sub_type)], players[event.actor_seat], [], {"action": event.id})
+		_history_event("completed", "%s 的【%s】结算完成" % [event.actor_body.player_name,
+			"暗置" + event.card.hidden_category if event.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else CardData.get_type_name(event.sub_type)], event.actor_body, [], {"action": event.id})
 		card_action_completed.emit(event)
+	if not turn_manager.current_unit_id.is_empty():
+		_advance_retired_unit_play.call_deferred(turn_manager.get_context_revision(), _dying_lifecycle_generation)
+
+func _advance_retired_unit_play(revision: int, generation: int):
+	if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
+	if turn_manager.current_unit_id.is_empty() or turn_manager.current_phase != TurnManager.Phase.PLAY or not _pending_card_actions.is_empty(): return
+	var body = _play_actor()
+	if body != null and (body.is_dead() or body.unit_disappeared): turn_manager.advance_phase()
 
 func _abandon_card_actions(events: Array):
 	# 技术失效只释放完成凭据；已成立的USE及已支付原牌不撤销。
@@ -2373,8 +2472,9 @@ func _abandon_card_actions(events: Array):
 			_history_event("invalidated", "已支付的用牌结算中断（上下文失效）", null, [], {"action": event.id})
 
 func _apply_prep_card_action(p: Player, event: CardActionEvent):
-	if p.general_name != "里奥·普利威尔" or p.is_dead() or not players.has(p): return
-	if event.actor_seat != p.seat_index or event.actor_seat != event.turn_owner_seat: return
+	if p.general_name != "里奥·普利威尔" or p.is_dead() or not _has_character_body(p): return
+	if typeof(event.actor_key) != TYPE_INT or typeof(event.turn_owner_key) != TYPE_INT: return
+	if event.actor_key != p.seat_index or event.actor_key != event.turn_owner_key: return
 	if not event.from_hand or event.is_virtual: return
 	if event.kind not in [CardActionEvent.Kind.USE, CardActionEvent.Kind.RESPONSE]: return
 	p.prep_tokens += 1
@@ -2382,7 +2482,7 @@ func _apply_prep_card_action(p: Player, event: CardActionEvent):
 
 func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	if _game_over: return
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	var action_revision = turn_manager.get_context_revision()
 	if sub in TARGET_TRICKS and (not can_declare_trick(p, sub, _yes_ah_active) or not get_trick_targets(p, sub).has(target)):
 		return
@@ -2404,7 +2504,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			base_damage += _rage_bonus(p)
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
-			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, [target])
 			_record_strike_played(p)
 			_sync_all_ui()
 
@@ -2432,13 +2532,13 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 
 		CardData.CardSubType.DUEL:
 			var actions: Array[CardActionEvent] = []
-			if not await _consume_trick(p, CardData.CardSubType.DUEL, actions):
+			if not await _consume_trick(p, CardData.CardSubType.DUEL, actions, [target]):
 				return
 			var generation = _dying_lifecycle_generation
 			var valid = func():
 				return not _game_over and generation == _dying_lifecycle_generation \
 					and action_revision == turn_manager.get_context_revision() \
-					and players.has(p) and players.has(target) and p.is_alive() \
+					and _has_character_body(p) and _has_character_body(target) and p.is_alive() \
 					and target.is_alive() and not _is_kneeling(p) and not _is_kneeling(target)
 			var replacements: Array = []
 			var roster: Array[Player] = []
@@ -2449,12 +2549,12 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			var generation = _dying_lifecycle_generation
 			var weapon = _equipment_resource_for_pick(target, "weapon")
 			var actions: Array[CardActionEvent] = []
-			if not await _consume_trick(p, sub, actions): return
+			if not await _consume_trick(p, sub, actions, [target]): return
 			# 第一目标确认时先提供预习；最终借刀才选择第二目标和计数。
 			var valid = func():
 				return not _game_over and generation == _dying_lifecycle_generation \
 					and action_revision == turn_manager.get_context_revision() \
-					and players.has(p) and players.has(target) and p.is_alive() and target.is_alive() \
+					and _has_character_body(p) and _has_character_body(target) and p.is_alive() and target.is_alive() \
 					and not _is_kneeling(p) and not _is_kneeling(target)
 			var prep_valid = func():
 				return valid.call() and weapon != null and _equipment_resource_for_pick(target, "weapon") == weapon
@@ -2514,7 +2614,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 			var choice_valid = func():
 				return not _game_over and strike_revision == turn_manager.get_context_revision() \
 					and strike_generation == _dying_lifecycle_generation \
-					and players.has(p) and p.is_alive() and players.has(actual) and actual.is_alive() \
+					and _has_character_body(p) and p.is_alive() and _has_character_body(actual) and actual.is_alive() \
 					and chain.target_player == actual and p.get_weapon() == CardData.CardSubType.GUANSHI_AXE \
 					and p.get_equipment_card("weapon") == original_weapon and p.mount_count() > 0 \
 					and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -2602,9 +2702,9 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 		var revision = turn_manager.get_context_revision()
 		var hit_valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
-				and players.has(target) and target.is_alive()
+				and _has_character_body(target) and target.is_alive()
 		var choice_valid = func():
-			return hit_valid.call() and players.has(p) and p.is_alive() \
+			return hit_valid.call() and _has_character_body(p) and p.is_alive() \
 				and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU \
 				and p.get_equipment_card("weapon") == original_weapon and p.gender != target.gender \
 				and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -2638,7 +2738,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		return
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
 	_reset_play_countdown_if_p0()
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	var card = _take_play_card(p, sub)
 	if card == null:
 		_update_debug("没有可用的【%s】或任意牌，未使用多目标杀" % CardData.get_type_name(sub))
@@ -2651,7 +2751,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	# 【暴怒】锁定技（布鲁斯·萨维奇）：杀额外造成已损失体力值的伤害
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
-	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false)
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, targets)
 	_record_strike_played(p)
 	_sync_all_ui()
 
@@ -2770,7 +2870,7 @@ func _finish_damage_chain(chain: EffectChain):
 
 func play_card(sub: CardData.CardSubType):
 	if _game_over: return
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 
 	# 【下跪】：无法使用或打出任何牌
 	if _is_kneeling(p):
@@ -2837,7 +2937,7 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			turn_manager.use_card("wine")
-			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false)
+			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false, [p])
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
@@ -2855,7 +2955,7 @@ func play_card(sub: CardData.CardSubType):
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
-			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false)
+			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false, [p])
 			var healed = _heal_with_staff(p)
 			deck.discard(used_peach)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
@@ -3141,7 +3241,7 @@ func play_card(sub: CardData.CardSubType):
 
 			# 选槽期间若行动或所选原牌过期，不先扣手牌，也不顶掉后来换上的马。
 			if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-					or turn_manager.get_play_actor_idx() != p.seat_index \
+					or _play_actor() != p \
 					or turn_manager.get_context_revision() != play_context \
 					or not Player.MOUNT_SLOTS.has(target_slot) or not mount_snapshot.has(target_slot) \
 					or not p.equipment.has(target_slot):
@@ -3204,7 +3304,7 @@ func play_card(sub: CardData.CardSubType):
 
 func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_name: String):
 	var response_revision = turn_manager.get_context_revision()
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 
 	# 消耗手牌
 	var card_sub: CardData.CardSubType
@@ -3228,7 +3328,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 
 	# 从当前玩家座位顺时针依次结算
 	for target in _prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster):
-		if not players.has(target) or not target.is_alive():
+		if not _has_character_body(target) or not target.is_alive():
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
 		if _game_over or response_revision != turn_manager.get_context_revision():
@@ -3288,7 +3388,7 @@ func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt:
 	return await _ask_basic_card_response_result(p, expected, prompt, decision) == BasicResponseOutcome.PAID
 
 func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> BasicResponseOutcome:
-	if _game_over or not players.has(p) or not p.is_alive() or _is_kneeling(p):
+	if _game_over or not _has_character_body(p) or not p.is_alive() or _is_kneeling(p):
 		return BasicResponseOutcome.INVALIDATED
 	if not HandPayment.has_response(p, expected):
 		return BasicResponseOutcome.DECLINED
@@ -3309,7 +3409,7 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 		accepted = bool(answer)
 	else:
 		accepted = await _choose_ai_response(p, "basic", [expected]) == expected
-	if _game_over or generation != _dying_lifecycle_generation or not players.has(p) or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision():
+	if _game_over or generation != _dying_lifecycle_generation or not _has_character_body(p) or not p.is_alive() or _is_kneeling(p) or revision != turn_manager.get_context_revision():
 		return BasicResponseOutcome.INVALIDATED
 	if not accepted:
 		return BasicResponseOutcome.DECLINED
@@ -3385,7 +3485,7 @@ func _show_aoe_prompt(card_name: String, required_name: String) -> int:
 
 func _play_peach_garden():
 	var revision = turn_manager.get_context_revision()
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.PEACH_GARDEN, actions):
@@ -3402,7 +3502,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 
 	# 从使用者开始顺时针依次结算（与南蛮/万箭方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster):
-		if not players.has(target) or not target.is_alive():
+		if not _has_character_body(target) or not target.is_alive():
 			continue
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -3433,7 +3533,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 
 func _play_harvest():
 	var revision = turn_manager.get_context_revision()
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 
 	var actions: Array[CardActionEvent] = []
 	if not await _consume_trick(p, CardData.CardSubType.HARVEST, actions):
@@ -3451,7 +3551,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 
 	# 从使用者开始顺时针依次结算（与桃园结义方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.HARVEST, roster):
-		if not players.has(target) or not target.is_alive():
+		if not _has_character_body(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 
@@ -3489,7 +3589,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 
 func _play_disarm():
 	var revision = turn_manager.get_context_revision()
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	if not turn_manager.can_use("disarm"):
 		_update_debug("本回合已使用【卸甲归田】")
 		return
@@ -3510,7 +3610,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 
 	# 从使用者开始顺时针依次结算（与桃园结义/五谷丰登方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.DISARM, roster):
-		if not players.has(target) or not target.is_alive():
+		if not _has_character_body(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 
@@ -3582,7 +3682,7 @@ func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) 
 # Q14：群体互换后按新牌条件生效，合条件目标为空也可更换。
 func _prep_group_roster(p: Player) -> Array[Player]:
 	var roster: Array[Player] = []
-	for target in _spatial_from(p):
+	for target in _character_order_from(p):
 		if target.is_alive(): roster.append(target)
 	return roster
 
@@ -3593,6 +3693,8 @@ func _prep_group_scope(p: Player, sub: int, roster: Array[Player] = []) -> Array
 	var declared = _prep_group_roster(p) if roster.is_empty() else roster
 	for target in declared:
 		if target == p and sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS]: continue
+		var id = unit_registry.id_for(target)
+		if not id.is_empty() and not fire_dragon_state.stealth_allows_target(id, p): continue
 		scope.append(target)
 	return scope
 
@@ -3626,12 +3728,12 @@ func _prep_other_single(attacker: Player, roster: Array[Player] = []) -> Player:
 func _choose_borrowed_second_target(user: Player, first: Player, allowed: Callable = Callable()) -> Variant:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
-	if first == null or user == null or not players.has(first) or not players.has(user): return CHOICE_INVALID
+	if first == null or user == null or not _has_character_body(first) or not _has_character_body(user): return CHOICE_INVALID
 	var weapon = _equipment_resource_for_pick(first, "weapon")
 	var candidates = _get_strike_targets(first)
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation \
-			and revision == turn_manager.get_context_revision() and players.has(user) and players.has(first) \
+			and revision == turn_manager.get_context_revision() and _has_character_body(user) and _has_character_body(first) \
 			and user != first and user.is_alive() and first.is_alive() and not _is_kneeling(user) and not _is_kneeling(first) \
 			and weapon != null and _equipment_resource_for_pick(first, "weapon") == weapon \
 			and candidates == _get_strike_targets(first) and (not allowed.is_valid() or allowed.call())
@@ -3681,7 +3783,7 @@ func _choose_borrowed_strike(first: Player, second: Player, allowed: Callable) -
 
 # Q19/Q21：只选择本次杀的目标，不支付；固定目标不可取消。
 func _choose_borrowed_strike_targets(first: Player, second: Player, sub: int, allowed: Callable) -> Variant:
-	if first == null or second == null or not players.has(first): return CHOICE_INVALID
+	if first == null or second == null or not _has_character_body(first): return CHOICE_INVALID
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var weapon = _equipment_resource_for_pick(first, "weapon")
@@ -3689,7 +3791,7 @@ func _choose_borrowed_strike_targets(first: Player, second: Player, sub: int, al
 	var candidates = _get_strike_targets(first)
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
-			and players.has(first) and first.is_alive() and candidates == _get_strike_targets(first) \
+			and _has_character_body(first) and first.is_alive() and candidates == _get_strike_targets(first) \
 			and _equipment_resource_for_pick(first, "weapon") == weapon \
 			and first.hand == snapshot.hand and first.determined_cards == snapshot.determined \
 			and HandPayment.has_card(first, sub) and (not allowed.is_valid() or allowed.call())
@@ -3755,14 +3857,14 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 	_history_event("target", "%s 对 %s 使用【借刀杀人】" % [user.player_name, first.player_name], user, [first])
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
-	if user == null or first == null or not players.has(user) or not players.has(first):
+	if user == null or first == null or not _has_character_body(user) or not _has_character_body(first):
 		_abandon_card_actions(actions)
 		return
 	var weapon = _equipment_resource_for_pick(first, "weapon")
 	var second_confirmed: Array[bool] = [false]
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
-			and players.has(user) and players.has(first) and user != first \
+			and _has_character_body(user) and _has_character_body(first) and user != first \
 			and (user.is_alive() or (second_confirmed[0] and user.is_dead())) and first.is_alive() \
 			and not _is_kneeling(user) and not _is_kneeling(first) and weapon != null \
 			and _equipment_resource_for_pick(first, "weapon") == weapon and (not allowed.is_valid() or allowed.call())
@@ -3804,7 +3906,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		if taken.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
 			var transfer_valid = func():
 				return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
-					and players.has(first) and players.has(user) and first.is_alive() and user.is_alive() \
+					and _has_character_body(first) and _has_character_body(user) and first.is_alive() and user.is_alive() \
 					and user.determined_cards.has(taken) and (not allowed.is_valid() or allowed.call())
 			if await _declare_stolen_hidden_equipment(first, user, taken, transfer_valid) == CHOICE_INVALID:
 				_abandon_card_actions(actions)
@@ -3828,7 +3930,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, allowed: Callable) -> int:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
-	if first == null or not players.has(first) or not first.is_alive() or _game_over: return CHOICE_INVALID
+	if first == null or not _has_character_body(first) or not first.is_alive() or _game_over: return CHOICE_INVALID
 	if not allowed.call() or targets.is_empty() or not strike_sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]: return CHOICE_INVALID
 	if targets.size() > 1 and first.get_weapon() != CardData.CardSubType.FANGTIAN_HALBERD: return CHOICE_INVALID
 	var seen: Array = []
@@ -3840,7 +3942,7 @@ func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, al
 	if card == null:
 		return CHOICE_INVALID
 	deck.discard(card)
-	var strike_action = _record_card_action(first, card, CardActionEvent.Kind.USE, true, false)
+	var strike_action = _record_card_action(first, card, CardActionEvent.Kind.USE, true, false, seen)
 	var damage = 1 + first.consume_wine_bonus() + _rage_bonus(first)
 	_record_strike_played(first)
 	var element = EffectChain.DamageType.PHYSICAL
@@ -3869,7 +3971,7 @@ func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], 
 	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and generation == _dying_lifecycle_generation and players.has(p) and p.is_alive() and not _is_kneeling(p)
+			and generation == _dying_lifecycle_generation and _has_character_body(p) and p.is_alive() and not _is_kneeling(p)
 	var replacements: Array = []
 	var roster: Array[Player] = []
 	var target = _prep_other_single(p)
@@ -3910,7 +4012,7 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		await _resolve_paid_iron_chain(p, targets, actions, not replacements.is_empty())
 		return
 	var fixed_valid = func():
-		return allowed.call() and target != null and players.has(target) and target.is_alive() and not _is_kneeling(target)
+		return allowed.call() and target != null and _has_character_body(target) and target.is_alive() and not _is_kneeling(target)
 	if not fixed_valid.call():
 		_abandon_card_actions(actions)
 		return
@@ -3919,7 +4021,7 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		# Q20确认第二目标后允许原使用者最终死亡；交武器后不能再要求其留原槽。
 		var borrowed_valid = func():
 			return not _game_over and generation == _dying_lifecycle_generation \
-				and revision == turn_manager.get_context_revision() and players.has(p) and players.has(target)
+				and revision == turn_manager.get_context_revision() and _has_character_body(p) and _has_character_body(target)
 		await _resolve_paid_borrowed_sword(p, target, actions, borrowed_valid)
 		return
 	if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
@@ -4000,7 +4102,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
-			and players.has(attacker) and players.has(target) \
+			and _has_character_body(attacker) and _has_character_body(target) \
 			and target.is_alive() and not _is_kneeling(target)
 	if not valid.call():
 		return
@@ -4032,7 +4134,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	# 确认后消耗手牌
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
 	var actions: Array[CardActionEvent] = []
-	if not await _consume_trick(attacker, sub, actions):
+	if not await _consume_trick(attacker, sub, actions, [target]):
 		return
 	var replacements: Array = []
 	var roster: Array[Player] = []
@@ -4203,7 +4305,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(attacker) and players.has(target) and target.is_alive() \
+			and _has_character_body(attacker) and _has_character_body(target) and target.is_alive() \
 			and (not allowed.is_valid() or allowed.call())
 
 	var slot: String
@@ -4436,7 +4538,7 @@ func _show_zone_picker(action: String, target: Player, allowed: Callable = Calla
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(target) and target.is_alive() \
+			and _has_character_body(target) and target.is_alive() \
 			and (not allowed.is_valid() or allowed.call())
 	if not valid.call(): return ""
 	var answer = ChoicePromptAnswer.new()
@@ -4511,7 +4613,7 @@ func _show_equip_picker(target: Player, slots: Array[String], title: String = "�
 	for slot in candidates: originals[slot] = _equipment_resource_for_pick(target, slot)
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(target) and target.is_alive() \
+			and _has_character_body(target) and target.is_alive() \
 			and (not allowed.is_valid() or allowed.call())
 	if not valid.call(): return ""
 	var answer = ChoicePromptAnswer.new()
@@ -4575,7 +4677,7 @@ func _show_mount_replace_picker(p: Player, allowed: Callable = Callable()) -> St
 	var originals: Dictionary = {}
 	for slot in candidates: originals[slot] = _equipment_resource_for_pick(p, slot)
 	var valid = func():
-		return not _game_over and players.has(p) and p.is_alive() \
+		return not _game_over and _has_character_body(p) and p.is_alive() \
 			and revision == turn_manager.get_context_revision() \
 			and (not allowed.is_valid() or allowed.call())
 	if not valid.call(): return ""
@@ -4801,7 +4903,7 @@ func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()
 		return false
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and players.has(p) and players.has(target) and p.is_alive() and target.is_alive() \
+		return not _game_over and _has_character_body(p) and _has_character_body(target) and p.is_alive() and target.is_alive() \
 			and turn_manager.get_context_revision() == revision and (not allowed.is_valid() or allowed.call())
 	if not valid.call():
 		return false
@@ -5019,7 +5121,7 @@ func _show_mount_discard_picker(p: Player, allowed: Callable = Callable()) -> St
 		originals[slot] = _guanshi_mount_card(p, slot)
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and players.has(p) and p.is_alive() \
+		return not _game_over and _has_character_body(p) and p.is_alive() \
 			and revision == turn_manager.get_context_revision() \
 			and (not allowed.is_valid() or allowed.call()) \
 			and slots.any(func(slot): return originals[slot] != null and _guanshi_mount_card(p, slot) == originals[slot])
@@ -5093,7 +5195,7 @@ func _on_iron_chain_target_click(target: Player):
 	if not _is_iron_chain_targeting or _card_target_confirm_owner == _card_target_generation:
 		return
 	var actor = _local_player()
-	if not _can_use_play_skill(actor) or not players.has(target): return
+	if not _can_use_play_skill(actor) or not _has_character_body(target): return
 	var generation = _card_target_generation
 	var revision = turn_manager.get_context_revision()
 	var pending_card = _pending_determined_card
@@ -5114,7 +5216,7 @@ func _on_iron_chain_target_click(target: Player):
 		return _can_use_play_skill(actor) and revision == turn_manager.get_context_revision() \
 			and generation == _card_target_generation and _is_iron_chain_targeting \
 			and _pending_determined_card == pending_card and _iron_chain_targets == chosen \
-			and chosen.all(func(p): return players.has(p) and p.is_alive() and not _is_kneeling(p))
+			and chosen.all(func(p): return _has_character_body(p) and p.is_alive() and not _is_kneeling(p))
 
 	if _iron_chain_targets.size() == 1:
 		# 问是否继续选第二名
@@ -5189,21 +5291,21 @@ func _show_more_target_confirm(target_name: String, allowed: Callable = Callable
 
 # 执行铁索连环：对每个目标切换连环状态
 func _execute_iron_chain(targets: Array[Player]):
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	# 铁索连环：选完目标执行时重置每步倒计时
 	_reset_play_countdown_if_p0()
 
 	var actions: Array[CardActionEvent] = []
-	if not await _consume_trick(p, CardData.CardSubType.IRON_CHAIN, actions):
+	if not await _consume_trick(p, CardData.CardSubType.IRON_CHAIN, actions, targets):
 		return
 	var replacements: Array = []
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():
 		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision() \
-				or not players.has(p) or not p.is_alive() or _is_kneeling(p): return false
+				or not _has_character_body(p) or not p.is_alive() or _is_kneeling(p): return false
 		for target in targets:
-			if not players.has(target) or not target.is_alive() or _is_kneeling(target): return false
+			if not _has_character_body(target) or not target.is_alive() or _is_kneeling(target): return false
 		return true
 	var target: Player = targets[0] if targets.size() == 1 else null
 	var roster: Array[Player] = []
@@ -5242,7 +5344,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 	if element == EffectChain.DamageType.PHYSICAL or not damaged.chained:
 		return
 	var linked: Array[Player] = []
-	for other in _spatial_from(damaged):
+	for other in _character_order_from(damaged):
 		if other != damaged and other.is_alive() and other.chained:
 			linked.append(other)
 	_update_debug("%s 受到属性伤害，触发【铁索连环】！" % damaged.player_name)
@@ -5576,10 +5678,9 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
 			and (not allowed.is_valid() or allowed.call())
-	for i in range(player_count):
+	for p in _character_order_from(players[0]):
 		if not valid.call():
 			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
-		var p = players[i]
 		if not p.is_alive():
 			continue
 		# 【下跪】：无法使用或打出任何牌 → 不询问
@@ -5715,7 +5816,7 @@ signal _plus_mule_target_result(target: Player)
 
 # 在一次杀使用/打出已经成立后登记；多目标只调用一次，效果链不重复登记。
 func _record_strike_played(p: Player):
-	var first := turn_manager.record_strike_played(p.seat_index)
+	var first := turn_manager.record_strike_played(ActorIdentity.key_for(players, unit_registry, p))
 	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
 		_draw_blank_cards(p, 1)
 		_public_result("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
@@ -5744,7 +5845,7 @@ func _try_liehuo_nullify_result(p: Player, sub: CardData.CardSubType, allowed: C
 	var shield = p.get_equipment_card("armor")
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and p.is_alive() and players.has(p) \
+		return not _game_over and p.is_alive() and _has_character_body(p) \
 			and revision == turn_manager.get_context_revision() \
 			and (not allowed.is_valid() or allowed.call())
 	if not valid.call():
@@ -5966,9 +6067,9 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				var hit_valid = func():
 					return not _game_over and not chain.is_cancelled \
 						and revision == turn_manager.get_context_revision() \
-						and players.has(actual) and actual.is_alive() and chain.target_player == actual
+						and _has_character_body(actual) and actual.is_alive() and chain.target_player == actual
 				var choice_valid = func():
-					return hit_valid.call() and players.has(subject) and subject.is_alive() \
+					return hit_valid.call() and _has_character_body(subject) and subject.is_alive() \
 						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ICE_SWORD \
 						and subject.get_equipment_card("weapon") == original_weapon \
 						and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -5994,9 +6095,9 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				var hit_valid = func():
 					return not _game_over and not chain.is_cancelled \
 						and revision == turn_manager.get_context_revision() \
-						and players.has(actual) and actual.is_alive() and chain.target_player == actual
+						and _has_character_body(actual) and actual.is_alive() and chain.target_player == actual
 				var choice_valid = func():
-					return hit_valid.call() and players.has(subject) and subject.is_alive() \
+					return hit_valid.call() and _has_character_body(subject) and subject.is_alive() \
 						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ZHANGBA_SPEAR \
 						and subject.get_equipment_card("weapon") == original_weapon \
 						and actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -6061,7 +6162,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		var fate_revision = turn_manager.get_context_revision()
 		var fate_valid = func():
 			return not _game_over and fate_revision == turn_manager.get_context_revision() \
-				and players.has(subject) and subject.is_alive() and chain.target_player == subject
+				and _has_character_body(subject) and subject.is_alive() and chain.target_player == subject
 		var fate_reply = await _try_fate_blade_save(subject, data["value"], fate_valid)
 		if fate_reply == CHOICE_INVALID:
 			chain.is_cancelled = true
@@ -6132,7 +6233,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		if soul_was_active and record.from_strike and not record.is_chain:
 			for point in data["damage"]:
 				if _game_over or post_revision != turn_manager.get_context_revision() \
-						or not players.has(subject) or not players.has(chain.target_player) \
+						or not _has_character_body(subject) or not _has_character_body(chain.target_player) \
 						or not subject.is_alive() or not chain.target_player.is_alive() \
 						or subject.get_equipment_card("weapon") != soul_original:
 					chain.continuation_invalid = true
@@ -6166,7 +6267,7 @@ func _try_thorn_counter(victim: Player, source: Player, amount: int) -> int:
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
-			and players.has(victim) and players.has(source) and victim.is_alive() and source.is_alive() \
+			and _has_character_body(victim) and _has_character_body(source) and victim.is_alive() and source.is_alive() \
 			and original != null and victim.get_equipment_card("armor") == original
 	for i in amount:
 		if not valid.call(): return CHOICE_INVALID
@@ -6208,7 +6309,7 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(kaiwen) and players.has(opponent) \
+			and players.has(kaiwen) and _has_character_body(opponent) \
 			and kaiwen.is_alive() and opponent.is_alive() and kaiwen.general_name == "凯文·罗本"
 	for i in amount:
 		if not valid.call():
@@ -6357,7 +6458,7 @@ func _try_fate_blade_save(victim: Player, amount: int, allowed: Callable = Calla
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(victim) and victim.is_alive() and amount >= victim.hp \
+			and _has_character_body(victim) and victim.is_alive() and amount >= victim.hp \
 			and victim.get_weapon() == CardData.CardSubType.FATE_BLADE \
 			and original_weapon != null and victim.get_equipment_card("weapon") == original_weapon \
 			and (not allowed.is_valid() or allowed.call())
@@ -6463,7 +6564,7 @@ func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
-			and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
+			and _has_character_body(source) and source.is_alive() and _has_character_body(victim) and victim.is_alive() \
 			and source.get_weapon() == CardData.CardSubType.GOU_LIAN_CLAW \
 			and source.get_equipment_card("weapon") == original_weapon \
 			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -6494,7 +6595,7 @@ func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 		var declaration_valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
 				and generation == _dying_lifecycle_generation \
-				and players.has(source) and source.is_alive() and players.has(victim) and victim.is_alive() \
+				and _has_character_body(source) and source.is_alive() and _has_character_body(victim) and victim.is_alive() \
 				and source.determined_cards.has(card) and card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT
 		await _declare_stolen_hidden_equipment(victim, source, card, declaration_valid)
 		if not valid.call() or card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT:
@@ -6519,7 +6620,7 @@ func _ask_gou_lian_slot(victim: Player, slots: Array[String], allowed: Callable 
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(victim) and victim.is_alive() \
+			and _has_character_body(victim) and victim.is_alive() \
 			and (not allowed.is_valid() or allowed.call()) \
 			and candidates.any(func(slot): return _equipment_resource_for_pick(victim, slot) == originals[slot])
 	if not valid.call():
@@ -6690,7 +6791,7 @@ func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool
 	return not _game_over and revision == turn_manager.get_context_revision() \
 		and turn_manager.current_phase == TurnManager.Phase.PLAY \
 		and turn_manager.get_play_actor_idx() >= 0 and turn_manager.get_play_actor_idx() < players.size() \
-		and players[turn_manager.get_play_actor_idx()] == actor \
+		and _play_actor() == actor \
 		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target)))
 
 # ============================
@@ -6721,8 +6822,8 @@ func _choose_yes_ah_for_play(p: Player, card_name: String) -> bool:
 	var original_pending = _pending_determined_card
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation \
-			and players.has(p) and p.is_alive() and turn_manager.can_play_card() \
-			and players[turn_manager.get_play_actor_idx()] == p \
+			and _has_character_body(p) and p.is_alive() and turn_manager.can_play_card() \
+			and _play_actor() == p \
 			and original_pending == _pending_determined_card \
 			and p.hand == snapshot.hand and p.determined_cards == snapshot.determined
 	var reply = await _ask_yes_ah(p, card_name, true, true, valid)
@@ -6758,7 +6859,7 @@ func _pay_yes_ah_cost_result(p: Player, allow_final_death: bool = false) -> int:
 	if p.is_dying():
 		if await _resolve_dying(p, null, "yes_ah") == CHOICE_INVALID: return CHOICE_INVALID
 	if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation \
-			or not players.has(p): return CHOICE_INVALID
+			or not _has_character_body(p): return CHOICE_INVALID
 	# Q20仅已明确虚拟无懈：完整支付后最终死亡不撤销这张响应。
 	# 其他虚拟锦囊/舍己费用沿原分支，不能借此自动扩大裁决范围。
 	return 1 if p.is_alive() or (allow_final_death and p.is_dead()) else 0
@@ -6780,7 +6881,7 @@ func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	return card
 
 # 即时锦囊消耗入口：支付成功才记入弃牌；技能视为使用沿用原有不生成实体弃牌的约定。
-func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Array) -> bool:
+func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Array, targets: Array[Player] = []) -> bool:
 	var virtual_use := _yes_ah_active
 	var card = await _take_trick_card(p, sub)
 	if card == null:
@@ -6788,7 +6889,8 @@ func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Ar
 	if not virtual_use:
 		deck.discard(card)
 	# 支付只成立；调用者须持有本张原事件直到全部结算完成。
-	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+	var scope: Array[Player] = _prep_group_scope(p, sub) if sub in GLOBAL_TRICKS else targets
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, scope)
 	completion_actions.append(action)
 	return true
 
@@ -6855,7 +6957,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 		_:
 			return
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
-			or turn_manager.get_play_actor_idx() != p.seat_index \
+			or _play_actor() != p \
 			or turn_manager.get_context_revision() != hide_context or p.has_hidden_equip():
 		return
 	var source: CardBase = null
@@ -6920,7 +7022,7 @@ func _do_sao_reveal(p: Player) -> int:
 		hidden_sources.append(p.get_hidden_equipment_card(slot))
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation \
-			and reveal_context == turn_manager.get_context_revision() and players.has(p) and p.is_alive() \
+			and reveal_context == turn_manager.get_context_revision() and _has_character_body(p) and p.is_alive() \
 			and hidden_slots.all(func(slot): return p.get_hidden_equipment_card(slot) == hidden_sources[hidden_slots.find(slot)])
 	var reveal_slot = hidden_slots[0]
 	var selected_index: int = 0
@@ -7021,8 +7123,8 @@ func _try_sao_preempt(equipper: Player, sub: CardData.CardSubType, type_key: Str
 	var pending = _pending_determined_card
 	var old_equipment = _equipment_resource_for_pick(equipper, type_key)
 	var action_valid = func():
-		return not _game_over and players.has(equipper) and equipper.is_alive() and not _is_kneeling(equipper) \
-			and turn_manager.can_play_card() and turn_manager.get_play_actor_idx() == equipper.seat_index \
+		return not _game_over and _has_character_body(equipper) and equipper.is_alive() and not _is_kneeling(equipper) \
+			and turn_manager.can_play_card() and _play_actor() == equipper \
 			and turn_manager.get_context_revision() == revision \
 			and equipper.hand == snapshot.hand and equipper.determined_cards == snapshot.determined \
 			and _pending_determined_card == pending and _has_play_card(equipper, sub) \
@@ -7314,7 +7416,7 @@ func _try_zhuangsha(dying: Player) -> int:
 		var valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
 				and generation == _dying_lifecycle_generation and _dying_contexts.get(dying) == context \
-				and players.has(dying) and players.has(opp) and dying.is_dying() and opp.is_alive()
+				and _has_character_body(dying) and players.has(opp) and dying.is_dying() and opp.is_alive()
 		var r = await _do_ping_dian_once(dying, opp, valid)
 		if r == RPS_INVALID or not valid.call():
 			return CHOICE_INVALID
@@ -7346,7 +7448,7 @@ func _check_awaken_trigger():
 var _awaken_in_progress: Dictionary = {}
 
 func _check_player_awaken(p: Player):
-	if _game_over or not players.has(p) or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯":
+	if _game_over or not _has_character_body(p) or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯":
 		return
 	if p.awoken:
 		if p.awake_choice != 0 or not p.awaken_effects_applied:
@@ -7368,7 +7470,7 @@ func _on_hand_updated(p: Player):
 
 # 觉醒：失去一点体力上限 → 摸两张牌 → 三选一
 func _awaken_choice_pending(p: Player, revision: int) -> bool:
-	return not _game_over and is_instance_valid(p) and players.has(p) and p.is_alive() \
+	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
 		and p.general_name == "史蒂芬·彼特先斯" and p.awoken and p.awake_choice == 0 \
 		and p.awakening_revision == revision
 
@@ -7449,8 +7551,8 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 	var action_revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and action_revision == turn_manager.get_context_revision() \
-			and players.has(victim) and victim.is_alive() and victim.general_name == "史蒂芬·彼特先斯" \
-			and players.has(source) and source.is_alive()
+			and _has_character_body(victim) and victim.is_alive() and victim.general_name == "史蒂芬·彼特先斯" \
+			and _has_character_body(source) and source.is_alive()
 	var use = 0
 	if _paixiong_override.is_valid():
 		var reply = await _paixiong_override.call()
@@ -7460,7 +7562,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 			return PaixiongOutcome.NOT_USED  # AI 暂不发动
 		_set_input_player(victim)
 		use = await _show_paixiong_prompt(source.player_name, valid)
-	if _game_over or not players.has(victim) or not victim.is_alive():
+	if _game_over or not _has_character_body(victim) or not victim.is_alive():
 		return PaixiongOutcome.INVALIDATED
 	if source.is_dead():
 		return PaixiongOutcome.NOT_USED # 来源最终死亡，已使用杀余伤无源继续。
@@ -7548,8 +7650,8 @@ func _begin_play_skill_selection():
 	_confirm_target_btn.visible = false
 
 func _can_use_play_skill(p: Player) -> bool:
-	return not _game_over and is_instance_valid(p) and players.has(p) and p.is_alive() \
-		and turn_manager.can_play_card() and turn_manager.get_play_actor_idx() == p.seat_index \
+	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
+		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
 
 func _play_skill_target_is_current() -> bool:
@@ -7687,7 +7789,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	var action_valid = func():
 		return _zhuangbi_execution_owner == owner and _zhuangbi_execution_generation == owner \
 			and selection == _play_skill_selection_generation \
-			and players.has(p) and p.general_name == "史蒂芬·彼特先斯" \
+			and _has_character_body(p) and p.general_name == "史蒂芬·彼特先斯" \
 			and _paid_skill_rps_valid(p, null, revision)
 	var target_valid = func(t):
 		return action_valid.call() and players.has(t) and t != p and _paid_skill_rps_valid(p, t, revision)
@@ -7764,8 +7866,8 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	var sequence_valid = func():
 		return not _game_over and _zhuangbi_execution_owner == owner and _zhuangbi_execution_generation == owner \
 			and selection == _play_skill_selection_generation and revision == turn_manager.get_context_revision() \
-			and players.has(p) and not p.is_dying() and turn_manager.can_play_card() \
-			and turn_manager.get_play_actor_idx() == p.seat_index
+			and _has_character_body(p) and not p.is_dying() and turn_manager.can_play_card() \
+			and _play_actor() == p
 	for t in losers:
 		if not sequence_valid.call():
 			return
@@ -7778,7 +7880,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		if not sequence_valid.call(): break
 	# E03-R02-Q1已答：包括各半成功，均保留成功后再次发动的既有窗口。
 	var can_repeat = func():
-		return action_valid.call() and players.has(p) \
+		return action_valid.call() and _has_character_body(p) \
 			and p.general_name == "史蒂芬·彼特先斯" and not _zhuangbi_blocked_this_phase
 	if can_repeat.call():
 		var again = 0
@@ -7893,7 +7995,7 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 	var valid = func():
 		return _campus_execution_owner == owner and _campus_execution_generation == owner \
 			and selection == _play_skill_selection_generation \
-			and players.has(p) and players.has(target) and target != p \
+			and _has_character_body(p) and _has_character_body(target) and target != p \
 			and p.general_name == "杰基·斯特朗" and _paid_skill_rps_valid(p, target, revision)
 	if not valid.call():
 		return
@@ -7946,7 +8048,7 @@ func _maybe_shensu(p: Player) -> int:
 func _maybe_shensu_pending(p: Player, owner: int) -> int:
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and players.has(p) and p.is_alive() and p.general_name == "比尔·盖伊" \
+		return not _game_over and _has_character_body(p) and p.is_alive() and p.general_name == "比尔·盖伊" \
 			and _shensu_execution_owner == owner and _shensu_execution_generation == owner \
 			and revision == turn_manager.get_context_revision() and turn_manager.current_player_idx == p.seat_index \
 			and turn_manager.current_phase == TurnManager.Phase.START and not turn_manager.skip_full_turn
@@ -8028,7 +8130,7 @@ func _pick_shensu_strike_target(p: Player, allowed: Callable = Callable()):
 	var answer = ChoicePromptAnswer.new()
 	_shensu_target_answer = answer
 	answer.allowed = func():
-		return not _game_over and players.has(p) and p.is_alive() and generation == _shensu_target_generation \
+		return not _game_over and _has_character_body(p) and p.is_alive() and generation == _shensu_target_generation \
 			and _shensu_target_answer == answer and revision == turn_manager.get_context_revision() \
 			and (not allowed.is_valid() or allowed.call())
 	if not answer.allowed.call():
@@ -8057,7 +8159,7 @@ func _pick_shensu_strike_target(p: Player, allowed: Callable = Callable()):
 	return players[selected]
 
 func _shensu_strike_target_valid(p: Player, target: Player) -> bool:
-	return target != null and players.has(target) and target != p and target.is_alive() and not _is_kneeling(target) \
+	return target != null and _has_character_body(target) and target != p and target.is_alive() and not _is_kneeling(target) \
 		and target.get_armor() != CardData.CardSubType.TENGJIA and not _is_bare_running(target) and not _awake_blocks(target, 1)
 
 # 神速杀目标点击（分发器在 _on_player_panel_click）
@@ -8077,7 +8179,7 @@ func _on_shensu_target_click(target: Player):
 	if target.get_armor() == CardData.CardSubType.TENGJIA or _is_bare_running(target) or _awake_blocks(target, 1):
 		_update_debug("%s 不能成为【杀】的目标！" % target.player_name)
 		return
-	if _shensu_target_answer != null and players.has(target): _shensu_target_answer.submit(players.find(target))
+	if _shensu_target_answer != null and _has_character_body(target): _shensu_target_answer.submit(players.find(target))
 
 # 神速杀：视为使用普通【杀】（无距离限制）；不耗手牌、不占杀次数；酒/武器/防具正常结算
 func _execute_shensu_strike(p: Player, target: Player) -> void:
@@ -8195,7 +8297,7 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 		return _gay_execution_owner == owner and _gay_execution_generation == owner \
 			and selection == _play_skill_selection_generation \
 			and _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
-			and p.general_name == "比尔·盖伊" and players.has(target) and target != p \
+			and p.general_name == "比尔·盖伊" and _has_character_body(target) and target != p \
 			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
 			and not _is_kneeling(target) and not _gay_used
 	if not valid.call():
@@ -8611,7 +8713,7 @@ func _ask_lanzhonghou_mount_slot(target: Player, slots: Array[String], title: St
 			options.append(slot)
 			originals[slot] = [target.equipment.get(slot, -1), _equipment_resource_for_pick(target, slot)]
 	var valid = func():
-		if not players.has(target) or not target.is_alive() or _is_kneeling(target) or (allowed.is_valid() and not allowed.call()): return false
+		if not _has_character_body(target) or not target.is_alive() or _is_kneeling(target) or (allowed.is_valid() and not allowed.call()): return false
 		for slot in originals:
 			if target.equipment.get(slot, -1) != originals[slot][0] or _equipment_resource_for_pick(target, slot) != originals[slot][1]: return false
 		return true
@@ -8781,7 +8883,7 @@ func _maybe_meiyong(p: Player) -> int:
 func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and players.has(p) and p.is_alive() and p.general_name == "麦克斯·欧尼斯特" \
+		return not _game_over and _has_character_body(p) and p.is_alive() and p.general_name == "麦克斯·欧尼斯特" \
 			and _meiyong_execution_owner == owner and _meiyong_execution_generation == owner \
 			and revision == turn_manager.get_context_revision() and turn_manager.current_player_idx == p.seat_index \
 			and turn_manager.current_phase == TurnManager.Phase.START and not turn_manager.skip_full_turn
@@ -8832,7 +8934,7 @@ func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, ph
 	var revision: int = frame.revision
 	frame.allowed = func():
 		return not _game_over and _meiyong_execution_owner == owner and _meiyong_execution_generation == owner \
-			and players.has(source) and players.has(target) and source.general_name == "麦克斯·欧尼斯特" \
+			and _has_character_body(source) and _has_character_body(target) and source.general_name == "麦克斯·欧尼斯特" \
 			and turn_manager.get_context_revision() == revision
 	var completed := true
 	if phase == TurnManager.Phase.JUDGE:
@@ -8851,7 +8953,7 @@ func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> in
 	var play_revision: int = frame.revision
 	frame.allowed = func():
 		return not _game_over and _meiyong_execution_owner == owner and _meiyong_execution_generation == owner \
-			and players.has(source) and players.has(target) and source.general_name == "麦克斯·欧尼斯特" \
+			and _has_character_body(source) and _has_character_body(target) and source.general_name == "麦克斯·欧尼斯特" \
 			and turn_manager.get_context_revision() == play_revision
 	var answer = ChoicePromptAnswer.new()
 	var result: Array = [CHOICE_INVALID]
@@ -8862,7 +8964,7 @@ func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> in
 	var watch = func():
 		if frame.completed: return
 		if _game_over or _meiyong_execution_owner != owner or _meiyong_execution_generation != owner \
-			or not players.has(source) or not players.has(target) or source.general_name != "麦克斯·欧尼斯特" \
+			or not _has_character_body(source) or not _has_character_body(target) or source.general_name != "麦克斯·欧尼斯特" \
 			or not is_same(turn_manager._standalone_play_frame, frame) \
 			or turn_manager.get_context_revision() != frame.revision:
 			answer.submit(CHOICE_INVALID)
@@ -8883,7 +8985,7 @@ func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> in
 			_set_status_line("获赠出牌阶段已失效")
 		return CHOICE_INVALID
 	if _game_over or _meiyong_execution_owner != owner or _meiyong_execution_generation != owner \
-		or not players.has(source) or turn_manager.current_player_idx != source.seat_index \
+		or not _has_character_body(source) or turn_manager.current_player_idx != source.seat_index \
 		or turn_manager.current_phase != TurnManager.Phase.START:
 		return CHOICE_INVALID
 	turn_manager.granted_play_target_idx = target.seat_index
@@ -8976,7 +9078,7 @@ func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()
 	var answer = ChoicePromptAnswer.new()
 	_meiyong_target_answer = answer
 	answer.allowed = func():
-		return not _game_over and players.has(p) and p.is_alive() and generation == _meiyong_target_generation \
+		return not _game_over and _has_character_body(p) and p.is_alive() and generation == _meiyong_target_generation \
 			and _meiyong_target_answer == answer and revision == turn_manager.get_context_revision() \
 			and (not allowed.is_valid() or allowed.call())
 	if not answer.allowed.call():
@@ -9005,7 +9107,7 @@ func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()
 	return players[selected]
 
 func _meiyong_target_valid(p: Player, target: Player, option: int) -> bool:
-	return target != null and players.has(target) and target != p and target.is_alive() and not _is_kneeling(target) \
+	return target != null and _has_character_body(target) and target != p and target.is_alive() and not _is_kneeling(target) \
 		and (option != 0 or not target.judgment_cards.is_empty())
 
 # 烂忠厚联合界面：头像仅选人，最终阶段按钮才提交。
@@ -9034,7 +9136,7 @@ func _on_meiyong_target_click(target: Player):
 	if _meiyong_option == 0 and target.judgment_cards.is_empty():
 		_update_debug("%s 判定区没有牌，不能选择" % target.player_name)
 		return
-	if _meiyong_target_answer != null and players.has(target): _meiyong_target_answer.submit(players.find(target))
+	if _meiyong_target_answer != null and _has_character_body(target): _meiyong_target_answer.submit(players.find(target))
 
 # 是否发动【烂忠厚】（玩家0弹窗）
 func _show_meiyong_activate_prompt(allowed: Callable = Callable(), remaining: Array = [STEP_SECONDS]) -> int:
@@ -9077,7 +9179,7 @@ func _try_bloodthirsty(source: Player, victim: Player, amount: int) -> int:
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
-			and players.has(source) and players.has(victim) \
+			and _has_character_body(source) and _has_character_body(victim) \
 			and source.is_alive() and victim.is_alive() and original != null \
 			and source.get_equipment_card("weapon") == original \
 			and victim.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
@@ -9184,7 +9286,7 @@ func _try_calamity_transfer(source: Player) -> int:
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(source) and source.is_alive() \
+			and _has_character_body(source) and source.is_alive() \
 			and source.get_equipment_card("weapon") == original_card
 	var target = await _ask_calamity_target(source, valid)
 	if (target is int and target == CHOICE_INVALID) or not valid.call():
@@ -9192,7 +9294,7 @@ func _try_calamity_transfer(source: Player) -> int:
 	if target == null:
 		_update_debug("%s 放弃转移【灾厄剑】" % source.player_name)
 		return 0
-	if not target is Player or not players.has(target) or target == source or not target.is_alive():
+	if not target is Player or not _has_character_body(target) or target == source or not target.is_alive():
 		return CHOICE_INVALID
 	# 等待目标选择期间若原剑离区或同槽换牌，不得先弃掉目标原装备。
 	if source.equipment.get("weapon", -1) != CardData.CardSubType.CALAMITY_SWORD \
@@ -9308,7 +9410,7 @@ func _try_calamity_robe_transfer(victim: Player) -> int:
 	var revision = turn_manager.get_context_revision()
 	var allowed = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(victim) and victim.is_alive() \
+			and _has_character_body(victim) and victim.is_alive() \
 			and victim.get_armor() == CardData.CardSubType.CALAMITY_ROBE \
 			and victim.get_equipment_card("armor") == original_card
 	var target = await _ask_calamity_robe_target(victim, allowed)
@@ -9317,7 +9419,7 @@ func _try_calamity_robe_transfer(victim: Player) -> int:
 	if target == null:
 		_update_debug("%s 放弃转移【灾厄袍】" % victim.player_name)
 		return 0
-	if not target is Player or not players.has(target) or target == victim or not target.is_alive():
+	if not target is Player or not _has_character_body(target) or target == victim or not target.is_alive():
 		return CHOICE_INVALID
 	# 目标防具槽：已有防具则替换（旧防具进弃牌堆）
 	if target.equipment.has("armor"):
@@ -9438,14 +9540,14 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 	var revision = turn_manager.get_context_revision()
 	var allowed = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(p) and p.is_alive() and p.equipment.get(source_slot, -1) == mule_sub \
+			and _has_character_body(p) and p.is_alive() and p.equipment.get(source_slot, -1) == mule_sub \
 			and p.get_equipment_card(source_slot) == original_card
 	var target = await _ask_mule_target(p, is_minus, allowed)
 	if target is int or not allowed.call():
 		return CHOICE_INVALID
 	if target == null:
 		return 0
-	if not target is Player or not players.has(target) or target == p or not target.is_alive():
+	if not target is Player or not _has_character_body(target) or target == p or not target.is_alive():
 		return CHOICE_INVALID
 	var replace_slot := ""
 	if target.mount_count() == Player.MOUNT_SLOTS.size():
@@ -9453,7 +9555,7 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 		for slot in Player.MOUNT_SLOTS:
 			originals[slot] = _equipment_resource_for_pick(target, slot)
 		var replacement_valid = func():
-			return allowed.call() and players.has(target) and target.is_alive() \
+			return allowed.call() and _has_character_body(target) and target.is_alive() \
 				and target.mount_count() == Player.MOUNT_SLOTS.size() \
 				and Player.MOUNT_SLOTS.all(func(slot): return originals[slot] != null and _equipment_resource_for_pick(target, slot) == originals[slot])
 		# 最新Q1：选择权属于转移者；AI沿用第一槽策略，非固定规则。
@@ -9641,7 +9743,7 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
-			and players.has(source) and players.has(victim) and original != null \
+			and _has_character_body(source) and _has_character_body(victim) and original != null \
 			and source.is_alive() and victim.is_alive() \
 			and source.get_equipment_card("weapon") == original \
 			and source.get_weapon() == CardData.CardSubType.SOUL_BLADE \
@@ -9832,10 +9934,9 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
 			and target.is_alive() and (not allowed.is_valid() or allowed.call())
-	for i in range(player_count):
+	for p in _character_order_from(players[0]):
 		if not valid.call():
 			return {"invalidated": true, "player": null}
-		var p = players[i]
 		if p == target or not p.is_alive():
 			continue
 		# 【下跪】：无法使用或打出任何牌 → 不能打出舍己为人
@@ -9980,7 +10081,7 @@ func _heal_with_staff(p: Player, recipient: Player = null) -> int:
 # 同一窗口的重入直接返回，不能等待自身；这不是重复请求的完成等待接口。
 # before_death 的上下文为 DyingContext，原效果链在 context.effect_chain。
 func _resolve_dying(victim: Player, killer: Player, cause: String, chain: EffectChain = null):
-	if _game_over or victim == null or not players.has(victim) or not victim.is_dying():
+	if _game_over or victim == null or not _has_character_body(victim) or not victim.is_dying():
 		return
 	if _dying_contexts.has(victim):
 		return
@@ -9989,7 +10090,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(victim) \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(victim) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(victim) == context and not context.invalidated
 	var rescue = await _check_dying(victim)
 	if rescue == CHOICE_INVALID or not valid.call():
@@ -10062,13 +10163,13 @@ func _check_dying(dying: Player) -> int:
 
 	_public_result("%s 进入濒死状态！" % dying.player_name)
 
-	if not players.has(dying):
+	if not _has_character_body(dying):
 		return CHOICE_INVALID
 	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var context = _dying_contexts.get(dying)
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(dying) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
 
 	# 经典基线：从当前回合角色开始轮询，含濒死本人；放弃后本窗口不回头。
@@ -10124,7 +10225,8 @@ func _handle_death(victim: Player, killer: Player):
 		_public_result("身份翻开：%s 是【%s】！" % [victim.player_name, victim.identity])
 
 	# ---- 阶段3 清理牌区：此时已最终死亡，白银狮子等不能将其救回 ----
-	_discard_all_cards(victim, true)
+	if players.has(victim): _discard_all_cards(victim, true)
+	else: _retire_final_unit(victim)
 	_update_debug("%s 弃置了所有牌（手牌/装备/判定牌）" % victim.player_name)
 	_sync_all_ui()
 
@@ -10230,7 +10332,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 	while true:
 		if _game_over:
 			return HandDiscardOutcome.GAME_ENDED
-		if not players.has(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
+		if not _has_character_body(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
 			return HandDiscardOutcome.ACTION_INVALIDATED
@@ -10249,7 +10351,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			var answer = ChoicePromptAnswer.new()
 			var reply = {"indices": []}
 			var valid = func():
-				return not _game_over and players.has(p) and p.is_alive() \
+				return not _game_over and _has_character_body(p) and p.is_alive() \
 					and revision == turn_manager.get_context_revision() \
 					and generation == _dying_lifecycle_generation \
 					and (not allowed.is_valid() or allowed.call())
@@ -10266,7 +10368,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 				indices.assign(reply.indices)
 		if _game_over:
 			return HandDiscardOutcome.GAME_ENDED
-		if not players.has(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
+		if not _has_character_body(p) or not p.is_alive() or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
 			return HandDiscardOutcome.ACTION_INVALIDATED
 		if allowed.is_valid() and not allowed.call():
 			return HandDiscardOutcome.ACTION_INVALIDATED
@@ -10463,7 +10565,7 @@ func _ask_sage_save(dying: Player) -> int:
 	var context = _dying_contexts.get(dying)
 	var original = dying.get_equipment_card("armor")
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(dying) \
 			and dying.is_dying() and dying.sage_activated and original != null \
 			and dying.get_armor() == CardData.CardSubType.SAGE_PROTECTION and dying.get_equipment_card("armor") == original \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context \
@@ -10555,10 +10657,12 @@ func _do_sage_save(p: Player):
 # 合法性与持牌情况是所有人共用的规则；是否愿意救援是另一个决策层。
 func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 	var options: Array[int] = []
-	if _game_over or rescuer == null or dying == null or not players.has(rescuer) or not players.has(dying):
+	if _game_over or rescuer == null or dying == null or not _has_character_body(rescuer) or not _has_character_body(dying):
 		return options
 	if not dying.is_dying() or _is_kneeling(dying) or _is_kneeling(rescuer):
 		return options
+	var target_unit = unit_registry.id_for(dying)
+	if not target_unit.is_empty() and not fire_dragon_state.stealth_allows_target(target_unit, rescuer): return options
 	if rescuer != dying and not rescuer.is_alive():
 		return options
 	if _dying_contexts.has(dying) and _dying_contexts[dying].stage != DyingContext.Stage.RESCUE:
@@ -10582,7 +10686,7 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if card == null:
 		return false
 	deck.discard(card)
-	var action = _record_card_action(rescuer, card, CardActionEvent.Kind.USE, true, false)
+	var action = _record_card_action(rescuer, card, CardActionEvent.Kind.USE, true, false, [dying])
 	var healed = 1
 	if sub == CardData.CardSubType.PEACH:
 		healed = _heal_with_staff(rescuer, dying)
@@ -10604,9 +10708,9 @@ func _run_rescue_round(dying: Player) -> int:
 	var revision = turn_manager.get_context_revision()
 	var context = _dying_contexts.get(dying)
 	var valid = func():
-		return not _game_over and generation == _dying_lifecycle_generation and players.has(dying) \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(dying) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
-	var order = _spatial_from(players[turn_manager.current_player_idx])
+	var order = _rescue_order_for_turn()
 	for rescuer in order:
 		_egg_rescue_turns[dying] = rescuer
 		while dying.is_dying() and not _game_over:
@@ -10637,7 +10741,7 @@ func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
 	var eggs = rescuer.fire_dragon_eggs
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation \
-			and players.has(rescuer) and players.has(dying) and not rescuer.is_dead() and not dying.is_dead() \
+			and _has_character_body(rescuer) and _has_character_body(dying) and not rescuer.is_dead() and not dying.is_dead() \
 			and revision == turn_manager.get_context_revision() and _dying_contexts.get(dying) == context \
 			and _rescue_choice_pending.get(dying) == owner \
 			and rescuer.hand == snapshot.hand and rescuer.determined_cards == snapshot.determined \
@@ -10657,7 +10761,7 @@ func _ask_rescue_card_pending(rescuer: Player, dying: Player, options: Array[int
 	elif _rescue_choice_override.is_valid():
 		selected = await _rescue_choice_override.call(rescuer, dying, options)
 	elif not _is_human(rescuer):
-		selected = await _choose_ai_response(rescuer, "rescue", options, {"target": dying.seat_index})
+		selected = await _choose_ai_response(rescuer, "rescue", options, {"target": ActorIdentity.key_for(players, unit_registry, dying)})
 	else:
 		var allowed = func(): return valid.call() and dying.is_dying() and not _rescue_options(rescuer, dying).is_empty()
 		_set_input_player(rescuer)
@@ -10667,7 +10771,7 @@ func _ask_rescue_card_pending(rescuer: Player, dying: Player, options: Array[int
 # 保守 AI 策略，不是规则限制：自救；救公开同阵营者；不读取他人隐藏身份。
 func _choose_ai_rescue(rescuer: Player, dying: Player, options: Array[int]) -> int:
 	var view = _ai_observation(rescuer)
-	view["response"] = {"target": dying.seat_index}
+	view["response"] = {"target": ActorIdentity.key_for(players, unit_registry, dying)}
 	return ResponsePolicy.choose(view, "rescue", options)
 
 func _show_dying_prompt(dying: Player):
@@ -10750,13 +10854,13 @@ func end_play_phase():
 func _on_play_btn_pressed():
 	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	if p.hand_size() <= 0 and p.determined_cards.is_empty():
 		_update_debug("没有手牌了")
 		return
 
 	var selector = _selector_scene.instantiate()
-	selector.player = players[turn_manager.get_play_actor_idx()]
+	selector.player = _play_actor()
 	$UI.add_child(selector)
 	selector.confirmed.connect(_on_selector_confirmed)
 	selector.cancelled.connect(_on_selector_cancelled)
@@ -10784,7 +10888,7 @@ func _on_selector_cancelled():
 func _on_determined_card_clicked(card: CardBase):
 	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
-	var p = players[turn_manager.get_play_actor_idx()]
+	var p = _play_actor()
 	if not _is_human(p) or not p.determined_cards.has(card):
 		_update_debug("所选的已确定牌已不在当前玩家牌区")
 		return
@@ -10867,8 +10971,8 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 func _on_target_click(target: Player):
 	if not _is_targeting or _card_target_confirm_owner == _card_target_generation: return
 	if turn_manager.get_play_actor_idx() < 0 or turn_manager.get_play_actor_idx() >= players.size(): return
-	var attacker = players[turn_manager.get_play_actor_idx()]
-	if not _can_use_play_skill(attacker) or not players.has(target): return
+	var attacker = _play_actor()
+	if not _can_use_play_skill(attacker) or not _has_character_body(target): return
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -10939,7 +11043,7 @@ func _on_target_click(target: Player):
 		return _can_use_play_skill(attacker) and generation == _card_target_generation \
 			and revision == turn_manager.get_context_revision() and _is_targeting \
 			and _targeting_card_sub == selected_sub and _pending_determined_card == pending_card \
-			and players.has(target) and target.is_alive() and not _is_kneeling(target) \
+			and _has_character_body(target) and target.is_alive() and not _is_kneeling(target) \
 			and (not is_strike_target or _get_strike_targets(attacker).has(target)) \
 			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target)) \
 			and (selected_sub != CardData.CardSubType.BORROWED_SWORD or _equipment_resource_for_pick(target, "weapon") == borrowed_weapon)
@@ -11045,7 +11149,7 @@ func _execute_kneel_pending(p: Player, owner: int) -> void:
 	var original_used = p.kneel_used
 	var valid = func():
 		return _kneel_execution_owner == owner and _kneel_execution_generation == owner \
-			and not _game_over and players.has(p) and players[p.seat_index] == p and not p.is_dead() \
+			and not _game_over and _has_character_body(p) and players[p.seat_index] == p and not p.is_dead() \
 			and p.general_name == "布鲁斯·萨维奇" and revision == turn_manager.get_context_revision() \
 			and p.kneeling == original_kneeling and p.kneel_used == original_used \
 			and (original_kneeling or _kneel_conditions_met(p))
@@ -11191,28 +11295,28 @@ func _sync_all_ui():
 		if seat < players.size() and i < _other_player_panels.size():
 			_update_player_panel(_other_player_panels[i], players[seat])
 
-	var my_turn = (_is_human(players[turn_manager.get_play_actor_idx()]))
+	var my_turn = (_is_human(_play_actor()))
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
-		var play_actor = players[turn_manager.get_play_actor_idx()]
+		var play_actor = _play_actor()
 		_play_btn.disabled = ((play_actor.hand_size() <= 0 and play_actor.determined_cards.is_empty()) or _is_kneeling(play_actor))
 	else:
 		_play_btn.disabled = true
-	_egg_heal_btn.visible = _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
-		and _is_human(players[turn_manager.get_play_actor_idx()])
+	_egg_heal_btn.visible = _play_btn.visible and _can_play_egg(_play_actor()) \
+		and _is_human(_play_actor())
 	_egg_heal_btn.disabled = _egg_heal_pending
-	_summon_dragon_btn.visible = _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
-		and _is_human(players[turn_manager.get_play_actor_idx()])
+	_summon_dragon_btn.visible = _play_btn.visible and _can_summon_dragon(_play_actor()) \
+		and _is_human(_play_actor())
 	_summon_dragon_btn.disabled = not _summon_dragon_pending.is_empty()
-	_roar_btn.visible = _play_btn.visible and not _roar_options(players[turn_manager.get_play_actor_idx()]).is_empty() and _is_human(players[turn_manager.get_play_actor_idx()])
+	_roar_btn.visible = _play_btn.visible and not _roar_options(_play_actor()).is_empty() and _is_human(_play_actor())
 	_roar_btn.disabled = _roar_pending
 
 func _process(delta: float):
 	if is_instance_valid(_egg_heal_btn) and turn_manager != null and not players.is_empty():
-		_egg_heal_btn.visible = not _game_over and _play_btn.visible and _can_play_egg(players[turn_manager.get_play_actor_idx()]) \
-			and _is_human(players[turn_manager.get_play_actor_idx()])
-		_summon_dragon_btn.visible = not _game_over and _play_btn.visible and _can_summon_dragon(players[turn_manager.get_play_actor_idx()]) \
-			and _is_human(players[turn_manager.get_play_actor_idx()])
-		_roar_btn.visible = not _game_over and _play_btn.visible and not _roar_options(players[turn_manager.get_play_actor_idx()]).is_empty() and _is_human(players[turn_manager.get_play_actor_idx()])
+		_egg_heal_btn.visible = not _game_over and _play_btn.visible and _can_play_egg(_play_actor()) \
+			and _is_human(_play_actor())
+		_summon_dragon_btn.visible = not _game_over and _play_btn.visible and _can_summon_dragon(_play_actor()) \
+			and _is_human(_play_actor())
+		_roar_btn.visible = not _game_over and _play_btn.visible and not _roar_options(_play_actor()).is_empty() and _is_human(_play_actor())
 	# 倒计时：先扣每步 30 秒，耗尽后扣整局储备；储备也耗尽才超时
 	if _countdown_active:
 		_step_remaining -= delta
@@ -11261,6 +11365,7 @@ func _refresh_status_line():
 	if pid >= players.size():
 		return
 	var pname = players[pid].player_name
+	if _play_actor() != null: pname = _play_actor().player_name
 	_halt_countdown()
 	match turn_manager.current_phase:
 		TurnManager.Phase.PLAY:
@@ -11279,7 +11384,7 @@ func _refresh_status_line():
 func _start_play_countdown():
 	_select_time_bank(turn_manager.get_play_actor_idx())
 	_halt_countdown()
-	_set_status_line("%s 出牌阶段" % players[turn_manager.get_play_actor_idx()].player_name)
+	_set_status_line("%s 出牌阶段" % _play_actor().player_name)
 	_step_remaining = STEP_SECONDS
 	_countdown_active = true
 	var generation = _countdown_generation
@@ -11301,7 +11406,7 @@ func _start_response_countdown(overlay: Control, who: String, on_timeout: Callab
 # 出牌阶段成功打出一张牌后重置每步倒计时（仅玩家0出牌阶段且倒计时运行中）
 func _reset_play_countdown_if_p0():
 	if lan_enabled and not _choice_prompt_stack.is_empty(): return
-	if _is_human(players[turn_manager.get_play_actor_idx()]) and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
+	if _is_human(_play_actor()) and turn_manager.current_phase == TurnManager.Phase.PLAY and _countdown_active:
 		_start_play_countdown()
 
 # 停止倒计时并恢复阶段提示（响应结束后回到当前阶段状态）
