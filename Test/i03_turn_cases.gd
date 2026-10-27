@@ -74,7 +74,9 @@ func phases(t):
 	owner.hand.clear()
 	var dragon = load("res://Test/i03_summon_cases.gd").new().seed_dragon(game, owner)
 	var id = game.unit_registry.id_for(dragon)
-	t.check(game._attached_turn_actor(0).is_empty(), "I03 incomplete unit wire remains gated in public metadata-only games")
+	t.check(game._unit_turns_enabled and game._attached_turn_actor(0) == id, "I03 released Chris schedules actual attached turn by default")
+	game._unit_turns_enabled = false
+	t.check(game._attached_turn_actor(0).is_empty(), "I03 explicit test gate can disable attached scheduling")
 	game._unit_turns_enabled = true
 	var phases_seen: Array = []
 	game.turn_manager.phase_changed.connect(func(_old, phase, _seat):

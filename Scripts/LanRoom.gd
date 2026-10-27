@@ -158,7 +158,7 @@ func _lobby_changed(state: Dictionary) -> void:
 		var start = _button(body, "全部准备后开始", func():
 			if not session.begin_match(): message.text = "请等人数齐全、每人准备，并确保非稻草人武将不重复。")
 		start.disabled = state.members.size() != state.count
-	_label(body, "8名武将已有技能；随机池不足时补手册资料将，其技能尚未实装。稻草人可重复测试。\n中途断线中断本局，不自动托管、不判胜负；支持重新准备。")
+	_label(body, "%d名武将已有技能；随机池不足时补手册资料将，其技能尚未实装。稻草人可重复测试。\n中途断线中断本局，不自动托管、不判胜负；支持重新准备。" % LanSession.GENERALS.size())
 
 func _send(token: String) -> void:
 	if token.is_empty() or token == _submitted: return

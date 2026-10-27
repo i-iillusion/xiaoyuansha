@@ -71,9 +71,9 @@ func _history_hp_changed(value: int, p: Player) -> void:
 # LAN keeps the existing authoritative rules; only input ownership changes.
 # Never rotate players/seat indices to make a remote player look like seat zero.
 var lan_enabled := false
-# Internal rollout gate until I03d's unit-aware wire and I03e's full acceptance.
-# Metadata-only random generals must not silently enable an incomplete turn UI.
-var _unit_turns_enabled := false
+# Released attached-turn scheduling. Tests may disable it explicitly; generic
+# registry fixtures still require FireDragonState attachment to become actors.
+var _unit_turns_enabled := true
 var lan_roster: Array[Dictionary] = []
 var _input_seat := 0
 var _native_unit_board: NativeUnitBoard
@@ -1503,6 +1503,11 @@ func _can_summon_dragon(p: Player) -> bool:
 func _on_summon_dragon_clicked(p: Player) -> int:
 	if not _can_summon_dragon(p) or _play_skill_execution_busy() or not _play_btn.visible \
 		or p != _local_player() or not _is_human(p): return CHOICE_INVALID
+	return await _perform_summon_dragon(p)
+
+# Shared transaction, not a bypass of skill eligibility or original-card costs.
+func _perform_summon_dragon(p: Player) -> int:
+	if not _can_summon_dragon(p) or _play_skill_execution_busy(): return CHOICE_INVALID
 	_summon_dragon_serial += 1
 	var lease = _summon_dragon_serial
 	_summon_dragon_pending[p] = lease
@@ -1560,6 +1565,10 @@ func _roar_options(p: Player) -> Array:
 
 func _on_roar_clicked(p: Player) -> int:
 	if _roar_options(p).is_empty() or _play_skill_execution_busy() or p != _local_player() or not _is_human(p) or not _play_btn.visible: return CHOICE_INVALID
+	return await _perform_roar(p)
+
+func _perform_roar(p: Player) -> int:
+	if _roar_options(p).is_empty() or _play_skill_execution_busy(): return CHOICE_INVALID
 	_roar_pending = true
 	var result = await _roar_pending_choice(p)
 	_roar_pending = false
@@ -1577,6 +1586,7 @@ func _roar_pending_choice(p: Player) -> int:
 	var options = _roar_options(p)
 	var choice: int
 	if _roar_choice_override.is_valid(): choice = await _roar_choice_override.call(p, options)
+	elif not _is_human(p): choice = _ai_roar_index(p, options)
 	else:
 		_set_input_player(p)
 		var prompt = load("res://Scripts/RoarChoicePrompt.gd").new()
@@ -1753,12 +1763,14 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 				choices.append({"sub": sub, "target": -1, "priority": 110})
 		else:
 			for target in _get_strike_targets(p):
+				if _ai_same_controller(p, target): continue
 				choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 120 if p.wine_stacks > 0 else 80})
 	for sub in TARGET_TRICKS + GLOBAL_TRICKS:
 		if not can_declare_trick(p, sub):
 			continue
 		if sub in TARGET_TRICKS:
 			for target in get_trick_targets(p, sub):
+				if _ai_same_controller(p, target): continue
 				# 延时同名已有时策略不重复放置；铁索保守只连未连环的其他角色。
 				if sub == CardData.CardSubType.IRON_CHAIN and (target == p or target.chained):
 					continue
@@ -1769,6 +1781,11 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 				if not duplicate:
 					choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 60})
 		else:
+			# Strategy only: do not harm our own attached body/controller with AOE.
+			if sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS, CardData.CardSubType.DISARM] \
+					and _character_targets(p).any(func(target): return target != p and target.is_alive() and _ai_same_controller(p, target)):
+				continue
+			if sub == CardData.CardSubType.LIGHTNING and not players.has(p): continue
 			var useful = false
 			for target in players:
 				if not target.is_alive() or _is_kneeling(target):
@@ -1844,6 +1861,7 @@ func _run_ai_play(actor: Player):
 		if not await ai_pacer.before_action(self, valid, func(): return _can_play_egg(actor) and actor.hp < actor.max_hp): break
 		if not valid.call() or not _can_play_egg(actor): break
 		_spend_egg_to_heal(actor)
+	await _run_ai_dragon_skills(actor, valid)
 	var before_execute = func(action: Dictionary):
 		var snapshot = _ai_hand_snapshot
 		var target = ActorIdentity.resolve_live(players, unit_registry, action.target)
@@ -1867,6 +1885,27 @@ func _run_ai_play(actor: Player):
 	if result.reason != "stale" and valid.call():
 		_update_debug("%s 结束出牌阶段" % actor.player_name)
 		turn_manager.advance_phase()
+
+func _ai_same_controller(source: Player, target: Player) -> bool:
+	var controller = ActorIdentity.controller(players, unit_registry, source)
+	return controller != null and controller == ActorIdentity.controller(players, unit_registry, target)
+
+func _ai_roar_index(actor: Player, options: Array) -> int:
+	var chosen := -1
+	for index in options.size():
+		var option = options[index]
+		if unit_registry.controller(option.id) != actor or _ai_same_controller(actor, option.target): continue
+		if chosen < 0 or option.target.hp < options[chosen].target.hp: chosen = index
+	return chosen
+
+func _run_ai_dragon_skills(actor: Player, valid: Callable):
+	if not valid.call() or actor.general_name != "克里斯·西弗": return
+	var can_roar = func(): return _ai_roar_index(actor, _roar_options(actor)) >= 0 and not _play_skill_execution_busy()
+	if can_roar.call() and await ai_pacer.before_action(self, valid, can_roar):
+		if valid.call() and can_roar.call(): await _perform_roar(actor)
+	var can_summon = func(): return _can_summon_dragon(actor) and not _play_skill_execution_busy()
+	if valid.call() and can_summon.call() and await ai_pacer.before_action(self, valid, can_summon):
+		if valid.call() and can_summon.call(): await _perform_summon_dragon(actor)
 
 func _do_discard(pid: int):
 	var p = _phase_actor(pid)

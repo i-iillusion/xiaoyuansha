@@ -57,6 +57,8 @@ var dragon_lifecycle_events: Array = []
 var dragon_gift_case := false
 var dragon_gift_drop_case := false
 var gift_driver = preload("res://Test/lan_dragon_gift_driver.gd").new()
+var public_dragon_case := false
+var choose_chris := false
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -86,6 +88,12 @@ func _run() -> void:
 			dragon_turn_case = true
 			summon_case = true
 		if arg == "--host-controller": host_controller = true
+		if arg == "--choose-chris": choose_chris = true
+		if arg == "--public-dragon-case":
+			public_dragon_case = true
+			dragon_lifecycle_case = true
+			dragon_turn_case = true
+			summon_case = true
 		if arg in ["--dragon-gift-case", "--dragon-gift-drop-case"]:
 			dragon_gift_case = true
 			dragon_turn_case = true
@@ -110,13 +118,13 @@ func _run() -> void:
 			if state.is_empty(): return
 			for member in state.members:
 				if member.peer == session.multiplayer.get_unique_id() and not member.ready and not state.playing:
-					session.choose("稻草人", true))
+					session.choose("克里斯·西弗" if choose_chris else "稻草人", true))
 		check(session.join_room("127.0.0.1", "Remote", port) == OK, "client ENet start")
 	else:
 		port = 26000 + randi_range(0, 10000)
 		check(session.host("Host", size, port, mode) == OK, "host ENet start")
 		check(session.set_pace(AiActionPacer.Speed.SLOW), "host configures slow pace before match")
-		session.choose("稻草人", true)
+		session.choose("克里斯·西弗" if public_dragon_case and host_controller else "稻草人", true)
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.git/lan-tests"))
 		for i in range(1, size):
 			var child_log = ProjectSettings.globalize_path("res://.git/lan-tests/client-%d-%d.log" % [port, i])
@@ -134,6 +142,9 @@ func _run() -> void:
 			if host_controller: args.append("--host-controller")
 			if dragon_gift_case: args.append("--dragon-gift-case")
 			if dragon_gift_drop_case: args.append("--dragon-gift-drop-case")
+			if public_dragon_case:
+				args.append("--public-dragon-case")
+				if i == 1 and not host_controller: args.append("--choose-chris")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -143,7 +154,7 @@ func _run() -> void:
 				# Authorized metadata allocation fixture, not a released general menu.
 				# Same server bridge/opening, ordinary HP, roles, phases and victory.
 				var peers = session.members.keys().filter(func(peer): return peer != 1)
-				session.members[1 if host_controller else peers[0]].general = "克里斯·西弗"
+				if not public_dragon_case: session.members[1 if host_controller else peers[0]].general = "克里斯·西弗"
 				if dragon_gift_case:
 					var ordered = session.members.keys()
 					# begin_match assigns seats in lobby insertion order, not peer-ID
@@ -153,7 +164,9 @@ func _run() -> void:
 				medicine_seeded = true
 			if session.begin_match():
 				started = true
-				if dragon_turn_case: session.bridge.game._unit_turns_enabled = true
+				if dragon_turn_case and not public_dragon_case: session.bridge.game._unit_turns_enabled = true
+				if public_dragon_case:
+					check(session.bridge.game._unit_turns_enabled and session.bridge.game.players.filter(func(p): return p.general_name == "克里斯·西弗").size() == 1, "public lobby choice starts one Chris with production default unit turns")
 				check(true, "%d ready humans started" % size)
 				if unit_case: _seed_unit_case()
 				if space_case:

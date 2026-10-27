@@ -10,9 +10,9 @@ func run(suite):
 	var skills = GeneralData.get_skills(name)
 	suite.check(skills.size() == 3 and skills[0].begins_with("【丑态】") and skills[1].begins_with("【预习】")
 		and skills[2].begins_with("【预大习】") and "结算完成" in skills[1] and "判定区" in skills[2], "F03c three displayed skills describe completion timing and preserved zones")
-	var draw = GeneralData.draw_unique_random_generals(8)
-	suite.check(draw.size() == 8 and draw.count(name) == 1 and draw.all(func(n): return GeneralData.get_implementation_status(n) == "prototype")
-		and not draw.has("稻草人"), "F03c eight-name random pool contains one Leo and no metadata supplement/placeholder")
+	var draw = GeneralData.draw_unique_random_generals(GeneralData.get_available_random_generals().size())
+	suite.check(draw.size() == GeneralData.get_available_random_generals().size() and draw.count(name) == 1 and draw.all(func(n): return GeneralData.get_implementation_status(n) == "prototype")
+		and not draw.has("稻草人"), "F03c full implemented random pool contains one Leo and no metadata supplement/placeholder")
 	MainMenu.random_mode = false
 	var menu = load("res://Scenes/MainMenu.tscn").instantiate()
 	menu.set_script(load("res://Test/leo_menu_observer.gd"))

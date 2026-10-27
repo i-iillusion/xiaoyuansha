@@ -5,10 +5,10 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-9"
+const PROTOCOL := "campus-lan-10"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
-	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊"]
+	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊", "克里斯·西弗"]
 var members: Dictionary = {}
 var count := 2
 var mode := GameModes.FREE_FOR_ALL

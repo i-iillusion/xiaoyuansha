@@ -1,7 +1,18 @@
 extends RefCounted
 
 func run(t):
-	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity]
+	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity, MainMenu.random_mode]
+	MainMenu.random_mode = false
+	var menu = load("res://Scenes/MainMenu.tscn").instantiate()
+	menu.set_script(load("res://Test/leo_menu_observer.gd"))
+	t.root.add_child(menu)
+	await t.process_frame
+	for count in [2, 5, 10]:
+		menu._start_test_game(count, GameModes.CLASSIC if count == 5 else GameModes.FREE_FOR_ALL)
+		var buttons = menu.get_node("Center/Box/Page").get_children().filter(func(node): return node is Button and not node.is_queued_for_deletion() and "克里斯·西弗" in node.text)
+		t.check(buttons.size() == 1 and "体力 3" in buttons[0].text and "【火龙】" in buttons[0].text and "【偷药品】" in buttons[0].text and "【恶龙咆哮】" in buttons[0].text, "I03e actual %d-player menu exposes one Chris with all three skills" % count)
+	menu.queue_free()
+	await t.process_frame
 	var helper = load("res://Test/h02_integration_cases.gd").new()
 	for mode in [GameModes.FREE_FOR_ALL, GameModes.CLASSIC]:
 		helper.prepare(5, mode)
@@ -18,7 +29,7 @@ func run(t):
 		t.check(p.fire_dragon_eggs == 1, "I03b2a actual opening gives Chris one egg")
 		t.check(game.players.slice(1).all(func(other): return other.fire_dragon_eggs == 0), "I03b2a actual opening does not give other generals eggs")
 		t.check(not game.fire_dragon_state.grant_start_egg(p) and p.fire_dragon_eggs == 1, "I03b2a repeated opening grant rejected")
-		t.check(GeneralData.get_implementation_status(p.general_name) == "metadata_only", "I03b2a incomplete Chris remains closed")
+		t.check(GeneralData.get_implementation_status(p.general_name) == "prototype" and LanSession.GENERALS.count(p.general_name) == 1 and GeneralData.get_skills(p.general_name).size() == 3 and GeneralData.get_handbook_section(p.general_name) == "6.16", "I03e Chris released exactly once with three skills in shared and LAN roster")
 		var original_hand = p.hand.duplicate()
 		p.fire_dragon_eggs = 4
 		p.hp = 1
@@ -55,3 +66,4 @@ func run(t):
 	GameManager.selected_general = saved[2]
 	GameManager.random_general = saved[3]
 	GameManager.random_identity = saved[4]
+	MainMenu.random_mode = saved[5]
