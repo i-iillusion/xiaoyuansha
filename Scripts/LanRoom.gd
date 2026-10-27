@@ -226,6 +226,7 @@ func _state_changed(state: Dictionary) -> void:
 			if unit.dying: text += "\n濒死中"
 			if unit.facedown: text += "\n翻面"
 			if unit.chained: text += "\n横置"
+			if unit.wine > 0: text += "\n酒：%d" % unit.wine
 			if unit.gender == "none": text += "\n无性别"
 			var judgments: Array[String] = []
 			for sub in unit.judgments: judgments.append(CardData.get_type_name(int(sub)))

@@ -54,6 +54,9 @@ var dragon_lifecycle_case := false
 var host_controller := false
 var dragon_egg_seen := false
 var dragon_lifecycle_events: Array = []
+var dragon_gift_case := false
+var dragon_gift_drop_case := false
+var gift_driver = preload("res://Test/lan_dragon_gift_driver.gd").new()
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -83,6 +86,13 @@ func _run() -> void:
 			dragon_turn_case = true
 			summon_case = true
 		if arg == "--host-controller": host_controller = true
+		if arg in ["--dragon-gift-case", "--dragon-gift-drop-case"]:
+			dragon_gift_case = true
+			dragon_turn_case = true
+			summon_case = true
+			if arg == "--dragon-gift-drop-case":
+				dragon_gift_drop_case = true
+				drop_case = not child
 		if arg == "--roar-case":
 			roar_case = true
 			summon_case = true
@@ -122,6 +132,8 @@ func _run() -> void:
 			if dragon_turn_case: args.append("--dragon-turn-case")
 			if dragon_lifecycle_case: args.append("--dragon-lifecycle-case")
 			if host_controller: args.append("--host-controller")
+			if dragon_gift_case: args.append("--dragon-gift-case")
+			if dragon_gift_drop_case: args.append("--dragon-gift-drop-case")
 			var pid = OS.create_process(OS.get_executable_path(), args)
 			check(pid > 0, "independent client process launched")
 			if pid > 0: children.append(pid)
@@ -132,6 +144,12 @@ func _run() -> void:
 				# Same server bridge/opening, ordinary HP, roles, phases and victory.
 				var peers = session.members.keys().filter(func(peer): return peer != 1)
 				session.members[1 if host_controller else peers[0]].general = "克里斯·西弗"
+				if dragon_gift_case:
+					var ordered = session.members.keys()
+					# begin_match assigns seats in lobby insertion order, not peer-ID
+					# numeric order. Keep Max adjacent before the actual controller.
+					var owner = ordered.find(1 if host_controller else peers[0])
+					session.members[ordered[(owner + size - 1) % size]].general = "麦克斯·欧尼斯特"
 				medicine_seeded = true
 			if session.begin_match():
 				started = true
@@ -147,7 +165,7 @@ func _run() -> void:
 					check(game.players.map(func(p): return p.seat_index) == range(size), "spatial movement never reorders fixed player rows")
 				if drop_case:
 					saved_game = session.bridge.game
-					saved_game._rps_choice(saved_game.players[1], "disconnect case")
+					if not dragon_gift_drop_case: saved_game._rps_choice(saved_game.players[1], "disconnect case")
 		if not child and roar_case and started and not roar_seeded and session.bridge != null:
 			var game = session.bridge.game
 			var bodies = game.unit_registry.turn_units()
@@ -174,6 +192,9 @@ func _run() -> void:
 		check(session.match_id == "", "interrupted match token removed")
 		await process_frame
 		check(not is_instance_valid(saved_game), "pending response scene freed after disconnect")
+		if dragon_gift_drop_case:
+			check(gift_driver.nested_seen, "actual gifted unit response reached before technical interruption")
+			check(not session._apply_action(1, "expired-match", last_token), "interrupted gifted unit command cannot be replayed")
 	elif not drop_on_match:
 		check(final_seen, "full network game reaches real victory")
 		check(actions > 0, "local peer submitted real UI actions")
@@ -192,6 +213,7 @@ func _run() -> void:
 			check(dragon_action_seen, "peer received actual unit USE through ENet public history")
 			if owns_medicine: check(dragon_control_used, "unit controller submitted actual unit PLAY, not a modeled START receipt")
 		if dragon_lifecycle_case: _check_dragon_lifecycle()
+		if dragon_gift_case: gift_driver.verify(self)
 		if space_case: check(shifted_seen, "peer actually received and used changed spatial order")
 		if unit_case:
 			check(units_seen, "peer received separate unit rows over real ENet")
@@ -244,6 +266,7 @@ func _run_unit_choice() -> void:
 		game._history_event("unit_input_verified", "单位控制者完成联机确认")
 
 func _state(state: Dictionary) -> void:
+	if dragon_gift_case: gift_driver.observe(state, session.history.entries)
 	if dragon_turn_case:
 		dragon_turn_seen = dragon_turn_seen or (not state.get("acting_unit", "").is_empty() and state.phase == TurnManager.Phase.PLAY)
 		dragon_action_seen = dragon_action_seen or session.history.entries.any(func(event): return event.kind == "use" and not str(event.details.get("actor_unit", "")).is_empty())
@@ -275,7 +298,7 @@ func _state(state: Dictionary) -> void:
 		check(not session.set_pace(AiActionPacer.Speed.FAST), "live match rejects pace changes")
 		if child: check(session.bridge == null, "client does not run a rule bridge")
 		pace_checked = true
-	if drop_on_match:
+	if drop_on_match and (not dragon_gift_drop_case or gift_driver.nested_seen):
 		check(not state.ended, "client disconnects during active match")
 		final_seen = true
 		session.close.call_deferred()
@@ -284,6 +307,7 @@ func _state(state: Dictionary) -> void:
 		# Consume all bounded reliable batches before treating the client as done.
 		if session.history.sequence < int(state.history.last): return
 		if dragon_lifecycle_case: dragon_lifecycle_events = session.history.entries.duplicate(true)
+		if dragon_gift_case: gift_driver.final_events = session.history.entries.duplicate(true)
 		check(session.history.sequence > 0, "network history received through final result")
 		check(session.history.entries.any(func(e): return "游戏结束！" in e.text), "network history contains terminal result")
 		if unit_case:
@@ -321,8 +345,9 @@ func _state(state: Dictionary) -> void:
 				if not confirm.is_empty():
 					token = confirm[0].id
 					summon_paid = true
+	if token.is_empty() and dragon_gift_case: token = gift_driver.choose(state, session.history.entries)
 	if token.is_empty(): token = driver.choose(state)
-	if dragon_turn_case and owns_medicine and state.get("acting_unit", "").is_empty() and summon_seen and (not dragon_lifecycle_case or not roar_seen) \
+	if dragon_turn_case and not dragon_gift_case and owns_medicine and state.get("acting_unit", "").is_empty() and summon_seen and (not dragon_lifecycle_case or not roar_seen) \
 			and not (dragon_lifecycle_case and state.controls.any(func(control): return control.text == "恶龙咆哮" and not control.disabled)):
 		# Legal controller strategy lets the attached turn happen before attacking.
 		var end = state.controls.filter(func(control): return control.text == "结束出牌" and not control.disabled)

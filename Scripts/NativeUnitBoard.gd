@@ -37,6 +37,7 @@ func refresh(game: GameManager):
 	for row in rows:
 		var body: Player = game.unit_registry.entry(row.id).get("body")
 		var text = "%s（%d号附属）  %d/%d  手牌%d%s%s" % [row.name, row.summoner + 1, row.hp, row.max_hp, row.hand_count, " 翻面" if row.facedown else "", " 横置" if row.chained else ""]
+		if row.wine > 0: text += " 酒：%d" % row.wine
 		if row.kind != UnitRegistry.Kind.FIRE_DRAGON:
 			var label = Label.new()
 			label.text = text

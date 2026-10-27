@@ -11,6 +11,8 @@ param(
     [switch]$RoarCase,
     [switch]$DragonTurnCase,
     [switch]$DragonLifecycleCase,
+    [switch]$DragonGiftCase,
+    [switch]$DragonGiftDropCase,
     [switch]$HostController
 )
 $ErrorActionPreference = 'Stop'
@@ -30,6 +32,8 @@ if ($SummonCase) { $info.Arguments += ' --summon-case' }
 if ($RoarCase) { $info.Arguments += ' --roar-case' }
 if ($DragonTurnCase) { $info.Arguments += ' --dragon-turn-case' }
 if ($DragonLifecycleCase) { $info.Arguments += ' --dragon-lifecycle-case' }
+if ($DragonGiftCase) { $info.Arguments += ' --dragon-gift-case' }
+if ($DragonGiftDropCase) { $info.Arguments += ' --dragon-gift-drop-case' }
 if ($HostController) { $info.Arguments += ' --host-controller' }
 $info.UseShellExecute = $false
 $info.CreateNoWindow = $true

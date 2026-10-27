@@ -9,6 +9,7 @@ func run(t):
 	t.check(game._self_info_panel.get_meta("prep_indicator").text == "火龙蛋:1", "I03 native Chris panel shows actual egg resource")
 	var dragon = load("res://Test/i03_summon_cases.gd").new().seed_dragon(game, game.players[0])
 	var id = game.unit_registry.id_for(dragon)
+	dragon.wine_stacks = 2
 	dragon.hand.append(null)
 	var original = CardBase.create(CardData.CardSubType.LIANNU)
 	game.players[2].equip_card_to_slot("weapon", original)
@@ -16,6 +17,7 @@ func run(t):
 	game._sync_unit_board()
 	var native = game._native_unit_board
 	t.check(native.visible and native._list.get_child(0).get_meta("player") == dragon and native._list.get_child_count() == 3, "I03 native unit surface exposes actual body and own concrete card without spatial seat")
+	t.check("酒：2" in native._list.get_child(0).text, "I03 native unit shows its own public wine stacks")
 	game.lan_enabled = true
 	game.turn_manager.current_unit_id = id
 	game._set_input_player(dragon)
@@ -27,6 +29,14 @@ func run(t):
 	t.check(state.players[0].eggs == game.players[0].fire_dragon_eggs, "I03 wire exposes actual Chris egg resource count")
 	t.check(state.acting_unit == id and state.turn == 0 and state.units[0].own_cards.size() == 2 and state.players.size() == 5 and state.space == [0,1,2,3,4], "I03 wire actual unit separate from fixed turn/controller and spatial roster")
 	t.check(bridge.snapshot(1).units[0].own_cards.is_empty() and state.units[0].gender == "none", "I03 wire unit privacy and explicit no gender")
+	t.check(state.units[0].wine == 2 and bridge.snapshot(1).units[0].wine == 2 and state.players[0].wine == 0, "I03 unit wine public to both viewers without copying owner wine")
+	var room = load("res://Scenes/LanRoom.tscn").instantiate()
+	t.root.add_child(room)
+	room._state_changed(state)
+	t.check("酒：2" in room.body.get_node("UnitBoard").get_child(0).text, "I03 LAN controller unit panel renders public wine stacks")
+	room._state_changed(bridge.snapshot(1))
+	t.check("酒：2" in room.body.get_node("UnitBoard").get_child(0).text, "I03 LAN observer unit panel renders same public wine without hand disclosure")
+	room.queue_free()
 	var receiver = LanSession.new()
 	t.root.add_child(receiver)
 	receiver.mode = state.mode
@@ -36,7 +46,7 @@ func run(t):
 	receiver.history.reset(state.match)
 	receiver._receive_state(state)
 	t.check(not receiver.latest.is_empty(), "I03 actual receiver accepts acting unit")
-	for bad in ["missing", "integer", "unknown", "flip", "chain", "gender"]:
+	for bad in ["missing", "integer", "unknown", "flip", "chain", "gender", "wine_type", "wine_negative"]:
 		var changed = state.duplicate(true)
 		match bad:
 			"missing": changed.erase("acting_unit")
@@ -45,6 +55,8 @@ func run(t):
 			"flip": changed.units[0].facedown = 1
 			"chain": changed.units[0].chained = "false"
 			"gender": changed.units[0].gender = "unknown"
+			"wine_type": changed.units[0].wine = "2"
+			"wine_negative": changed.units[0].wine = -1
 		receiver.latest = {}
 		var history = receiver.history.packet(0)
 		receiver._receive_state(changed)
@@ -55,6 +67,7 @@ func run(t):
 	t.check(selectors.size() == 1 and selectors[0].player == dragon, "I03 LAN Play binds actual unit hand, not owner hand")
 	selectors[0].queue_free()
 	await t.process_frame
+	dragon.wine_stacks = 0 # Independent strike fixture below has no wine bonus.
 	# Fixed B cannot select hidden F. Actual unit USE then reveals only B.
 	game.turn_manager.current_unit_id = ""
 	game.turn_manager.current_player_idx = 1
