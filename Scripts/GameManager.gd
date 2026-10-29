@@ -110,6 +110,13 @@ func _has_character_body(body: Player) -> bool:
 	var entry = unit_registry.entry(unit_registry.id_for(body))
 	return not entry.is_empty() and entry.kind == UnitRegistry.Kind.FIRE_DRAGON and not body.unit_disappeared
 
+# Ordinary terrain may receive Strike damage, but never owns a gesture or input.
+# Check retained registry identity, rather than a display name or copied seat.
+func _is_mountain_body(body: Player) -> bool:
+	if not is_instance_valid(body): return false
+	var entry = unit_registry.entry(unit_registry.id_for(body))
+	return not entry.is_empty() and entry.kind == UnitRegistry.Kind.MOUNTAIN
+
 func _attached_turn_actor(seat: int) -> String:
 	if not _unit_turns_enabled or _game_over or seat < 0 or seat >= players.size(): return ""
 	for body in unit_registry.turn_units():
@@ -6445,7 +6452,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		var soul_original = subject.get_equipment_card("weapon")
 		var soul_was_active = subject.get_weapon() == CardData.CardSubType.SOUL_BLADE and subject.soul_blade_activated
 		_update_soul_blade_count(subject, chain.target_player, data["damage"])
-		if soul_was_active and record.from_strike and not record.is_chain:
+		if soul_was_active and record.from_strike and not record.is_chain and not _is_mountain_body(chain.target_player):
 			for point in data["damage"]:
 				if _game_over or post_revision != turn_manager.get_context_revision() \
 						or not _has_character_body(subject) or not _has_character_body(chain.target_player) \
@@ -6517,6 +6524,8 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 	var opponent: Player = source if is_receive else victim
 	if kaiwen == null or opponent == null or kaiwen == opponent:
 		return 0
+	if _is_mountain_body(kaiwen) or _is_mountain_body(opponent):
+		return 0 # I04-Q14: not eligible, not an invalidated paid action.
 	if kaiwen.general_name != "凯文·罗本":
 		return 0
 	if not kaiwen.is_alive() or not opponent.is_alive():
@@ -9405,6 +9414,8 @@ func _show_meiyong_option_prompt(allowed: Callable = Callable()) -> int:
 func _try_bloodthirsty(source: Player, victim: Player, amount: int) -> int:
 	if source == null or victim == null or source == victim:
 		return 0
+	if _is_mountain_body(source) or _is_mountain_body(victim):
+		return 0 # I04-Q14: do not open a choice or convert no gesture to a loss.
 	if not source.is_alive() or not victim.is_alive():
 		return 0
 	if source.get_weapon() != CardData.CardSubType.BLOODTHIRSTY_BLADE:
@@ -9969,6 +9980,8 @@ func _update_soul_blade_count(source: Player, victim: Player, amount: int):
 func _try_soul_blade(source: Player, victim: Player) -> int:
 	if source == null or victim == null or source == victim:
 		return 0
+	if _is_mountain_body(source) or _is_mountain_body(victim):
+		return 0 # I04-Q14: ordinary mountains never participate in RPS.
 	if not source.is_alive() or not victim.is_alive():
 		return 0
 	if source.get_weapon() != CardData.CardSubType.SOUL_BLADE:
