@@ -194,6 +194,10 @@ var unit_registry := UnitRegistry.new()
 var fire_dragon_state := FireDragonState.new()
 var mountain_space := MountainSpace.new()
 var _mountain_ledger: RoundLedger
+# Development gate: no metadata-only Jim silently gains partial skills.
+var _mountain_rules_enabled := false
+var _jim_opening_pending: Dictionary = {}
+var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
 # 武器/防具唯一性管理（每种装备全场仅一张，装备过即永久占用）
@@ -1052,6 +1056,7 @@ func _retire_final_unit(body: Player) -> bool:
 	return true
 
 func _reset_unit_registry() -> void:
+	_jim_opening_pending = {}
 	mountain_space.reset()
 	_mountain_ledger = null
 	fire_dragon_state.reset()
@@ -1126,6 +1131,9 @@ func _do_start_pending(pid: int, generation: int):
 	_update_debug("%s 回合开始（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	# 每回合重置回合级标志（治疗权杖桃计数 / 酒层数——狂暴战斧装备者的酒跨回合保留）
 	_reset_turn_flags()
+	if not turn_manager.skip_full_turn:
+		if await _maybe_initial_mountains(p, current) == CHOICE_INVALID: return
+	if not current.call(): return
 	# 【神速】（比尔·盖伊）：回合开始阶段二选一（跳过判定+视为出杀 / 跳出牌弃牌+摸牌减益）
 	# （武将牌反面跳过整回合时不询问）
 	if p.general_name == "比尔·盖伊" and p.is_alive() and not turn_manager.skip_full_turn:
@@ -2052,6 +2060,77 @@ func _mountain_live_seats() -> Array[int]:
 	var result: Array[int] = []
 	for player in players:
 		if not player.is_dead(): result.append(player.seat_index)
+	return result
+
+func _initial_mountain_options() -> Array:
+	var circle = LivingTable.ordered(spatial_players(), true)
+	var result: Array = []
+	if circle.size() < 2: return result
+	for first in circle.size():
+		for second in circle.size():
+			result.append([
+				[circle[first].seat_index,circle[(first+1)%circle.size()].seat_index],
+				[circle[second].seat_index,circle[(second+1)%circle.size()].seat_index]])
+	return result
+
+func _initial_mountain_default(owner: Player, options: Array) -> int:
+	var circle = LivingTable.ordered(spatial_players(), true)
+	var index = circle.find(owner)
+	if index < 0 or circle.size() < 2: return CHOICE_INVALID
+	return options.find([
+		[circle[posmod(index-1,circle.size())].seat_index,owner.seat_index],
+		[owner.seat_index,circle[(index+1)%circle.size()].seat_index]])
+
+func _maybe_initial_mountains(owner: Player, allowed: Callable) -> int:
+	if not _mountain_rules_enabled or owner.general_name != "吉姆·芒顿" or owner.jim_mountains_started: return 0
+	if not _jim_opening_pending.is_empty(): return CHOICE_INVALID
+	if turn_manager.current_phase != TurnManager.Phase.START or turn_manager.skip_full_turn or _phase_actor(turn_manager.current_player_idx) != owner: return CHOICE_INVALID
+	if not allowed.call() or not players.has(owner) or not owner.is_alive() or not _ensure_mountain_space(): return CHOICE_INVALID
+	# I04-Q9 restores eligibility, but existing-terrain composition is still
+	# I04-Q10. This development guard is not a gameplay refusal/timeout policy.
+	if unit_registry.active_units().any(func(body): return unit_registry.entry(unit_registry.id_for(body)).kind == UnitRegistry.Kind.MOUNTAIN): return CHOICE_INVALID
+	var options = _initial_mountain_options()
+	if options.is_empty(): return CHOICE_INVALID
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var revision = turn_manager.get_context_revision()
+	var space = mountain_space.markers()
+	var general_revision = owner.awakening_revision
+	var live = _mountain_live_seats()
+	var lease = {"owner":owner}
+	_jim_opening_pending = lease
+	var valid = func():
+		return not _game_over and generation == _dying_lifecycle_generation and registry_generation == unit_registry.generation() \
+			and revision == turn_manager.get_context_revision() and is_same(_jim_opening_pending,lease) \
+			and allowed.call() and players.has(owner) and owner.is_alive() and owner.general_name == "吉姆·芒顿" \
+			and owner.awakening_revision == general_revision \
+			and not owner.jim_mountains_started and space == mountain_space.markers() and live == _mountain_live_seats()
+	var selected: int
+	if _mountain_placement_override.is_valid(): selected = await _mountain_placement_override.call(owner,options.duplicate(true),valid)
+	elif not _is_human(owner): selected = _initial_mountain_default(owner,options)
+	else:
+		_set_input_player(owner)
+		var texts: Array[String] = []
+		for pair in options: texts.append("山甲 %d→%d；山乙 %d→%d" % [pair[0][0]+1,pair[0][1]+1,pair[1][0]+1,pair[1][1]+1])
+		var prompt = load("res://Scripts/MountainPlacementPrompt.gd").new()
+		prompt.setup(texts)
+		$UI.add_child(prompt)
+		var answer = ChoicePromptAnswer.new()
+		prompt.chosen.connect(answer.submit)
+		selected = await _wait_choice_prompt(prompt,answer,valid)
+	var result := CHOICE_INVALID
+	if valid.call() and selected != CHOICE_INVALID:
+		if selected == -1: selected = _initial_mountain_default(owner,options)
+		if selected >= 0 and selected < options.size():
+			var pair = options[selected]
+			var first = _spawn_mountain_at(owner,pair[0][0],pair[0][1])
+			var second = _spawn_mountain_at(owner,pair[1][0],pair[1][1])
+			if first != null and second != null:
+				owner.jim_mountains_started = true
+				_history_event("skill","%s 发动【王屋太行】，召唤两座山" % owner.player_name,owner,[first,second])
+				_sync_all_ui()
+				result = 1
+	if is_same(_jim_opening_pending,lease): _jim_opening_pending = {}
 	return result
 
 func _ensure_mountain_space() -> bool:
@@ -10795,6 +10874,14 @@ func _show_sage_save_prompt(allowed: Callable = Callable()) -> int:
 
 # 执行贤者的加护保命：弃置所有牌（手牌/装备/判定牌）→ 复原武将牌至游戏开始时的状态 → 摸四张牌
 func _do_sage_save(p: Player):
+	# Q13: confirmation has already committed. Do not clear on dying-entry,
+	# ordinary Peach rescue, declined/expired Sage choices, or intelligent units.
+	for entry in unit_registry.detach_mountains_for_sage(p):
+		mountain_space.remove(entry.id)
+		entry.body.unit_disappeared = true
+		_discard_all_cards(entry.body,true,false)
+		_history_event("unit_removed","旧山随【贤者的加护】消失",p,[],{"unit":entry.id,"reason":"sage_restore"})
+		unit_removed.emit(entry.id,UnitRegistry.Removal.SAGE_RESTORE)
 	# 清理全部区域；不是把旧手牌/装备重新发回。
 	_discard_all_cards(p, true)
 	p.restore_game_start_state()

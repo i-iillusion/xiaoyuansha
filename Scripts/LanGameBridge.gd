@@ -11,6 +11,9 @@ var _signature := ""
 var _commands: Dictionary = {}
 var _controls: Array = []
 var _labels: Array = []
+# Internal integration-test gate only, not a lobby option or client command.
+# Jim stays metadata-only until the complete I04 acceptance gate is closed.
+var _enable_mountain_rules_for_tests := false
 
 func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	if game != null or not GameModes.initializable(mode, roster.size()): return false
@@ -20,6 +23,7 @@ func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	add_child(viewport)
 	game = preload("res://Scenes/Game.tscn").instantiate()
 	game.auto_start = false
+	game._mountain_rules_enabled = _enable_mountain_rules_for_tests
 	var configured = AiActionPacer.preferred_speed if pace == -1 else pace
 	game.ai_pacer.speed = configured if AiActionPacer.valid_speed(configured) else AiActionPacer.Speed.STANDARD
 	game.lan_enabled = true

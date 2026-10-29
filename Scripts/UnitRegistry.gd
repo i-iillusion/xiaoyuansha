@@ -4,7 +4,7 @@ class_name UnitRegistry
 extends RefCounted
 
 enum Kind { FIRE_DRAGON, MOUNTAIN }
-enum Removal { NORMAL_DEATH, SUMMONER_LOST }
+enum Removal { NORMAL_DEATH, SUMMONER_LOST, SAGE_RESTORE }
 var _players: Array[Player] = []
 var _entries: Dictionary = {}
 var _serial := 0
@@ -122,3 +122,14 @@ func _retire(id: String, reason: int) -> Dictionary:
 	_entries[id].reason = reason
 	# No body.mark_dead(): disappearance does not fabricate a death/kill.
 	return entry(id)
+
+# I04-Q13: only confirmed Sage activation clears mountains before final death.
+# Intelligent units retain the existing successful-rescue/Sage semantics.
+func detach_mountains_for_sage(summoner: Player) -> Array[Dictionary]:
+	var events: Array[Dictionary] = []
+	if not is_instance_valid(summoner) or not _players.has(summoner) or summoner.is_dead(): return events
+	for id in _entries:
+		var value: Dictionary = _entries[id]
+		if value.summoner == summoner and value.kind == Kind.MOUNTAIN and not value.removed:
+			events.append(_retire(id,Removal.SAGE_RESTORE))
+	return events
