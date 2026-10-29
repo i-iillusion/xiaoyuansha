@@ -489,6 +489,7 @@ func has_mule_plus() -> bool:
 # 【劣马】仅对持有者生效：目标的-1劣马减距，自己的+1劣马加距。
 func attack_distance_to(target: Player) -> int:
 	var dist = seat_distance_to(target)
+	if dist == LivingTable.UNREACHABLE: return dist
 	dist -= mount_minus     # 每匹 -1 马缩短 1 距离
 	dist += target.mount_plus  # 目标的每匹 +1 马增加 1 距离
 	# 读取实际双方的劣马，不遍历第三方；单位不借用控制者的装备。

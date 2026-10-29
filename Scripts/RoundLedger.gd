@@ -3,6 +3,8 @@
 class_name RoundLedger
 extends RefCounted
 
+signal space_relocated(seat: int, before: int)
+
 enum Kind { ORDINARY, EXTRA }
 var round_id := 0
 var round_head := -1
@@ -90,4 +92,5 @@ func relocate_before(seat: int, before: int) -> bool:
 	if seat == before or not _fixed.has(seat) or not _fixed.has(before): return false
 	_space.erase(seat)
 	_space.insert(_space.find(before), seat)
+	space_relocated.emit(seat, before)
 	return true

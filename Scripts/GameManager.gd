@@ -160,6 +160,7 @@ func _set_input_player(p: Player) -> void:
 		_input_seat = p.seat_index
 
 func _exit_tree() -> void:
+	mountain_space.reset()
 	fire_dragon_state.reset()
 	unit_registry.reset() # Invalidate retained unit handles before Nodes disappear.
 
@@ -191,6 +192,8 @@ static var random_general: bool = true
 var players: Array[Player] = []
 var unit_registry := UnitRegistry.new()
 var fire_dragon_state := FireDragonState.new()
+var mountain_space := MountainSpace.new()
+var _mountain_ledger: RoundLedger
 var deck: Deck
 var turn_manager: TurnManager
 # 武器/防具唯一性管理（每种装备全场仅一张，装备过即永久占用）
@@ -1027,6 +1030,7 @@ func _register_unit_body(kind: int, body: Player, summoner: Player) -> String:
 
 func _remove_summoner_units(summoner: Player) -> void:
 	for entry in unit_registry.detach_final_summoner(summoner):
+		mountain_space.remove(entry.id)
 		var body: Player = entry.body
 		if is_instance_valid(body):
 			body.unit_disappeared = true
@@ -1040,6 +1044,7 @@ func _retire_final_unit(body: Player) -> bool:
 	var id = unit_registry.id_for(body)
 	var entry = unit_registry.retire_dead(id)
 	if entry.is_empty(): return false
+	mountain_space.remove(id)
 	_discard_all_cards(body, true)
 	_history_event("unit_death", "单位最终死亡", null, [], {"unit": id, "reason": "normal_death"})
 	unit_removed.emit(id, UnitRegistry.Removal.NORMAL_DEATH)
@@ -1047,6 +1052,8 @@ func _retire_final_unit(body: Player) -> bool:
 	return true
 
 func _reset_unit_registry() -> void:
+	mountain_space.reset()
+	_mountain_ledger = null
 	fire_dragon_state.reset()
 	for body in unit_registry.all_bodies():
 		if body.get_parent() == self and not body.is_queued_for_deletion(): body.queue_free()
@@ -2041,7 +2048,69 @@ func _kneel_conditions_met(p: Player) -> bool:
 	return true
 
 # 固定座号的存活圆桌；濒死待救者仍占座位。
+func _mountain_live_seats() -> Array[int]:
+	var result: Array[int] = []
+	for player in players:
+		if not player.is_dead(): result.append(player.seat_index)
+	return result
+
+func _ensure_mountain_space() -> bool:
+	var order: Array[int] = []
+	for player in spatial_players(): order.append(player.seat_index)
+	if mountain_space.player_order().is_empty() and not mountain_space.initialize(order): return false
+	if mountain_space.player_order() != order: return false
+	var ledger = turn_manager.rounds
+	if ledger != null and _mountain_ledger != ledger:
+		_mountain_ledger = ledger
+		# Bind a non-owning integer, not the RefCounted emitter itself. Technical
+		# resets may reuse a ledger; never accumulate duplicate mirror callbacks.
+		var callback = _on_mountain_spatial_relocated.bind(ledger.get_instance_id())
+		if not ledger.space_relocated.is_connected(callback): ledger.space_relocated.connect(callback)
+	return true
+
+func _on_mountain_spatial_relocated(seat: int, before: int, ledger_id: int) -> void:
+	if _mountain_ledger == null or _mountain_ledger.get_instance_id() != ledger_id or _mountain_ledger != turn_manager.rounds: return
+	mountain_space.relocate_before(seat, before)
+
+# Internal body/position transaction, not an authorization to use a Jim skill.
+# I04c supplies the skill window, payment, limits and post-death permit.
+func _spawn_mountain_at(owner: Player, left: int, right: int) -> Player:
+	if _game_over or not players.has(owner) or owner.is_dead() or not _ensure_mountain_space(): return null
+	var live = _mountain_live_seats()
+	if mountain_space.ids().size() >= 2 or not mountain_space.legal_gap(left, right, live): return null
+	var body = Player.new()
+	body.player_name = "山"
+	body.general_name = "山"
+	body.identity = ""
+	body.gender = "" # I04-Q7 pending: no inherited Player male default or rule yet.
+	body.max_hp = 5
+	body.hp = 5
+	var id = _register_unit_body(UnitRegistry.Kind.MOUNTAIN, body, owner)
+	if id.is_empty():
+		body.free()
+		return null
+	# Registry and position both enforce the global cap; no await between them.
+	var placed = mountain_space.place(id, left, right, live)
+	assert(placed, "Validated mountain registration must have a legal position")
+	return body
+
+func _mountain_snapshot() -> MountainTopology:
+	if not _ensure_mountain_space(): return null
+	return mountain_space.snapshot(_mountain_live_seats())
+
 func ordinary_seat_distance(source: Player, target: Player) -> int:
+	if not mountain_space.ids().is_empty():
+		var topology = _mountain_snapshot()
+		if topology == null: return LivingTable.UNREACHABLE
+		var origin = ActorIdentity.position_body(players, unit_registry, source)
+		if origin == null or origin.is_dead(): return LivingTable.UNREACHABLE
+		var mountain_id = unit_registry.id_for(target)
+		if mountain_space.ids().has(mountain_id):
+			if not unit_registry.contains_active(target): return LivingTable.UNREACHABLE
+			return topology.mountain_distance(origin.seat_index, mountain_id)
+		var destination = ActorIdentity.position_body(players, unit_registry, target)
+		if destination == null or destination.is_dead(): return LivingTable.UNREACHABLE
+		return topology.player_distance(origin.seat_index, destination.seat_index)
 	# Fixed-player queries keep the existing hot path. LivingTable verifies the
 	# object references, so a copied seat field still cannot impersonate a seat.
 	if source != null and target != null and source.seat_index >= 0 and target.seat_index >= 0:
