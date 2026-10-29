@@ -2082,7 +2082,7 @@ func _spawn_mountain_at(owner: Player, left: int, right: int) -> Player:
 	body.player_name = "山"
 	body.general_name = "山"
 	body.identity = ""
-	body.gender = "" # I04-Q7 pending: no inherited Player male default or rule yet.
+	body.gender = "none" # I04-Q7: mountains have no gender; no opposite-sex effect.
 	body.max_hp = 5
 	body.hp = 5
 	var id = _register_unit_body(UnitRegistry.Kind.MOUNTAIN, body, owner)

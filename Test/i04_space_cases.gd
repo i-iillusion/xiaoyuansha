@@ -46,6 +46,14 @@ func run(t):
 	var first = game._spawn_mountain_at(owner,1,2)
 	var second = game._spawn_mountain_at(owner,3,4)
 	t.check(first != null and second != null and first.hp == 5 and first.max_hp == 5, "I04b internal registration creates 5/5 mountain bodies")
+	t.check(first.gender == "none" and second.gender == "none", "I04 Q7 registered mountains have no gender, not Player's default male")
+	var sword_user = game.players[1]
+	sword_user.equip_card_to_slot("weapon",CardBase.create(CardData.CardSubType.CHIXIONG_SHUANGGU))
+	var hand_before = sword_user.hand_size()
+	for sex in ["male","female"]:
+		sword_user.gender = sex
+		t.check(not sword_user.is_opposite_gender_to(first) and not first.is_opposite_gender_to(sword_user), "I04 Q7 mountain is not opposite-sex to either gender")
+		t.check(await game._prepare_strike_target(sword_user,first,false) and sword_user.hand_size() == hand_before and first.hand_size() == 0, "I04 Q7 target-preparation hook never activates dual-sword discard/draw on a mountain; not full strike gameplay")
 	t.check(game.players.size() == 6 and first.seat_index == -1 and first.identity == "" and game.unit_registry.controller(game.unit_registry.id_for(first)) == null, "I04b ordinary mountain never becomes a fixed player or controlled actor")
 	t.check(game._spawn_mountain_at(owner,0,1) == null and game.mountain_space.ids().size() == 2, "I04b third body rejection never leaves an orphan marker")
 	t.check(game.ordinary_seat_distance(game.players[1],game.players[2]) == LivingTable.UNREACHABLE, "I04b production base-distance query uses the two-region snapshot")
