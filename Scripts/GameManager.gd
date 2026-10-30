@@ -215,6 +215,7 @@ var _jim_rebuild_choice_override: Callable = Callable()
 var _jim_mountain_skill_pending: Dictionary = {}
 var _jim_mountain_target_override: Callable = Callable()
 var _jim_mountain_destination_override: Callable = Callable()
+var _jim_gather_choice_override: Callable = Callable()
 var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
@@ -8125,6 +8126,80 @@ func _activate_yishan(p: Player) -> int:
 	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
 	return result
 
+func _activate_jushan(p: Player) -> int:
+	if not _mountain_rules_enabled or not players.has(p) or p.general_name != "吉姆·芒顿" \
+			or not _can_use_play_skill(p) or p.hand_size() < 1 \
+			or turn_manager.phase_skill_used("jushan",p.seat_index) or _play_skill_execution_busy(): return 0
+	var topology = _mountain_snapshot()
+	if topology == null: return 0
+	var sides = topology.gather_for_players()
+	var options: Array[String] = []
+	for key in ["heal","lose"]:
+		if not sides[key].is_empty(): options.append(key)
+	if options.is_empty(): return 0 # Q5/M4: no equal-side, one-mountain or empty-side choice.
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var revision = turn_manager.get_context_revision()
+	var general = p.awakening_revision
+	var original_hand = HandSelection.new(p)
+	var space = mountain_space.markers()
+	var live = _mountain_live_seats()
+	var mountains = mountain_space.ids()
+	var order = _spatial_from(p)
+	order.append(order.pop_front()) # Q27: downstream first, owner last.
+	var lease = {"owner":p,"skill":"jushan"}
+	_jim_mountain_skill_pending = lease
+	var frame_valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+		and registry_generation == unit_registry.generation() and revision == turn_manager.get_context_revision() \
+		and is_same(_jim_mountain_skill_pending,lease) and players.has(p)
+	var authorized = func(): return frame_valid.call() and _can_use_play_skill(p) \
+		and p.general_name == "吉姆·芒顿" and p.awakening_revision == general \
+		and not turn_manager.phase_skill_used("jushan",p.seat_index) \
+		and space == mountain_space.markers() and live == _mountain_live_seats()
+	var choice_valid = func(): return authorized.call() and original_hand.hand == p.hand and original_hand.determined == p.determined_cards
+	var selected: int
+	if _jim_gather_choice_override.is_valid(): selected = await _jim_gather_choice_override.call(p,options.duplicate(),choice_valid)
+	elif not _is_human(p): selected = 0
+	else:
+		_set_input_player(p)
+		var texts: Array[String] = []
+		for key in options: texts.append("较少侧所有玩家回复1体力" if key == "heal" else "较多侧所有玩家失去1体力")
+		selected = await _show_choice_popup("【聚山】选择效果，然后弃置1张手牌",texts,choice_valid)
+	var result = 0
+	if not choice_valid.call() or selected == CHOICE_INVALID: result = CHOICE_INVALID
+	elif selected >= 0 and selected < options.size():
+		var key = options[selected]
+		var targets = order.filter(func(target): return sides[key].has(target.seat_index) and not _is_kneeling(target))
+		var paid = await _select_hand_discard_result(p,1,false,authorized)
+		if paid == HandDiscardOutcome.PAID:
+			if authorized.call():
+				turn_manager.set_phase_skill_used("jushan",true,p.seat_index)
+				_history_event("skill","%s 发动【聚山】：%s" % [p.player_name,"较少侧回复体力" if key == "heal" else "较多侧失去体力"],p,targets)
+				result = 1
+				for index in targets.size():
+					if not frame_valid.call(): result = CHOICE_INVALID; break
+					var target: Player = targets[index]
+					if not target.is_alive() or _is_kneeling(target): continue
+					if key == "heal": target.heal(1)
+					else:
+						target.hp -= 1 # Loss, not damage: no source, damage weapon or Sacrifice.
+						_sync_all_ui()
+						if target.is_dying() and await _resolve_dying(target,null,"jushan") == CHOICE_INVALID:
+							result = CHOICE_INVALID; break
+					if not frame_valid.call(): result = CHOICE_INVALID; break
+					# Delivery guard pending Q28, NOT a rule cancelling committed Gather.
+					# Nested rescue can remove Jim/the mountains before later recipients.
+					if index < targets.size()-1 and (p.is_dead() or mountains != mountain_space.ids()):
+						result = CHOICE_INVALID; break
+				_sync_all_ui()
+			else: result = CHOICE_INVALID
+		elif paid != HandDiscardOutcome.DECLINED: result = CHOICE_INVALID
+	elif selected != -1: result = CHOICE_INVALID
+	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
+	return result
+
 func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
@@ -11654,6 +11729,9 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 		return
 	if skill_key == "移山":
 		await _activate_yishan(owner_player)
+		return
+	if skill_key == "聚山":
+		await _activate_jushan(owner_player)
 		return
 	if skill_key == "苕":
 		await _on_sao_skill_clicked(owner_player)

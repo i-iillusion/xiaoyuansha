@@ -1,5 +1,8 @@
 # Windows local equivalent of the seven CI suites. Never starts an interactive game.
-param([Parameter(Mandatory = $true)][string]$GodotPath)
+param(
+    [Parameter(Mandatory = $true)][string]$GodotPath,
+    [ValidateSet('Normal','AboveNormal')][string]$ProcessPriority = 'Normal'
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -38,6 +41,7 @@ try {
         godot_executable = $godotExecutable
         godot_sha256 = (Get-FileHash -LiteralPath $godotExecutable -Algorithm SHA256).Hash
         disable_render_loop = $true
+        process_priority = $ProcessPriority
         snapshot = $snapshot
         files = @($manifest)
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $logDir 'manifest.json') -Encoding UTF8
@@ -71,6 +75,11 @@ try {
         $timedOut = $false
         try {
             $started = $process.Start()
+            # Optional scheduling isolation on a busy Windows workstation.
+            # Affects only this owned child; wall-time limits and test clocks stay unchanged.
+            if ($ProcessPriority -eq 'AboveNormal') {
+                $process.PriorityClass = [Diagnostics.ProcessPriorityClass]::AboveNormal
+            }
             $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile)
             $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrFile)
             if (-not $process.WaitForExit($LimitSeconds * 1000)) {

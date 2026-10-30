@@ -118,6 +118,7 @@ func _populate():
 	if _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":
 		_add_skill_btn("护山", "【护山】出牌阶段限一次，弃置一张手牌，使一座山恢复至体力上限（满血也可发动）")
 		_add_skill_btn("移山", "【移山】出牌阶段限一次，弃置一张手牌，将一座山移至另一个间隔")
+		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
 	_clear_container(_equip_container)
