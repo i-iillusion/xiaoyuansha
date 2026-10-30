@@ -56,6 +56,7 @@ func run(t):
 	await soul_count(t)
 	await strike_basics(t)
 	await spear_terrain(t)
+	await sacrifice_terrain(t)
 	GameManager.selected_players=saved[0]
 	GameManager.selected_mode=saved[1]
 	GameManager.selected_general=saved[2]
@@ -118,8 +119,8 @@ func strike_basics(t):
 		game = load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
 		source = game.players[0]
 		first = game._spawn_mountain_at(game.players[1],0,1)
-		# Q16 remains unresolved: everyone explicitly declines Sacrifice in this
-		# fixture. This does not decide whether terrain damage may be transferred.
+		# Q16 now forbids Sacrifice for terrain; willing responders are covered
+		# separately by sacrifice_terrain, including the actual LAN adapter.
 		game._sacrifice_actor_override = func(_p,_target,_amount): return false
 		var dodge_asks: Array = []
 		game._dodge_override = func(): dodge_asks.append(true); return true
@@ -162,6 +163,68 @@ func spear_terrain(t):
 			t.check(source.hp == 5 and mountain.hp == 2 and other.hp == 5, "I04c2b Zhangba pays one HP and adds damage before mountain elemental bonus, once")
 		t.check(completed.size() == 1 and completed[0].settlement_completed and game._pending_card_actions.is_empty(), "I04c2b Zhangba terrain continuation completes original paid action: "+str(sage))
 		t.check(game.turn_manager.strikes_used() == 1 and not game._game_over and game._choice_prompt_stack.is_empty(), "I04c2b Zhangba continuation neither refunds use nor leaves stale choices")
+		game._game_over = true
+		game.queue_free()
+		await t.process_frame
+
+func sacrifice_terrain(t):
+	for lan in [false,true]:
+		for sub in [CardData.CardSubType.STRIKE,CardData.CardSubType.FIRE_STRIKE]:
+			var bridge: LanGameBridge
+			var game: GameManager
+			if lan:
+				bridge = LanGameBridge.new()
+				t.root.add_child(bridge)
+				var roster: Array[Dictionary] = []
+				for seat in 5: roster.append({"name":"P%d"%seat,"general":"吉姆·芒顿" if seat == 1 else "稻草人"})
+				t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST), "I04 Q16 real LAN adapter starts its human roster")
+				game = bridge.game
+			else:
+				game = load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
+			game._halt_countdown()
+			var source = game.players[0]
+			var volunteer = game.players[2]
+			# Placement is an internal fixture; the actual paid card, damage chain
+			# and (for LAN) input-ownership adapter are exercised below.
+			var mountain = game._spawn_mountain_at(game.players[1],0,1)
+			game._spawn_mountain_at(game.players[1],0,1)
+			var offered: Array = []
+			game._sacrifice_actor_override = func(p,_target,_amount): offered.append(p); return p == volunteer
+			var cards = volunteer.hand.duplicate()
+			var hp = volunteer.hp
+			var before_source = source.hand_size()
+			var actions: Array = []
+			game.card_action_committed.connect(func(event): actions.append(event))
+			await game.execute_card_on_target(mountain,sub)
+			t.check(offered.is_empty() and volunteer.hand == cards and volunteer.hp == hp, "I04 Q16 willing volunteer gets no offer, payment or transferred damage: %s/%s" % [lan,sub])
+			t.check(mountain.hp == (4 if sub == CardData.CardSubType.STRIKE else 3) and source.hand_size() == before_source-1, "I04 Q16 original mountain damage and original card payment remain intact")
+			t.check(actions.size() == 1 and actions[0].sub_type == sub and actions[0].settlement_completed and game._pending_card_actions.is_empty(), "I04 Q16 no phantom Sacrifice action; paid Strike completes")
+			var reply = await game._maybe_sacrifice_result(source,mountain,1,EffectChain.DamageType.PHYSICAL)
+			t.check(not reply.invalidated and reply.player == null and offered.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 direct production entry declines normally without creating a prompt")
+			if lan:
+				t.check(bridge.input_owner() == 0 and bridge.snapshot(2).controls.is_empty(), "I04 Q16 LAN ownership never moves to the would-be rescuer")
+			game._game_over = true
+			if lan: bridge.queue_free()
+			else: game.queue_free()
+			await t.process_frame
+	# The exclusion is specific to ordinary mountains. Existing character and
+	# intelligent-unit transfer behavior remains; unit registration is only a
+	# classification fixture, not an upstream legal summoning/targeting proof.
+	for dragon in [false,true]:
+		var game = load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
+		var victim = game.players[1]
+		if dragon:
+			victim = FireDragonState.create_body()
+			var id = game._register_unit_body(UnitRegistry.Kind.FIRE_DRAGON,victim,game.players[1])
+			game.fire_dragon_state.attach(id)
+		var volunteer = game.players[2]
+		game._sacrifice_actor_override = func(p,_target,_amount): return p == volunteer
+		var cards = volunteer.hand_size()
+		var hp = volunteer.hp
+		var target_hp = victim.hp
+		var result = await game._deal_damage_result(game.players[0],victim,1,EffectChain.DamageType.PHYSICAL)
+		t.check(not result.invalidated and victim.hp == target_hp and volunteer.hp == hp-1 and volunteer.hand_size() == cards-1, "I04 Q16 fixed-player/dragon damage still supports paid Sacrifice: "+str(dragon))
+		t.check(game._pending_card_actions.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 ordinary character transfer completes its existing action")
 		game._game_over = true
 		game.queue_free()
 		await t.process_frame

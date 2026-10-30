@@ -10207,6 +10207,8 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 
 # 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
 func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Dictionary:
+	if _is_mountain_body(target):
+		return {"invalidated": false, "player": null} # I04-Q16: no offer or payment for terrain.
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():
