@@ -72,8 +72,42 @@ func run(t):
 	game._game_over = true
 	game.queue_free()
 	await t.process_frame
+	await zero_maximum(t)
 	GameManager.selected_players=saved[0]
 	GameManager.selected_mode=saved[1]
 	GameManager.selected_general=saved[2]
 	GameManager.random_general=saved[3]
 	GameManager.random_identity=saved[4]
+
+func zero_maximum(t):
+	for mode in ["accept","decline","none"]:
+		var game = load("res://Test/i04_initial_cases.gd").new().fixture(t,5,false)
+		game._halt_countdown()
+		var owner = game.players[0]
+		var mountain = game._spawn_mountain_at(owner,0,1)
+		mountain.hp = 1
+		owner.max_hp = 1
+		owner.hp = 1
+		var rescued_at: Array = []
+		var sage_asked: Array = []
+		game._sacrifice_actor_override = func(_p,_target,_amount): return false
+		game._rescue_choice_override = func(_r,dying,_o):
+			if dying == owner: rescued_at.append([dying.hp,dying.max_hp])
+			return -1
+		if mode != "none":
+			owner.equip_card_to_slot("armor",CardBase.create(CardData.CardSubType.SAGE_PROTECTION))
+			owner.sage_activated = true
+		game._sage_save_override = func(): sage_asked.append(true); return mode == "accept"
+		var actions: Array = []
+		game.card_action_completed.connect(func(event): actions.append(event))
+		await game.execute_card_on_target(mountain,CardData.CardSubType.STRIKE)
+		t.check(mountain.is_dead() and not rescued_at.is_empty() and rescued_at.all(func(pair): return pair == [0,0]), "I04 Q18 zero maximum still enters real rescue at 0/0: "+mode)
+		t.check(sage_asked.size() == (0 if mode == "none" else 1), "I04 Q18 activated Sage remains optional at zero maximum")
+		if mode == "accept":
+			t.check(owner.is_alive() and owner.hp == 6 and owner.max_hp == 6 and owner.hand_size() == 4 and owner.jim_rebuild_pending == 0, "I04 Q18 accepted Sage restores Jim from zero maximum")
+		else:
+			t.check(owner.is_dead() and owner.hp == 0 and owner.max_hp == 0, "I04 Q18 declined/unavailable Sage reaches ordinary final death without an invented maximum floor")
+		t.check(actions.size() == 1 and actions[0].settlement_completed and game._pending_card_actions.is_empty(), "I04 Q18 zero-maximum resolution completes the original paid Strike")
+		game._game_over = true
+		game.queue_free()
+		await t.process_frame

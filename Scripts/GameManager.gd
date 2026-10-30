@@ -210,6 +210,7 @@ var _mountain_ledger: RoundLedger
 # Development gate: no metadata-only Jim silently gains partial skills.
 var _mountain_rules_enabled := false
 var _jim_opening_pending: Dictionary = {}
+var _jim_rebuild_windows: Dictionary = {}
 var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
@@ -574,6 +575,7 @@ func _ready():
 	turn_manager.player_count = player_count
 	add_child(turn_manager)
 	turn_manager.phase_changed.connect(_on_phase_changed)
+	turn_manager.standalone_play_finished.connect(_on_jim_standalone_finished)
 	turn_manager.turn_ended.connect(_on_turn_ended)
 	game_over.connect(_on_game_over)
 
@@ -1070,6 +1072,9 @@ func _retire_final_unit(body: Player) -> bool:
 
 func _reset_unit_registry() -> void:
 	_jim_opening_pending = {}
+	for owner in _jim_rebuild_windows:
+		if is_instance_valid(owner): owner.jim_rebuild_available = 0
+	_jim_rebuild_windows.clear()
 	mountain_space.reset()
 	_mountain_ledger = null
 	fire_dragon_state.reset()
@@ -1082,6 +1087,7 @@ func _reset_unit_registry() -> void:
 # ---- 阶段响应 ----
 
 func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phase, pid: int):
+	_expire_jim_rebuild_windows()
 	var body = _phase_actor(pid)
 	if body == null: return
 	if not _game_over and new_phase != TurnManager.Phase.WAITING and not (old_phase == TurnManager.Phase.WAITING and new_phase == TurnManager.Phase.PLAY):
@@ -1671,6 +1677,7 @@ func _do_play(pid: int):
 		# 获赠阶段从响应返回时，授予索引已消费，仍恢复实际操作者。
 		pid = turn_manager.get_play_actor_idx()
 		p = players[pid]
+	_bind_jim_rebuild_window(p)
 	_set_input_player(p)
 	_play_btn.visible = _is_human(p)
 	_end_play_btn.visible = _is_human(p)
@@ -2082,6 +2089,41 @@ func _mountain_live_seats() -> Array[int]:
 	for player in players:
 		if not player.is_dead(): result.append(player.seat_index)
 	return result
+
+func _on_jim_standalone_finished(_frame: Dictionary) -> void:
+	_expire_jim_rebuild_windows()
+
+func _expire_jim_rebuild_windows() -> void:
+	for owner in _jim_rebuild_windows.keys():
+		var stamp: Dictionary = _jim_rebuild_windows[owner]
+		var current = _mountain_rules_enabled and not _game_over and is_instance_valid(owner) \
+			and players.has(owner) and not owner.is_dead() and owner.general_name == "吉姆·芒顿" \
+			and stamp.generation == _dying_lifecycle_generation and stamp.general == owner.awakening_revision \
+			and stamp.phase == turn_manager.phase_id and turn_manager.current_phase in [TurnManager.Phase.PLAY,TurnManager.Phase.WAITING] \
+			and _play_actor() == owner
+		if current:
+			var frame = stamp.frame
+			current = turn_manager._standalone_play_frame.is_empty() if frame == null else \
+				is_same(frame,turn_manager._standalone_play_frame) and not frame.completed
+		if not current:
+			if is_instance_valid(owner): owner.jim_rebuild_available = 0
+			_jim_rebuild_windows.erase(owner)
+
+func _bind_jim_rebuild_window(owner: Player) -> void:
+	_expire_jim_rebuild_windows()
+	if not _mountain_rules_enabled or not players.has(owner) or owner.general_name != "吉姆·芒顿" \
+			or not _can_use_play_skill(owner) or _jim_rebuild_windows.has(owner): return
+	# Bind even an empty window: deaths later in this PLAY belong to the next
+	# PLAY, and must not be acquired by a repeated/resumed _do_play invocation.
+	owner.jim_rebuild_available = owner.jim_rebuild_pending
+	owner.jim_rebuild_pending = 0
+	_jim_rebuild_windows[owner] = {"phase":turn_manager.phase_id,"generation":_dying_lifecycle_generation,
+		"general":owner.awakening_revision,"frame":null if turn_manager._standalone_play_frame.is_empty() else turn_manager._standalone_play_frame}
+
+func _jim_rebuild_count(owner: Player) -> int:
+	_expire_jim_rebuild_windows()
+	if not _mountain_rules_enabled or not _can_use_play_skill(owner) or not _jim_rebuild_windows.has(owner): return 0
+	return owner.jim_rebuild_available
 
 func _initial_mountain_options() -> Array:
 	var circle = LivingTable.ordered(spatial_players(), true)
@@ -10502,10 +10544,6 @@ func _handle_death(victim: Player, killer: Player):
 		return
 	var mountain_entry = unit_registry.entry(unit_registry.id_for(victim)) if _is_mountain_body(victim) else {}
 	var mountain_owner: Player = mountain_entry.get("summoner")
-	# Delivery guard, NOT a gameplay ruling. I04-Q18 must settle max-HP-zero
-	# death/rescue before this gated, unreleased branch can be completed.
-	if mountain_owner != null and not mountain_owner.is_dead() and mountain_owner.general_name == "吉姆·芒顿" and mountain_owner.max_hp <= 1:
-		return CHOICE_INVALID
 	var death_generation = _dying_lifecycle_generation
 	victim.mark_dead()
 	_dead_processed.append(victim)
