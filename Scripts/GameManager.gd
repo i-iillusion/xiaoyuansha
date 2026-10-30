@@ -10207,8 +10207,6 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 
 # 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
 func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Dictionary:
-	if _is_mountain_body(target):
-		return {"invalidated": false, "player": null} # I04-Q16: no offer or payment for terrain.
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():
@@ -10362,6 +10360,13 @@ func _heal_with_staff(p: Player, recipient: Player = null) -> int:
 # 同一窗口的重入直接返回，不能等待自身；这不是重复请求的完成等待接口。
 # before_death 的上下文为 DyingContext，原效果链在 context.effect_chain。
 func _resolve_dying(victim: Player, killer: Player, cause: String, chain: EffectChain = null):
+	if not _game_over and _is_mountain_body(victim) and victim.is_dying() and _has_damage_target_body(victim):
+		# Ordinary terrain has no Peach/RPS/general-card rescue window. Q16
+		# Sacrifice occurs before damage, not after a mountain's final death.
+		var result = await _handle_death(victim,killer)
+		if result == CHOICE_INVALID and chain != null:
+			chain.continuation_invalid = true
+		return result
 	if _game_over or victim == null or not _has_character_body(victim) or not victim.is_dying():
 		return
 	if _dying_contexts.has(victim):
@@ -10495,6 +10500,13 @@ func _handle_death(victim: Player, killer: Player):
 		return
 	if not victim.is_dying():
 		return
+	var mountain_entry = unit_registry.entry(unit_registry.id_for(victim)) if _is_mountain_body(victim) else {}
+	var mountain_owner: Player = mountain_entry.get("summoner")
+	# Delivery guard, NOT a gameplay ruling. I04-Q18 must settle max-HP-zero
+	# death/rescue before this gated, unreleased branch can be completed.
+	if mountain_owner != null and not mountain_owner.is_dead() and mountain_owner.general_name == "吉姆·芒顿" and mountain_owner.max_hp <= 1:
+		return CHOICE_INVALID
+	var death_generation = _dying_lifecycle_generation
 	victim.mark_dead()
 	_dead_processed.append(victim)
 	_public_result("%s 阵亡！" % victim.player_name)
@@ -10510,6 +10522,10 @@ func _handle_death(victim: Player, killer: Player):
 	else: _retire_final_unit(victim)
 	_update_debug("%s 弃置了所有牌（手牌/装备/判定牌）" % victim.player_name)
 	_sync_all_ui()
+	if mountain_owner != null:
+		if death_generation != _dying_lifecycle_generation: return CHOICE_INVALID
+		if await _settle_zaoshan_cost(mountain_owner) == CHOICE_INVALID: return CHOICE_INVALID
+		if _game_over: return 0
 
 	# ---- 阶段4 击杀奖惩（仅身份局；乱斗明确没有击杀奖励）----
 	if game_mode in [MODE_CLASSIC_IDENTITY, MODE_AMBITIOUS_IDENTITY] and not _game_over and killer != null and killer.is_alive():
@@ -10525,6 +10541,22 @@ func _handle_death(victim: Player, killer: Player):
 		if await _resolve_ambitious_declaration() == CHOICE_INVALID: return CHOICE_INVALID
 	# ---- 阶段5 胜负判定 ----
 	_check_win_condition(victim, killer)
+	return 0
+
+func _settle_zaoshan_cost(owner: Player) -> int:
+	if not players.has(owner) or owner.is_dead() or owner.general_name != "吉姆·芒顿": return 0
+	var generation = _dying_lifecycle_generation
+	# Q17: independent decrements; no intermediate clamp to the new maximum.
+	# Record the deferred resource before rescue so a full Sage restoration
+	# restores all general-card state, without rewinding the current phase.
+	owner.jim_rebuild_pending += 1
+	owner.max_hp -= 1
+	owner.hp -= 1
+	_history_event("skill", "%s 的【造山】：失去1点体力上限及1点体力" % owner.player_name, owner)
+	_sync_all_ui()
+	if owner.is_dying():
+		if await _resolve_dying(owner,null,"zaoshan") == CHOICE_INVALID: return CHOICE_INVALID
+	if generation != _dying_lifecycle_generation: return CHOICE_INVALID
 	return 0
 
 func _resolve_ambitious_declaration() -> int:

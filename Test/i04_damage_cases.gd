@@ -57,6 +57,7 @@ func run(t):
 	await strike_basics(t)
 	await spear_terrain(t)
 	await sacrifice_terrain(t)
+	await lan_sacrifice_choice(t)
 	GameManager.selected_players=saved[0]
 	GameManager.selected_mode=saved[1]
 	GameManager.selected_general=saved[2]
@@ -119,8 +120,8 @@ func strike_basics(t):
 		game = load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
 		source = game.players[0]
 		first = game._spawn_mountain_at(game.players[1],0,1)
-		# Q16 now forbids Sacrifice for terrain; willing responders are covered
-		# separately by sacrifice_terrain, including the actual LAN adapter.
+		# Latest Q16 permits Sacrifice; this baseline explicitly declines it.
+		# Willing responders and real LAN choices are covered separately.
 		game._sacrifice_actor_override = func(_p,_target,_amount): return false
 		var dodge_asks: Array = []
 		game._dodge_override = func(): dodge_asks.append(true); return true
@@ -190,25 +191,24 @@ func sacrifice_terrain(t):
 			game._spawn_mountain_at(game.players[1],0,1)
 			var offered: Array = []
 			game._sacrifice_actor_override = func(p,_target,_amount): offered.append(p); return p == volunteer
-			var cards = volunteer.hand.duplicate()
+			var cards = volunteer.hand_size()
 			var hp = volunteer.hp
 			var before_source = source.hand_size()
 			var actions: Array = []
 			game.card_action_committed.connect(func(event): actions.append(event))
 			await game.execute_card_on_target(mountain,sub)
-			t.check(offered.is_empty() and volunteer.hand == cards and volunteer.hp == hp, "I04 Q16 willing volunteer gets no offer, payment or transferred damage: %s/%s" % [lan,sub])
-			t.check(mountain.hp == (4 if sub == CardData.CardSubType.STRIKE else 3) and source.hand_size() == before_source-1, "I04 Q16 original mountain damage and original card payment remain intact")
-			t.check(actions.size() == 1 and actions[0].sub_type == sub and actions[0].settlement_completed and game._pending_card_actions.is_empty(), "I04 Q16 no phantom Sacrifice action; paid Strike completes")
-			var reply = await game._maybe_sacrifice_result(source,mountain,1,EffectChain.DamageType.PHYSICAL)
-			t.check(not reply.invalidated and reply.player == null and offered.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 direct production entry declines normally without creating a prompt")
+			t.check(offered.has(volunteer) and volunteer.hand_size() == cards-1 and volunteer.hp == hp-(1 if sub == CardData.CardSubType.STRIKE else 2), "I04 Q16 revised: willing volunteer pays once and takes independent damage: %s/%s" % [lan,sub])
+			t.check(mountain.hp == 5 and source.hand_size() == before_source-1, "I04 Q16 revised: protected terrain is unharmed; original Strike payment remains")
+			t.check(actions.size() == 2 and actions[0].sub_type == sub and actions[1].sub_type == CardData.CardSubType.SACRIFICE and actions[0].settlement_completed and actions[1].settlement_completed, "I04 Q16 revised: original Strike and real Sacrifice both complete")
+			t.check(game._pending_card_actions.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 revised: independent transfer leaves no abandoned receipts")
 			if lan:
-				t.check(bridge.input_owner() == 0 and bridge.snapshot(2).controls.is_empty(), "I04 Q16 LAN ownership never moves to the would-be rescuer")
+				t.check(bridge.snapshot(2).controls.is_empty(), "I04 Q16 revised: automatic-response fixture leaves no LAN rescue controls")
 			game._game_over = true
 			if lan: bridge.queue_free()
 			else: game.queue_free()
 			await t.process_frame
-	# The exclusion is specific to ordinary mountains. Existing character and
-	# intelligent-unit transfer behavior remains; unit registration is only a
+	# Existing character and intelligent-unit transfer behavior remains;
+	# unit registration is only a
 	# classification fixture, not an upstream legal summoning/targeting proof.
 	for dragon in [false,true]:
 		var game = load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
@@ -228,3 +228,45 @@ func sacrifice_terrain(t):
 		game._game_over = true
 		game.queue_free()
 		await t.process_frame
+
+func pending_strike(game, mountain, done):
+	await game.execute_card_on_target(mountain,CardData.CardSubType.STRIKE)
+	done.append(true)
+
+func lan_sacrifice_choice(t):
+	var bridge = LanGameBridge.new()
+	t.root.add_child(bridge)
+	var roster: Array[Dictionary] = []
+	for seat in 5: roster.append({"name":"P%d"%seat,"general":"吉姆·芒顿" if seat == 1 else "稻草人"})
+	t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST), "I04 Q16 revised real private-choice adapter starts")
+	var game = bridge.game
+	game._halt_countdown()
+	var mountain = game._spawn_mountain_at(game.players[1],0,1)
+	game._spawn_mountain_at(game.players[1],0,1)
+	var hand = game.players[2].hand_size()
+	var hp = game.players[2].hp
+	var done: Array = []
+	var paid = false
+	var stale = ""
+	pending_strike(game,mountain,done)
+	for step in 25:
+		if not done.is_empty(): break
+		var owner = bridge.input_owner()
+		var view = bridge.snapshot(owner)
+		for button in view.controls:
+			var want = "打出【舍己为人】" if owner == 2 and not paid else "放弃"
+			if button.text != want or button.disabled: continue
+			if owner == 2 and not paid:
+				stale = button.id
+				t.check(bridge.snapshot(0).controls.is_empty() and not bridge.submit(1,stale), "I04 Q16 revised only actual rescuer can submit private Sacrifice token")
+				paid = bridge.submit(2,stale)
+			else: bridge.submit(owner,button.id)
+			break
+		await t.process_frame
+		await t.process_frame
+	t.check(paid and not done.is_empty() and mountain.hp == 5 and game.players[2].hp == hp-1 and game.players[2].hand_size() == hand-1, "I04 Q16 revised real LAN private command pays and protects terrain")
+	t.check(not stale.is_empty() and not bridge.submit(2,stale) and game._pending_card_actions.is_empty(), "I04 Q16 revised consumed Sacrifice token cannot replay")
+	game._game_over = true
+	await t.process_frame
+	bridge.queue_free()
+	await t.process_frame

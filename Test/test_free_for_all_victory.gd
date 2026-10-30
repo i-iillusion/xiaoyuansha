@@ -184,5 +184,6 @@ func _run():
 	await load("res://Test/i04_space_cases.gd").new().run(self)
 	await load("res://Test/i04_initial_cases.gd").new().run(self)
 	await load("res://Test/i04_damage_cases.gd").new().run(self)
+	await load("res://Test/i04_death_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
