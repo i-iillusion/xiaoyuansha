@@ -117,6 +117,12 @@ func _is_mountain_body(body: Player) -> bool:
 	var entry = unit_registry.entry(unit_registry.id_for(body))
 	return not entry.is_empty() and entry.kind == UnitRegistry.Kind.MOUNTAIN
 
+# Target membership is separate from acting-body/input identity.
+func _has_damage_target_body(body: Player) -> bool:
+	if _has_character_body(body): return true
+	return _is_mountain_body(body) and not body.unit_disappeared \
+		and unit_registry.contains_active(body) and mountain_space.ids().has(unit_registry.id_for(body))
+
 func _attached_turn_actor(seat: int) -> String:
 	if not _unit_turns_enabled or _game_over or seat < 0 or seat >= players.size(): return ""
 	for body in unit_registry.turn_units():
@@ -2028,8 +2034,16 @@ func _get_strike_targets(attacker: Player) -> Array[Player]:
 		targets = _get_all_alive_targets(attacker)
 	else:
 		targets = _get_attackable_targets(attacker)
+	# Ordinary terrain is admitted only here, never into character/trick/skill
+	# candidate lists or ActorIdentity. Unlimited range still respects partitions.
+	for body in unit_registry.active_units():
+		if _is_mountain_body(body) and body.is_alive() and _has_damage_target_body(body) \
+				and (attacker.get_weapon() == CardData.CardSubType.QILING_BOW or attacker.can_attack(body)):
+			targets.append(body)
 	var filtered: Array[Player] = []
 	for t in targets:
+		if not mountain_space.ids().is_empty() and ordinary_seat_distance(attacker,t) == LivingTable.UNREACHABLE:
+			continue
 		if t.get_armor() != CardData.CardSubType.TENGJIA and not _is_bare_running(t) and not _awake_blocks(t, 1):
 			filtered.append(t)
 	return filtered
@@ -2810,6 +2824,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 # 已提交伤害后的选择失效须通知多目标调用者；普通命中/闪仍为bool。
 func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> Variant:
 	if _game_over or target == null or not target.is_alive():
+		return false
+	if _is_mountain_body(target) and not _has_damage_target_body(target):
 		return false
 	# “无论是否合法”只越过选目标限制，不跳过响应和伤害防止。
 	if not ignore_target_restrictions and (target.get_armor() == CardData.CardSubType.TENGJIA \
@@ -6148,6 +6164,10 @@ func _show_liehuo_prompt(allowed: Callable = Callable()) -> int:
 func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
+	if _is_mountain_body(responder):
+		if not _has_damage_target_body(responder):
+			chain.is_cancelled = true
+		return false # Ordinary mountain has no controller/gesture/card response.
 	var revision = turn_manager.get_context_revision()
 	var prompt = _show_dodge_prompt.bind(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
 	var dodged = await _ask_basic_card_response_result(responder, expected_sub, prompt, _dodge_override)
@@ -6289,7 +6309,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				var hit_valid = func():
 					return not _game_over and not chain.is_cancelled \
 						and revision == turn_manager.get_context_revision() \
-						and _has_character_body(actual) and actual.is_alive() and chain.target_player == actual
+						and _has_damage_target_body(actual) and actual.is_alive() and chain.target_player == actual
 				var choice_valid = func():
 					return hit_valid.call() and _has_character_body(subject) and subject.is_alive() \
 						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ICE_SWORD \
@@ -6317,7 +6337,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				var hit_valid = func():
 					return not _game_over and not chain.is_cancelled \
 						and revision == turn_manager.get_context_revision() \
-						and _has_character_body(actual) and actual.is_alive() and chain.target_player == actual
+						and _has_damage_target_body(actual) and actual.is_alive() and chain.target_player == actual
 				var choice_valid = func():
 					return hit_valid.call() and _has_character_body(subject) and subject.is_alive() \
 						and record.source == subject and subject.get_weapon() == CardData.CardSubType.ZHANGBA_SPEAR \
@@ -6359,6 +6379,10 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		record.target_modifiers_applied = true
 		if subject == null or subject.is_dead():
 			return true
+		if _is_mountain_body(subject):
+			if not _has_damage_target_body(subject): return true
+			if chain.damage_element != EffectChain.DamageType.PHYSICAL:
+				data["value"] += 1 # Target modifier, once; not a source bonus.
 		var paixiong = await _try_paixiong_block(subject, source)
 		if paixiong == PaixiongOutcome.PREVENTED:
 			data["value"] = 0
@@ -9962,6 +9986,8 @@ func _place_mount_for(target: Player, card: CardBase, replace_slot: String = "")
 func _update_soul_blade_count(source: Player, victim: Player, amount: int):
 	if source == null or victim == null or amount <= 0:
 		return
+	if _is_mountain_body(victim):
+		return # I04-Q15: neither accumulate nor interrupt the previous player.
 	if source.get_weapon() != CardData.CardSubType.SOUL_BLADE:
 		return
 	if source.soul_blade_activated:
