@@ -42,25 +42,52 @@ func _valid_live(live: Array[int]) -> bool:
 func _living_ring(live: Array[int]) -> Array:
 	return _ring.filter(func(marker): return typeof(marker) == TYPE_STRING or live.has(marker))
 
-func legal_gap(left: int, right: int, live: Array[int]) -> bool:
-	if not _valid_live(live) or live.size() < 2 or left == right: return false
-	var order = player_order().filter(func(seat): return live.has(seat))
-	var index = order.find(left)
-	return index >= 0 and order[(index + 1) % order.size()] == right
+func gaps(live: Array[int], moving_id: String = "") -> Array:
+	var result: Array = []
+	if not _valid_live(live) or live.size() < 2: return result
+	if not moving_id.is_empty() and not _mountains.has(moving_id): return result
+	var ring = _living_ring(live)
+	for index in ring.size():
+		var left = ring[index]
+		var right = ring[(index+1)%ring.size()]
+		# Q25: moving a mountain cannot select either of its own boundaries.
+		if not moving_id.is_empty() and (is_same(left,moving_id) or is_same(right,moving_id)): continue
+		result.append([left,right])
+	return result
 
-# Gap placement ignores intervening mountain markers: two mountains may share
-# one gap. No center, owner-following anchors or unit-as-player positions.
-func place(id: String, left: int, right: int, live: Array[int]) -> bool:
+func legal_gap(left: Variant, right: Variant, live: Array[int]) -> bool:
+	if not _valid_live(live) or live.size() < 2 or is_same(left,right): return false
+	return gaps(live).has([left,right])
+
+# Q24: a mountain splits a gap; its two boundaries are distinct destinations.
+func place(id: String, left: Variant, right: Variant, live: Array[int]) -> bool:
 	if id.is_empty() or _mountains.has(id) or _mountains.size() >= 2 or not legal_gap(left, right, live): return false
 	_ring.insert(_ring.find(right), id)
 	_mountains.append(id)
 	return true
 
-func move(id: String, left: int, right: int, live: Array[int]) -> bool:
-	if not _mountains.has(id) or not legal_gap(left, right, live): return false
+func move(id: String, left: Variant, right: Variant, live: Array[int]) -> bool:
+	if not _mountains.has(id) or not gaps(live,id).has([left,right]): return false
 	_ring.erase(id)
 	_ring.insert(_ring.find(right), id)
 	return true
+
+# Planned pair uses a local placeholder, resolved only after actual registration.
+# It is never a registry handle, input owner or player ID.
+const PLANNED_FIRST = "@planned-first-mountain"
+
+func placement_sequences(count: int, live: Array[int]) -> Array:
+	var result: Array = []
+	if count not in [1,2] or _mountains.size()+count > 2: return result
+	for first in gaps(live):
+		if count == 1: result.append([first]); continue
+		var preview = MountainSpace.new()
+		preview._fixed.assign(_fixed)
+		preview._ring.assign(_ring)
+		preview._mountains.assign(_mountains)
+		if not preview.place(PLANNED_FIRST,first[0],first[1],live): continue
+		for second in preview.gaps(live): result.append([first,second])
+	return result
 
 func remove(id: String) -> bool:
 	if not _mountains.has(id): return false

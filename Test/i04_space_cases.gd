@@ -7,7 +7,7 @@ func pure(t):
 		seats.assign(range(count))
 		t.check(state.initialize(seats), "I04b persistent space initializes supported roster")
 		t.check(not state.initialize(seats), "I04b cannot overwrite a live spatial ledger")
-		t.check(state.place("a",0,1,seats) and state.place("b",0,1,seats), "I04b same-gap double placement")
+		t.check(state.place("a",0,1,seats) and state.place("b","a",1,seats), "I04 Q24 two mountains occupy distinct real gaps within one player interval")
 		t.check(not state.place("c",0,1,seats), "I04b global two-mountain cap")
 		var view = state.snapshot(seats)
 		t.check(view.player_distance(0,1) == count-1, "I04b mountain marker is not a distance step")

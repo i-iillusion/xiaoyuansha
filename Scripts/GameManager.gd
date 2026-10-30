@@ -214,6 +214,7 @@ var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()
 var _jim_mountain_skill_pending: Dictionary = {}
 var _jim_mountain_target_override: Callable = Callable()
+var _jim_mountain_destination_override: Callable = Callable()
 var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
@@ -2091,24 +2092,43 @@ func _mountain_live_seats() -> Array[int]:
 	return result
 
 func _rebuild_mountain_options(count: int) -> Array:
-	var circle = LivingTable.ordered(spatial_players(),true)
-	var result: Array = []
-	if circle.size() < 2 or count not in [1,2]: return result
-	for first in circle.size():
-		var gap = [circle[first].seat_index,circle[(first+1)%circle.size()].seat_index]
-		if count == 1: result.append([gap])
-		else:
-			for second in circle.size():
-				result.append([gap,[circle[second].seat_index,circle[(second+1)%circle.size()].seat_index]])
-	return result
+	return mountain_space.placement_sequences(count,_mountain_live_seats())
 
 func _rebuild_mountain_default(owner: Player, options: Array, count: int) -> int:
-	var circle = LivingTable.ordered(spatial_players(),true)
-	var index = circle.find(owner)
-	if index < 0 or circle.size() < 2: return CHOICE_INVALID
-	var placements: Array = []
-	for i in count: placements.append([owner.seat_index,circle[(index+1)%circle.size()].seat_index])
-	return options.find(placements)
+	# Q26: immediately after Jim, before any existing mountain on that side.
+	for index in options.size():
+		var sequence = options[index]
+		if sequence.size() != count or not is_same(sequence[0][0],owner.seat_index): continue
+		if count == 1 or sequence[1] == [owner.seat_index,MountainSpace.PLANNED_FIRST]: return index
+	return CHOICE_INVALID
+
+func _mountain_endpoint_label(endpoint: Variant) -> String:
+	if typeof(endpoint) == TYPE_INT: return "玩家%d" % (endpoint+1)
+	if endpoint == MountainSpace.PLANNED_FIRST: return "本次山甲"
+	var ids = mountain_space.ids()
+	var index = ids.find(endpoint)
+	return "山%d" % (index+1) if index >= 0 else "已失效位置"
+
+func _mountain_sequence_label(sequence: Array) -> String:
+	var names: Array[String] = []
+	for index in sequence.size():
+		var gap = sequence[index]
+		names.append("山%s %s→%s" % ["甲" if index == 0 else "乙",_mountain_endpoint_label(gap[0]),_mountain_endpoint_label(gap[1])])
+	return "；".join(names)
+
+func _spawn_mountain_sequence(owner: Player, sequence: Array, authorized: Callable) -> Array[Player]:
+	var created: Array[Player] = []
+	for planned_gap in sequence:
+		if not authorized.call(): break
+		var gap = planned_gap.duplicate()
+		for index in 2:
+			if is_same(gap[index],MountainSpace.PLANNED_FIRST):
+				if created.is_empty(): return created
+				gap[index] = unit_registry.id_for(created[0])
+		var mountain = _spawn_mountain_at(owner,gap[0],gap[1])
+		if mountain == null or not authorized.call(): break
+		created.append(mountain)
+	return created
 
 func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
 	if not _mountain_rules_enabled or not players.has(owner) or owner.general_name != "吉姆·芒顿" or owner.jim_rebuild_pending <= 0: return 0
@@ -2144,12 +2164,9 @@ func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
 	else:
 		_set_input_player(owner)
 		var texts: Array[String] = []
-		for placements in options:
-			var names: Array[String] = []
-			for gap in placements: names.append("%d→%d" % [gap[0]+1,gap[1]+1])
-			texts.append("、".join(names))
+		for placements in options: texts.append(_mountain_sequence_label(placements))
 		var prompt = load("res://Scripts/MountainPlacementPrompt.gd").new()
-		prompt.setup(texts,"【造山】必须补回%d座山；选位不可取消，超时放在自己与下家之间" % amount)
+		prompt.setup(texts,"【造山】必须补回%d座山；选位不可取消，超时紧贴自己下侧放置" % amount)
 		$UI.add_child(prompt)
 		var answer = ChoicePromptAnswer.new()
 		prompt.chosen.connect(answer.submit)
@@ -2158,11 +2175,7 @@ func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
 	if valid.call() and selected != CHOICE_INVALID:
 		if selected == -1: selected = _rebuild_mountain_default(owner,options,amount)
 		if selected >= 0 and selected < options.size():
-			var created: Array[Player] = []
-			for gap in options[selected]:
-				var mountain = _spawn_mountain_at(owner,gap[0],gap[1])
-				if mountain == null or not authorized.call(): break
-				created.append(mountain)
+			var created = _spawn_mountain_sequence(owner,options[selected],authorized)
 			if created.size() == amount and authorized.call():
 				owner.jim_rebuild_pending -= amount
 				_history_event("skill","%s 发动【造山】，补回%d座山" % [owner.player_name,amount],owner,created)
@@ -2172,15 +2185,7 @@ func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
 	return result
 
 func _initial_mountain_options() -> Array:
-	var circle = LivingTable.ordered(spatial_players(), true)
-	var result: Array = []
-	if circle.size() < 2: return result
-	for first in circle.size():
-		for second in circle.size():
-			result.append([
-				[circle[first].seat_index,circle[(first+1)%circle.size()].seat_index],
-				[circle[second].seat_index,circle[(second+1)%circle.size()].seat_index]])
-	return result
+	return mountain_space.placement_sequences(2,_mountain_live_seats())
 
 func _initial_mountain_default(owner: Player, options: Array) -> int:
 	var circle = LivingTable.ordered(spatial_players(), true)
@@ -2208,19 +2213,20 @@ func _maybe_initial_mountains(owner: Player, allowed: Callable) -> int:
 	var live = _mountain_live_seats()
 	var lease = {"owner":owner}
 	_jim_opening_pending = lease
-	var valid = func():
+	var authorized = func():
 		return not _game_over and generation == _dying_lifecycle_generation and registry_generation == unit_registry.generation() \
 			and revision == turn_manager.get_context_revision() and is_same(_jim_opening_pending,lease) \
 			and allowed.call() and players.has(owner) and owner.is_alive() and owner.general_name == "吉姆·芒顿" \
 			and owner.awakening_revision == general_revision \
-			and not owner.jim_mountains_started and space == mountain_space.markers() and live == _mountain_live_seats()
+			and not owner.jim_mountains_started
+	var valid = func(): return authorized.call() and space == mountain_space.markers() and live == _mountain_live_seats()
 	var selected: int
 	if _mountain_placement_override.is_valid(): selected = await _mountain_placement_override.call(owner,options.duplicate(true),valid)
 	elif not _is_human(owner): selected = _initial_mountain_default(owner,options)
 	else:
 		_set_input_player(owner)
 		var texts: Array[String] = []
-		for pair in options: texts.append("山甲 %d→%d；山乙 %d→%d" % [pair[0][0]+1,pair[0][1]+1,pair[1][0]+1,pair[1][1]+1])
+		for pair in options: texts.append(_mountain_sequence_label(pair))
 		var prompt = load("res://Scripts/MountainPlacementPrompt.gd").new()
 		prompt.setup(texts)
 		$UI.add_child(prompt)
@@ -2231,12 +2237,10 @@ func _maybe_initial_mountains(owner: Player, allowed: Callable) -> int:
 	if valid.call() and selected != CHOICE_INVALID:
 		if selected == -1: selected = _initial_mountain_default(owner,options)
 		if selected >= 0 and selected < options.size():
-			var pair = options[selected]
-			var first = _spawn_mountain_at(owner,pair[0][0],pair[0][1])
-			var second = _spawn_mountain_at(owner,pair[1][0],pair[1][1])
-			if first != null and second != null:
+			var created = _spawn_mountain_sequence(owner,options[selected],authorized)
+			if created.size() == 2 and authorized.call():
 				owner.jim_mountains_started = true
-				_history_event("skill","%s 发动【王屋太行】，召唤两座山" % owner.player_name,owner,[first,second])
+				_history_event("skill","%s 发动【王屋太行】，召唤两座山" % owner.player_name,owner,created)
 				_sync_all_ui()
 				result = 1
 	if is_same(_jim_opening_pending,lease): _jim_opening_pending = {}
@@ -2262,7 +2266,7 @@ func _on_mountain_spatial_relocated(seat: int, before: int, ledger_id: int) -> v
 
 # Internal body/position transaction, not an authorization to use a Jim skill.
 # I04c supplies the skill window, payment, limits and post-death permit.
-func _spawn_mountain_at(owner: Player, left: int, right: int) -> Player:
+func _spawn_mountain_at(owner: Player, left: Variant, right: Variant) -> Player:
 	if _game_over or not players.has(owner) or owner.is_dead() or not _ensure_mountain_space(): return null
 	var live = _mountain_live_seats()
 	if mountain_space.ids().size() >= 2 or not mountain_space.legal_gap(left, right, live): return null
@@ -8056,6 +8060,71 @@ func _activate_hushan(p: Player) -> int:
 	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
 	return result
 
+func _activate_yishan(p: Player) -> int:
+	if not _mountain_rules_enabled or not players.has(p) or p.general_name != "吉姆·芒顿" \
+			or not _can_use_play_skill(p) or p.hand_size() < 1 \
+			or turn_manager.phase_skill_used("yishan",p.seat_index) or _play_skill_execution_busy(): return 0
+	var targets = unit_registry.active_units().filter(func(body): return _is_mountain_body(body) and body.is_alive() and _has_damage_target_body(body))
+	if targets.is_empty() or not _ensure_mountain_space(): return 0
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var revision = turn_manager.get_context_revision()
+	var general = p.awakening_revision
+	var original_hand = HandSelection.new(p)
+	var space = mountain_space.markers()
+	var live = _mountain_live_seats()
+	var lease = {"owner":p,"skill":"yishan"}
+	_jim_mountain_skill_pending = lease
+	var authorized = func():
+		return not _game_over and generation == _dying_lifecycle_generation and registry_generation == unit_registry.generation() \
+			and revision == turn_manager.get_context_revision() and is_same(_jim_mountain_skill_pending,lease) \
+			and _can_use_play_skill(p) and p.general_name == "吉姆·芒顿" and p.awakening_revision == general \
+			and not turn_manager.phase_skill_used("yishan",p.seat_index) \
+			and space == mountain_space.markers() and live == _mountain_live_seats()
+	var choice_valid = func(): return authorized.call() and original_hand.hand == p.hand and original_hand.determined == p.determined_cards \
+		and targets.all(func(body): return is_instance_valid(body) and body.is_alive() and _has_damage_target_body(body))
+	var selected: int
+	if _jim_mountain_target_override.is_valid(): selected = await _jim_mountain_target_override.call(p,targets.duplicate(),choice_valid)
+	elif not _is_human(p): selected = 0
+	else:
+		_set_input_player(p)
+		var texts: Array[String] = []
+		for target in targets: texts.append(_mountain_endpoint_label(unit_registry.id_for(target)))
+		selected = await _show_choice_popup("【移山】选择要移动的山",texts,choice_valid)
+	var result = 0
+	if not choice_valid.call() or selected == CHOICE_INVALID: result = CHOICE_INVALID
+	elif selected >= 0 and selected < targets.size():
+		var target: Player = targets[selected]
+		var id = unit_registry.id_for(target)
+		var options = mountain_space.gaps(live,id)
+		var target_valid = func(): return authorized.call() and is_instance_valid(target) and _has_damage_target_body(target) \
+			and unit_registry.id_for(target) == id and target.is_alive()
+		var destination: int
+		if _jim_mountain_destination_override.is_valid(): destination = await _jim_mountain_destination_override.call(p,target,options.duplicate(true),choice_valid)
+		elif not _is_human(p): destination = 0 if not options.is_empty() else -1
+		else:
+			var texts: Array[String] = []
+			for gap in options: texts.append("%s→%s" % [_mountain_endpoint_label(gap[0]),_mountain_endpoint_label(gap[1])])
+			destination = await _show_choice_popup("【移山】选择新间隔，然后弃置1张手牌",texts,choice_valid)
+		if not choice_valid.call() or destination == CHOICE_INVALID: result = CHOICE_INVALID
+		elif destination >= 0 and destination < options.size():
+			var gap = options[destination]
+			var paid = await _select_hand_discard_result(p,1,false,target_valid)
+			if paid == HandDiscardOutcome.PAID:
+				if target_valid.call() and mountain_space.move(id,gap[0],gap[1],live):
+					turn_manager.set_phase_skill_used("yishan",true,p.seat_index)
+					_history_event("skill","%s 发动【移山】，移至%s→%s" % [p.player_name,_mountain_endpoint_label(gap[0]),_mountain_endpoint_label(gap[1])],p,[target])
+					_sync_all_ui()
+					result = 1
+				else: result = CHOICE_INVALID
+			elif paid != HandDiscardOutcome.DECLINED: result = CHOICE_INVALID
+		elif destination != -1: result = CHOICE_INVALID
+	elif selected != -1: result = CHOICE_INVALID
+	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
+	return result
+
 func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
@@ -11582,6 +11651,9 @@ func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
 	if skill_key == "护山":
 		await _activate_hushan(owner_player)
+		return
+	if skill_key == "移山":
+		await _activate_yishan(owner_player)
 		return
 	if skill_key == "苕":
 		await _on_sao_skill_clicked(owner_player)

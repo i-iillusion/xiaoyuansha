@@ -143,7 +143,7 @@ func spear_terrain(t):
 		game._halt_countdown()
 		var source = game.players[0]
 		var mountain = game._spawn_mountain_at(source,0,1)
-		var other = game._spawn_mountain_at(source,0,1)
+		var other = game._spawn_mountain_at(source,game.unit_registry.id_for(mountain),1)
 		source.equip_card_to_slot("weapon",CardBase.create(CardData.CardSubType.ZHANGBA_SPEAR))
 		game._zhangba_override = func(): return 1
 		game._sacrifice_actor_override = func(_p,_target,_amount): return false
@@ -188,7 +188,7 @@ func sacrifice_terrain(t):
 			# Placement is an internal fixture; the actual paid card, damage chain
 			# and (for LAN) input-ownership adapter are exercised below.
 			var mountain = game._spawn_mountain_at(game.players[1],0,1)
-			game._spawn_mountain_at(game.players[1],0,1)
+			game._spawn_mountain_at(game.players[1],game.unit_registry.id_for(mountain),1)
 			var offered: Array = []
 			game._sacrifice_actor_override = func(p,_target,_amount): offered.append(p); return p == volunteer
 			var cards = volunteer.hand_size()
@@ -242,7 +242,7 @@ func lan_sacrifice_choice(t):
 	var game = bridge.game
 	game._halt_countdown()
 	var mountain = game._spawn_mountain_at(game.players[1],0,1)
-	game._spawn_mountain_at(game.players[1],0,1)
+	game._spawn_mountain_at(game.players[1],game.unit_registry.id_for(mountain),1)
 	var hand = game.players[2].hand_size()
 	var hp = game.players[2].hp
 	var done: Array = []

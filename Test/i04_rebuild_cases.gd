@@ -173,7 +173,7 @@ func lan(t):
 		game.turn_manager.current_phase = TurnManager.Phase.START
 		game._do_start(0)
 		var view = bridge.snapshot(0)
-		t.check(view.controls.size() == 5 and view.controls.all(func(c): return "取消" not in c.text) and bridge.snapshot(1).controls.is_empty(), "I04 Q19 real mandatory START window has only position choices, private to controller")
+		t.check(view.controls.size() == 6 and view.controls.all(func(c): return "取消" not in c.text) and bridge.snapshot(1).controls.is_empty(), "I04 Q24 mandatory START includes both sides of survivor, private and uncancellable")
 		var stale = view.controls.back().id
 		t.check(not bridge.submit(1,stale), "I04 Q19 other players cannot choose the rebuild position")
 		if timeout: game._countdown_on_timeout.call()

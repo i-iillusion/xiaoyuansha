@@ -9,7 +9,7 @@ func run(t):
 		game._halt_countdown()
 		var owner = game.players[0]
 		var first = game._spawn_mountain_at(owner,0,1)
-		var second = game._spawn_mountain_at(owner,0,1)
+		var second = game._spawn_mountain_at(owner,game.unit_registry.id_for(first),1)
 		first.hp = 1
 		game._sacrifice_actor_override = func(_p,_target,_amount): return false
 		game._rescue_choice_override = func(_r,_d,_o): return -1

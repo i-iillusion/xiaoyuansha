@@ -167,7 +167,7 @@ func run(t):
 		for seat in 5: roster.append({"name":"P%d"%seat,"general":"吉姆·芒顿" if seat==0 else "稻草人"})
 		t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST), "I04c1 real adapter starts with gated Jim roster")
 		var view=bridge.snapshot(0)
-		t.check(view.owner==0 and view.controls.size()==25 and bridge.snapshot(1).controls.is_empty(), "I04c1 initial pair choices are controller-private, no cancel action")
+		t.check(view.owner==0 and view.controls.size()==30 and bridge.snapshot(1).controls.is_empty(), "I04 Q24 initial pair choices include either side of planned first mountain, private and uncancellable")
 		var stale=view.controls[0].id
 		if choose:
 			t.check(not bridge.submit(1,stale) and bridge.submit(0,stale), "I04c1 real opaque command checks first-placement owner")
