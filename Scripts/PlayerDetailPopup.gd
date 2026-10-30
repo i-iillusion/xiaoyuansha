@@ -13,6 +13,7 @@ signal skill_clicked(skill_key: String)
 var _player: Player
 var _viewer: Player
 var _wine_stacks: int = 0
+var _mountain_skills_enabled: bool = false
 # 悬停效果描述浮层
 var _tooltip: PanelContainer
 var _tooltip_label: Label
@@ -29,7 +30,7 @@ var _tooltip_label: Label
 @onready var _close_btn: Button = $Panel/CloseBtn
 
 # 静态方法：创建一个新的详情弹窗
-static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null) -> PlayerDetailPopup:
+static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false) -> PlayerDetailPopup:
 	var scene = load("res://Scenes/PlayerDetailPopup.tscn")
 	if scene == null:
 		# 代码兜底：直接实例化
@@ -37,6 +38,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 		popup._player = player
 		popup._viewer = viewer
 		popup._wine_stacks = wine_stacks
+		popup._mountain_skills_enabled = mountain_skills_enabled
 		parent.add_child(popup)
 		return popup
 
@@ -44,6 +46,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 	popup._player = player
 	popup._viewer = viewer
 	popup._wine_stacks = wine_stacks
+	popup._mountain_skills_enabled = mountain_skills_enabled
 	parent.add_child(popup)
 	return popup
 
@@ -110,6 +113,10 @@ func _populate():
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
 			else:
 				_add_skill_label(sk, Color(0.9, 0.9, 0.7))
+
+	# I04 internal gate: publishing the whole general still requires d/e validation.
+	if _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":
+		_add_skill_btn("护山", "【护山】出牌阶段限一次，弃置一张手牌，使一座山恢复至体力上限（满血也可发动）")
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
 	_clear_container(_equip_container)

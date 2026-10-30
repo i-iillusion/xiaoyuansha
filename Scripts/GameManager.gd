@@ -212,6 +212,8 @@ var _mountain_rules_enabled := false
 var _jim_opening_pending: Dictionary = {}
 var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()
+var _jim_mountain_skill_pending: Dictionary = {}
+var _jim_mountain_target_override: Callable = Callable()
 var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
@@ -1073,6 +1075,7 @@ func _retire_final_unit(body: Player) -> bool:
 func _reset_unit_registry() -> void:
 	_jim_opening_pending = {}
 	_jim_rebuild_pending = {}
+	_jim_mountain_skill_pending = {}
 	mountain_space.reset()
 	_mountain_ledger = null
 	fire_dragon_state.reset()
@@ -2110,8 +2113,8 @@ func _rebuild_mountain_default(owner: Player, options: Array, count: int) -> int
 func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
 	if not _mountain_rules_enabled or not players.has(owner) or owner.general_name != "吉姆·芒顿" or owner.jim_rebuild_pending <= 0: return 0
 	if not _jim_rebuild_pending.is_empty(): return CHOICE_INVALID
-	# Q22's skipped-START branch is not yet settled; this caller covers normal
-	# START only. Standalone PLAY/JUDGE/DRAW never become a turn-start trigger.
+	# Q22: flipped/skipped turns retain the resource until a normal START.
+	# Standalone PLAY/JUDGE/DRAW never become a turn-start trigger.
 	if turn_manager.current_phase != TurnManager.Phase.START or turn_manager.skip_full_turn \
 			or not turn_manager._standalone_play_frame.is_empty() or _phase_actor(turn_manager.current_player_idx) != owner: return CHOICE_INVALID
 	if not owner.is_alive() or not allowed.call() or not _ensure_mountain_space(): return CHOICE_INVALID
@@ -7959,6 +7962,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _jim_mountain_skill_pending.is_empty(): return true
 	if _egg_heal_pending or _roar_pending or not _summon_dragon_pending.is_empty(): return true
 	if _gay_execution_owner != -1 or _campus_execution_owner != -1 or _lanzhonghou_execution_owner != -1:
 		return true
@@ -7986,6 +7990,71 @@ func _can_use_play_skill(p: Player) -> bool:
 	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
 		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
+
+func _activate_hushan(p: Player) -> int:
+	if not _mountain_rules_enabled or not players.has(p) or p.general_name != "吉姆·芒顿" \
+			or not _can_use_play_skill(p) or p.hand_size() < 1 \
+			or turn_manager.phase_skill_used("hushan",p.seat_index) or _play_skill_execution_busy(): return 0
+	var targets = unit_registry.active_units().filter(func(body): return _is_mountain_body(body) and body.is_alive() and _has_damage_target_body(body))
+	if targets.is_empty(): return 0
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var revision = turn_manager.get_context_revision()
+	var general = p.awakening_revision
+	var original_hand = HandSelection.new(p)
+	var lease = {"owner":p,"skill":"hushan"}
+	_jim_mountain_skill_pending = lease
+	var authorized = func():
+		return not _game_over and generation == _dying_lifecycle_generation and registry_generation == unit_registry.generation() \
+			and revision == turn_manager.get_context_revision() and is_same(_jim_mountain_skill_pending,lease) \
+			and _can_use_play_skill(p) and p.general_name == "吉姆·芒顿" and p.awakening_revision == general \
+			and not turn_manager.phase_skill_used("hushan",p.seat_index)
+	var choice_valid = func(): return authorized.call() and original_hand.hand == p.hand and original_hand.determined == p.determined_cards \
+		and targets.all(func(body): return is_instance_valid(body) and body.is_alive() and _has_damage_target_body(body))
+	var selected: int
+	if _jim_mountain_target_override.is_valid(): selected = await _jim_mountain_target_override.call(p,targets.duplicate(),choice_valid)
+	elif not _is_human(p):
+		selected = -1
+		for index in targets.size():
+			if targets[index].hp < targets[index].max_hp:
+				selected = index
+				break
+	else:
+		_set_input_player(p)
+		var texts: Array[String] = []
+		var topology = _mountain_snapshot()
+		if topology == null: selected = CHOICE_INVALID
+		else:
+			for index in targets.size():
+				var body = targets[index]
+				var position = topology.placements().filter(func(place): return place.id == unit_registry.id_for(body))[0]
+				texts.append("山%d · %d→%d · %d/%d" % [index+1,position.left+1,position.right+1,body.hp,body.max_hp])
+			selected = await _show_choice_popup("【护山】选择一座山，然后弃置1张手牌",texts,choice_valid)
+	var result = 0
+	if not choice_valid.call() or selected == CHOICE_INVALID:
+		result = CHOICE_INVALID
+	elif selected >= 0 and selected < targets.size():
+		var target: Player = targets[selected]
+		var id = unit_registry.id_for(target)
+		# Q23: a full mountain still accepts the fee and consumes this PLAY's quota.
+		var target_valid = func(): return authorized.call() and is_instance_valid(target) and _has_damage_target_body(target) \
+			and unit_registry.id_for(target) == id and target.is_alive()
+		var paid = await _select_hand_discard_result(p,1,false,target_valid)
+		if paid == HandDiscardOutcome.PAID:
+			if target_valid.call():
+				turn_manager.set_phase_skill_used("hushan",true,p.seat_index)
+				target.heal(target.max_hp-target.hp)
+				_history_event("skill","%s 发动【护山】，山恢复至体力上限" % p.player_name,p,[target])
+				_sync_all_ui()
+				result = 1
+			else: result = CHOICE_INVALID # Paid cards are not refunded on invalidation.
+		elif paid != HandDiscardOutcome.DECLINED: result = CHOICE_INVALID
+	elif selected != -1:
+		result = CHOICE_INVALID # Invalid indices are not voluntary cancellation.
+	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
+	return result
 
 func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
@@ -10627,7 +10696,8 @@ func _handle_death(victim: Player, killer: Player):
 func _settle_zaoshan_cost(owner: Player) -> int:
 	if not players.has(owner) or owner.is_dead() or owner.general_name != "吉姆·芒顿": return 0
 	var generation = _dying_lifecycle_generation
-	# Q17: independent decrements; no intermediate clamp to the new maximum.
+	# Q17/Q21: pay immediately on death, with independent decrements and no
+	# intermediate clamp to the new maximum. Only rebuilding waits for START.
 	# Record the deferred resource before rescue so a full Sage restoration
 	# restores all general-card state, without rewinding the current phase.
 	owner.jim_rebuild_pending += 1
@@ -11494,7 +11564,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player())
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player())
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)
@@ -11510,6 +11580,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "护山":
+		await _activate_hushan(owner_player)
+		return
 	if skill_key == "苕":
 		await _on_sao_skill_clicked(owner_player)
 		return

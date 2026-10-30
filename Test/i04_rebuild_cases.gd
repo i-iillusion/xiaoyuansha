@@ -82,12 +82,52 @@ func run(t):
 			t.check(game.unit_registry.active_units().size() == expected and owner.jim_rebuild_pending == (0 if fault == "restore" else (2 if fault == "stock" else 1)), "I04 stale choice cannot create terrain or consume a new resource: "+fault)
 		await dispose(t,game)
 	await indulgence(t)
+	await flipped(t)
+	await other_turn_cost(t)
 	await lan(t)
 	GameManager.selected_players=saved[0]
 	GameManager.selected_mode=saved[1]
 	GameManager.selected_general=saved[2]
 	GameManager.random_general=saved[3]
 	GameManager.random_identity=saved[4]
+
+func other_turn_cost(t):
+	var game = load("res://Test/i04_initial_cases.gd").new().fixture(t,5,true,func(_p,_o,_v): return 0)
+	game._halt_countdown()
+	game._sacrifice_actor_override = func(_p,_target,_amount): return false
+	var owner = game.players[0]
+	var attacker = game.players[1]
+	var mountain = game.unit_registry.active_units()[0]
+	mountain.hp = 1
+	# Seed B's PLAY, preserving real paid Strike/death processing thereafter.
+	game.turn_manager.current_player_idx = 1
+	game.turn_manager.current_phase = TurnManager.Phase.PLAY
+	var hp = attacker.hp
+	await game.execute_card_on_target(mountain,CardData.CardSubType.STRIKE)
+	t.check(owner.hp == 5 and owner.max_hp == 5 and owner.jim_rebuild_pending == 1 and attacker.hp == hp, "I04 Q21 B's paid mountain kill charges Jim immediately, not the current actor")
+	t.check(game.turn_manager.current_player_idx == 1 and game.turn_manager.current_phase == TurnManager.Phase.PLAY and game.unit_registry.active_units().size() == 1, "I04 Q21 mountain death never inserts Jim's START or rebuilds during B's PLAY")
+	await dispose(t,game)
+
+func flipped(t):
+	var game = await fixture(t)
+	var owner = game.players[0]
+	t.check(owner.hp == 5 and owner.max_hp == 5 and owner.jim_rebuild_pending == 1, "I04 Q21 mountain death pays immediately before any next START")
+	var asked: Array = []
+	game._jim_rebuild_choice_override = func(_p,_o,_v): asked.append(true); return -1
+	# Isolate the real skip-to-END boundary, avoiding automatic next-player AI.
+	# The following normal START is seeded, not a claim of whole-round play.
+	game.turn_manager.phase_changed.disconnect(game._on_phase_changed)
+	game.turn_manager.current_phase = TurnManager.Phase.START
+	owner.facedown = true
+	await game._do_start(0)
+	t.check(not owner.facedown and game.turn_manager.current_phase == TurnManager.Phase.END and asked.is_empty(), "I04 Q22 flipped turn skips without opening a rebuild window")
+	t.check(owner.jim_rebuild_pending == 1 and game.unit_registry.active_units().size() == 1 and owner.hp == 5 and owner.max_hp == 5, "I04 Q22 skipped turn retains the resource and never charges death cost again")
+	game.turn_manager.phase_changed.connect(game._on_phase_changed)
+	game.turn_manager.current_phase = TurnManager.Phase.START
+	await game._do_start(0)
+	t.check(asked.size() == 1 and owner.jim_rebuild_pending == 0 and game.unit_registry.active_units().size() == 2 and game.turn_manager.current_phase == TurnManager.Phase.PLAY, "I04 Q22 following normal START performs the retained mandatory rebuild once")
+	t.check(owner.hp == 5 and owner.max_hp == 5, "I04 Q21 rebuilding itself never repays the mountain death cost")
+	await dispose(t,game)
 
 func indulgence(t):
 	var game = await fixture(t)
