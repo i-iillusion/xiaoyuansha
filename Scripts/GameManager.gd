@@ -210,7 +210,8 @@ var _mountain_ledger: RoundLedger
 # Development gate: no metadata-only Jim silently gains partial skills.
 var _mountain_rules_enabled := false
 var _jim_opening_pending: Dictionary = {}
-var _jim_rebuild_windows: Dictionary = {}
+var _jim_rebuild_pending: Dictionary = {}
+var _jim_rebuild_choice_override: Callable = Callable()
 var _mountain_placement_override: Callable = Callable()
 var deck: Deck
 var turn_manager: TurnManager
@@ -575,7 +576,6 @@ func _ready():
 	turn_manager.player_count = player_count
 	add_child(turn_manager)
 	turn_manager.phase_changed.connect(_on_phase_changed)
-	turn_manager.standalone_play_finished.connect(_on_jim_standalone_finished)
 	turn_manager.turn_ended.connect(_on_turn_ended)
 	game_over.connect(_on_game_over)
 
@@ -1072,9 +1072,7 @@ func _retire_final_unit(body: Player) -> bool:
 
 func _reset_unit_registry() -> void:
 	_jim_opening_pending = {}
-	for owner in _jim_rebuild_windows:
-		if is_instance_valid(owner): owner.jim_rebuild_available = 0
-	_jim_rebuild_windows.clear()
+	_jim_rebuild_pending = {}
 	mountain_space.reset()
 	_mountain_ledger = null
 	fire_dragon_state.reset()
@@ -1087,7 +1085,6 @@ func _reset_unit_registry() -> void:
 # ---- 阶段响应 ----
 
 func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phase, pid: int):
-	_expire_jim_rebuild_windows()
 	var body = _phase_actor(pid)
 	if body == null: return
 	if not _game_over and new_phase != TurnManager.Phase.WAITING and not (old_phase == TurnManager.Phase.WAITING and new_phase == TurnManager.Phase.PLAY):
@@ -1152,6 +1149,7 @@ func _do_start_pending(pid: int, generation: int):
 	_reset_turn_flags()
 	if not turn_manager.skip_full_turn:
 		if await _maybe_initial_mountains(p, current) == CHOICE_INVALID: return
+		if await _maybe_rebuild_mountains(p, current) == CHOICE_INVALID: return
 	if not current.call(): return
 	# 【神速】（比尔·盖伊）：回合开始阶段二选一（跳过判定+视为出杀 / 跳出牌弃牌+摸牌减益）
 	# （武将牌反面跳过整回合时不询问）
@@ -1677,7 +1675,6 @@ func _do_play(pid: int):
 		# 获赠阶段从响应返回时，授予索引已消费，仍恢复实际操作者。
 		pid = turn_manager.get_play_actor_idx()
 		p = players[pid]
-	_bind_jim_rebuild_window(p)
 	_set_input_player(p)
 	_play_btn.visible = _is_human(p)
 	_end_play_btn.visible = _is_human(p)
@@ -2090,40 +2087,86 @@ func _mountain_live_seats() -> Array[int]:
 		if not player.is_dead(): result.append(player.seat_index)
 	return result
 
-func _on_jim_standalone_finished(_frame: Dictionary) -> void:
-	_expire_jim_rebuild_windows()
+func _rebuild_mountain_options(count: int) -> Array:
+	var circle = LivingTable.ordered(spatial_players(),true)
+	var result: Array = []
+	if circle.size() < 2 or count not in [1,2]: return result
+	for first in circle.size():
+		var gap = [circle[first].seat_index,circle[(first+1)%circle.size()].seat_index]
+		if count == 1: result.append([gap])
+		else:
+			for second in circle.size():
+				result.append([gap,[circle[second].seat_index,circle[(second+1)%circle.size()].seat_index]])
+	return result
 
-func _expire_jim_rebuild_windows() -> void:
-	for owner in _jim_rebuild_windows.keys():
-		var stamp: Dictionary = _jim_rebuild_windows[owner]
-		var current = _mountain_rules_enabled and not _game_over and is_instance_valid(owner) \
-			and players.has(owner) and not owner.is_dead() and owner.general_name == "吉姆·芒顿" \
-			and stamp.generation == _dying_lifecycle_generation and stamp.general == owner.awakening_revision \
-			and stamp.phase == turn_manager.phase_id and turn_manager.current_phase in [TurnManager.Phase.PLAY,TurnManager.Phase.WAITING] \
-			and _play_actor() == owner
-		if current:
-			var frame = stamp.frame
-			current = turn_manager._standalone_play_frame.is_empty() if frame == null else \
-				is_same(frame,turn_manager._standalone_play_frame) and not frame.completed
-		if not current:
-			if is_instance_valid(owner): owner.jim_rebuild_available = 0
-			_jim_rebuild_windows.erase(owner)
+func _rebuild_mountain_default(owner: Player, options: Array, count: int) -> int:
+	var circle = LivingTable.ordered(spatial_players(),true)
+	var index = circle.find(owner)
+	if index < 0 or circle.size() < 2: return CHOICE_INVALID
+	var placements: Array = []
+	for i in count: placements.append([owner.seat_index,circle[(index+1)%circle.size()].seat_index])
+	return options.find(placements)
 
-func _bind_jim_rebuild_window(owner: Player) -> void:
-	_expire_jim_rebuild_windows()
-	if not _mountain_rules_enabled or not players.has(owner) or owner.general_name != "吉姆·芒顿" \
-			or not _can_use_play_skill(owner) or _jim_rebuild_windows.has(owner): return
-	# Bind even an empty window: deaths later in this PLAY belong to the next
-	# PLAY, and must not be acquired by a repeated/resumed _do_play invocation.
-	owner.jim_rebuild_available = owner.jim_rebuild_pending
-	owner.jim_rebuild_pending = 0
-	_jim_rebuild_windows[owner] = {"phase":turn_manager.phase_id,"generation":_dying_lifecycle_generation,
-		"general":owner.awakening_revision,"frame":null if turn_manager._standalone_play_frame.is_empty() else turn_manager._standalone_play_frame}
-
-func _jim_rebuild_count(owner: Player) -> int:
-	_expire_jim_rebuild_windows()
-	if not _mountain_rules_enabled or not _can_use_play_skill(owner) or not _jim_rebuild_windows.has(owner): return 0
-	return owner.jim_rebuild_available
+func _maybe_rebuild_mountains(owner: Player, allowed: Callable) -> int:
+	if not _mountain_rules_enabled or not players.has(owner) or owner.general_name != "吉姆·芒顿" or owner.jim_rebuild_pending <= 0: return 0
+	if not _jim_rebuild_pending.is_empty(): return CHOICE_INVALID
+	# Q22's skipped-START branch is not yet settled; this caller covers normal
+	# START only. Standalone PLAY/JUDGE/DRAW never become a turn-start trigger.
+	if turn_manager.current_phase != TurnManager.Phase.START or turn_manager.skip_full_turn \
+			or not turn_manager._standalone_play_frame.is_empty() or _phase_actor(turn_manager.current_player_idx) != owner: return CHOICE_INVALID
+	if not owner.is_alive() or not allowed.call() or not _ensure_mountain_space(): return CHOICE_INVALID
+	var active = unit_registry.active_units().filter(func(body): return _is_mountain_body(body))
+	var amount = mini(owner.jim_rebuild_pending,2-active.size())
+	if amount <= 0: return 0
+	var options = _rebuild_mountain_options(amount)
+	if options.is_empty(): return CHOICE_INVALID
+	var generation = _dying_lifecycle_generation
+	var registry_generation = unit_registry.generation()
+	var revision = turn_manager.get_context_revision()
+	var general = owner.awakening_revision
+	var stock = owner.jim_rebuild_pending
+	var space = mountain_space.markers()
+	var live = _mountain_live_seats()
+	var lease = {"owner":owner}
+	_jim_rebuild_pending = lease
+	var authorized = func():
+		return not _game_over and generation == _dying_lifecycle_generation and registry_generation == unit_registry.generation() \
+			and revision == turn_manager.get_context_revision() and is_same(_jim_rebuild_pending,lease) and allowed.call() \
+			and players.has(owner) and owner.is_alive() and owner.general_name == "吉姆·芒顿" \
+			and owner.awakening_revision == general and owner.jim_rebuild_pending == stock
+	var valid = func(): return authorized.call() and space == mountain_space.markers() and live == _mountain_live_seats()
+	var selected: int
+	if _jim_rebuild_choice_override.is_valid(): selected = await _jim_rebuild_choice_override.call(owner,options.duplicate(true),valid)
+	elif not _is_human(owner): selected = _rebuild_mountain_default(owner,options,amount)
+	else:
+		_set_input_player(owner)
+		var texts: Array[String] = []
+		for placements in options:
+			var names: Array[String] = []
+			for gap in placements: names.append("%d→%d" % [gap[0]+1,gap[1]+1])
+			texts.append("、".join(names))
+		var prompt = load("res://Scripts/MountainPlacementPrompt.gd").new()
+		prompt.setup(texts,"【造山】必须补回%d座山；选位不可取消，超时放在自己与下家之间" % amount)
+		$UI.add_child(prompt)
+		var answer = ChoicePromptAnswer.new()
+		prompt.chosen.connect(answer.submit)
+		selected = await _wait_choice_prompt(prompt,answer,valid)
+	var result = CHOICE_INVALID
+	if valid.call() and selected != CHOICE_INVALID:
+		if selected == -1: selected = _rebuild_mountain_default(owner,options,amount)
+		if selected >= 0 and selected < options.size():
+			var created: Array[Player] = []
+			for gap in options[selected]:
+				var mountain = _spawn_mountain_at(owner,gap[0],gap[1])
+				if mountain == null or not authorized.call(): break
+				created.append(mountain)
+			if created.size() == amount and authorized.call():
+				owner.jim_rebuild_pending -= amount
+				_history_event("skill","%s 发动【造山】，补回%d座山" % [owner.player_name,amount],owner,created)
+				_sync_all_ui()
+				result = 1
+	if is_same(_jim_rebuild_pending,lease): _jim_rebuild_pending = {}
+	return result
 
 func _initial_mountain_options() -> Array:
 	var circle = LivingTable.ordered(spatial_players(), true)
@@ -2149,8 +2192,8 @@ func _maybe_initial_mountains(owner: Player, allowed: Callable) -> int:
 	if not _jim_opening_pending.is_empty(): return CHOICE_INVALID
 	if turn_manager.current_phase != TurnManager.Phase.START or turn_manager.skip_full_turn or _phase_actor(turn_manager.current_player_idx) != owner: return CHOICE_INVALID
 	if not allowed.call() or not players.has(owner) or not owner.is_alive() or not _ensure_mountain_space(): return CHOICE_INVALID
-	# I04-Q9 restores eligibility, but existing-terrain composition is still
-	# I04-Q10. This development guard is not a gameplay refusal/timeout policy.
+	# Q13 clears old terrain on confirmed Sage restoration. Existing terrain
+	# here would violate that lifecycle; do not duplicate the initial pair.
 	if unit_registry.active_units().any(func(body): return unit_registry.entry(unit_registry.id_for(body)).kind == UnitRegistry.Kind.MOUNTAIN): return CHOICE_INVALID
 	var options = _initial_mountain_options()
 	if options.is_empty(): return CHOICE_INVALID

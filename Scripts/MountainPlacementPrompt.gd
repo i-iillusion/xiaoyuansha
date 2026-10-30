@@ -2,7 +2,7 @@ extends ColorRect
 
 signal chosen(index: int)
 
-func setup(texts: Array[String]):
+func setup(texts: Array[String], heading: String = "【王屋太行】选择两座山的位置（可同间隔）；超时自动放在自身左右"):
 	name = "MountainPlacementPrompt"
 	color = Color(0,0,0,0.65)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -15,7 +15,7 @@ func setup(texts: Array[String]):
 	box.custom_minimum_size = Vector2(760,0)
 	center.add_child(box)
 	var title = Label.new()
-	title.text = "【王屋太行】选择两座山的位置（可同间隔）；超时自动放在自身左右"
+	title.text = heading
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.custom_minimum_size = Vector2(760,60)
 	box.add_child(title)

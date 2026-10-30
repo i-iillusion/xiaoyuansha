@@ -41,14 +41,12 @@ var _game_start_state: Dictionary = {}
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
-	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending", "jim_rebuild_available"]
+	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending"]
 # I04-Q9: Sage restores first-trigger eligibility. This is general-card state,
 # not a rewind of the round ledger or any already-existing mountain body.
 var jim_mountains_started := false
-# Deferred general-card entitlement, not permission to rebuild in this PLAY.
-# The next-PLAY binding/expiry caller is a separate I04c-2c step.
+# Deferred general-card resource for mandatory rebuilding at START (Q19/20).
 var jim_rebuild_pending := 0
-var jim_rebuild_available := 0
 # 【预习】属于武将牌状态；不随回合/阶段清零，贤者复原恢复开局值。
 var prep_tokens: int = 0
 # I03: general-card resource, not a card, role or controller's shared hand.
