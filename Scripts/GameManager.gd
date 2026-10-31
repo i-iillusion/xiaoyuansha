@@ -5968,7 +5968,19 @@ func _burning_camp_neighbors(center: Player) -> Array[Player]:
 	# anchor A. Keep a finally-dead center only as its original position anchor.
 	var circle: Array[Player] = []
 	var units = unit_registry.all_bodies()
-	for fixed in spatial_players():
+	# Q32/Q33: mountains occupy real gaps and intercept adjacent fire.
+	# Dragons retain their established position immediately behind the summoner.
+	var markers: Array = spatial_players().map(func(fixed): return fixed.seat_index)
+	if not mountain_space.ids().is_empty():
+		if not _ensure_mountain_space(): return []
+		markers = mountain_space.markers()
+	for marker in markers:
+		if typeof(marker) == TYPE_STRING:
+			var terrain = unit_registry.entry(marker)
+			if not terrain.is_empty() and terrain.kind == UnitRegistry.Kind.MOUNTAIN \
+					and _has_damage_target_body(terrain.body): circle.append(terrain.body)
+			continue
+		var fixed = players[marker]
 		circle.append(fixed)
 		for body in units:
 			var entry = unit_registry.entry(unit_registry.id_for(body))
@@ -6010,7 +6022,7 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 		if not valid.call():
 			result.outcome = CHOICE_INVALID
 			return result
-		if not victim.is_alive() or _is_kneeling(victim):
+		if not _has_damage_target_body(victim) or not victim.is_alive() or _is_kneeling(victim):
 			continue
 		# 胜负已分：不再结算后续伤害
 		if _game_over:
@@ -6025,7 +6037,7 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 
 # 在目标判定区生成一张火烧连营（判定区已有火烧连营则不重复，防止无限蔓延）
 func _spawn_burning_camp(target: Player, source_seat: int):
-	if not target.is_alive() or _is_kneeling(target):
+	if not _has_damage_target_body(target) or not target.is_alive() or _is_kneeling(target):
 		return
 	for c in target.judgment_cards:
 		if c.sub_type == CardData.CardSubType.BURNING_CAMP:
