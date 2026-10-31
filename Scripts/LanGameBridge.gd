@@ -75,6 +75,13 @@ func acting_unit() -> String:
 	var key = frame.actor if not frame.is_empty() else game.turn_manager.get_play_actor_key()
 	return key if typeof(key) == TYPE_STRING and ActorIdentity.resolve_live(game.players, game.unit_registry, key) != null else ""
 
+func _declaration_target_allowed(target: Player) -> bool:
+	if game._is_iron_chain_targeting:
+		return game.get_trick_targets(game._play_actor(),CardData.CardSubType.IRON_CHAIN).has(target)
+	if game._is_targeting and game._targeting_card_sub in GameManager.TARGET_TRICKS:
+		return game.get_trick_targets(game._play_actor(),game._targeting_card_sub).has(target)
+	return true # Inspection and other skill/response modes keep their own rules.
+
 func _unit_targets() -> Array[Player]:
 	var result: Array[Player] = []
 	for unit in game.unit_registry.turn_units():
@@ -118,9 +125,9 @@ func _refresh_commands() -> void:
 			"toggle": button.toggle_mode, "pressed": button.button_pressed, "hint": button.tooltip_text})
 	if root == null or game._is_meiyong_targeting:
 		for p in game.players:
-			_add_command(owner, "target", p.seat_index)
+			if _declaration_target_allowed(p): _add_command(owner, "target", p.seat_index)
 		for unit in _unit_targets():
-			_add_command(owner, "target", game.unit_registry.id_for(unit))
+			if _declaration_target_allowed(unit): _add_command(owner, "target", game.unit_registry.id_for(unit))
 	# Out-of-turn 下跪 is not an AI decision. It gets a separate, owner-only input.
 	for p in game.players:
 		if p.general_name == "布鲁斯·萨维奇" and p.is_alive() and (p.kneeling or game._kneel_conditions_met(p)):
@@ -198,6 +205,7 @@ func submit(seat: int, token: String) -> bool:
 				target = ActorIdentity.resolve_live(game.players, game.unit_registry, command.value)
 				if target == null or (_targeting() and not game._can_target_body(game._play_actor(), target)): return false
 			else: return false
+			if not _declaration_target_allowed(target): return false
 			var panel = Control.new()
 			panel.set_meta("player", target)
 			var event = InputEventMouseButton.new()

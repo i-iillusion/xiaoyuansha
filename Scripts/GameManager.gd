@@ -1729,11 +1729,17 @@ func _has_delayed_card(p: Player, sub: int) -> bool:
 		if card.sub_type == sub: return true
 	return false
 
+# Declaration only: do not use this query to shrink a paid AOE's declared scope
+# or to re-authorize a committed effect after its original source has died.
+func _mountain_allows_single_declaration(source: Player, target: Player) -> bool:
+	return mountain_space.ids().is_empty() or ordinary_seat_distance(source,target) != LivingTable.UNREACHABLE
+
 func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 	var result: Array[Player] = []
 	for target in _character_targets(p):
 		if not target.is_alive() or _is_kneeling(target) or (target == p and sub != CardData.CardSubType.IRON_CHAIN):
 			continue
+		if not _mountain_allows_single_declaration(p,target): continue
 		if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE] and not target.has_any_card():
 			continue
 		if sub in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP] and _has_delayed_card(target, sub):
@@ -5533,6 +5539,9 @@ func _on_iron_chain_target_click(target: Player):
 	if _is_kneeling(target):
 		_update_debug("%s 处于【下跪】状态，不能成为目标！" % target.player_name)
 		return
+	if not get_trick_targets(actor,CardData.CardSubType.IRON_CHAIN).has(target):
+		_show_toast("当前无法指定该目标")
+		return
 	if _iron_chain_targets.has(target):
 		_update_debug("该角色已在目标中")
 		return
@@ -5619,6 +5628,10 @@ func _show_more_target_confirm(target_name: String, allowed: Callable = Callable
 # 执行铁索连环：对每个目标切换连环状态
 func _execute_iron_chain(targets: Array[Player]):
 	var p = _play_actor()
+	# Reject the entire declaration before payment, rather than silently reducing
+	# a two-target Iron Chain to one (which would also change Prep classification).
+	var legal = get_trick_targets(p,CardData.CardSubType.IRON_CHAIN)
+	if targets.any(func(target): return not legal.has(target)): return
 	# 铁索连环：选完目标执行时重置每步倒计时
 	_reset_play_countdown_if_p0()
 
