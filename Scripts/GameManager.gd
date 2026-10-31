@@ -2297,6 +2297,21 @@ func _mountain_snapshot() -> MountainTopology:
 	if not _ensure_mountain_space(): return null
 	return mountain_space.snapshot(_mountain_live_seats())
 
+# Spatial provenance is separate from damage attribution and live actor authority.
+func _retained_effect_anchor(body: Player) -> Player:
+	if not is_instance_valid(body): return null
+	if players.has(body): return body
+	var entry = unit_registry.entry(unit_registry.id_for(body))
+	if not entry.is_empty() and entry.kind == UnitRegistry.Kind.FIRE_DRAGON:
+		return entry.summoner if players.has(entry.summoner) else null
+	return null
+
+func _mountain_effect_reaches(anchor: Player, target: Player) -> bool:
+	if mountain_space.ids().is_empty(): return true
+	var destination = _retained_effect_anchor(target)
+	if anchor == null or destination == null or not players.has(anchor) or not _ensure_mountain_space(): return false
+	return mountain_space.same_region_from_anchor(anchor.seat_index,destination.seat_index,_mountain_live_seats())
+
 func ordinary_seat_distance(source: Player, target: Player) -> int:
 	if not mountain_space.ids().is_empty():
 		var topology = _mountain_snapshot()
@@ -2783,8 +2798,17 @@ func _complete_card_actions(events: Array):
 		_history_event("completed", "%s 的【%s】结算完成" % [event.actor_body.player_name,
 			"暗置" + event.card.hidden_category if event.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else CardData.get_type_name(event.sub_type)], event.actor_body, [], {"action": event.id})
 		card_action_completed.emit(event)
+	_advance_completed_card_play.call_deferred(turn_manager.get_context_revision(), _dying_lifecycle_generation)
+
+func _advance_completed_card_play(revision: int, generation: int):
 	if not turn_manager.current_unit_id.is_empty():
-		_advance_retired_unit_play.call_deferred(turn_manager.get_context_revision(), _dying_lifecycle_generation)
+		_advance_retired_unit_play(revision,generation)
+		return
+	if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
+	if turn_manager.current_phase != TurnManager.Phase.PLAY or not _pending_card_actions.is_empty() \
+			or not _dying_contexts.is_empty() or _play_skill_execution_busy(): return
+	var body = _play_actor()
+	if body != null and players.has(body) and body.is_dead(): turn_manager.advance_phase()
 
 func _advance_retired_unit_play(revision: int, generation: int):
 	if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return
@@ -3649,6 +3673,8 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 	await _replace_paid_global(p, card_sub, actions, response_revision)
 
 func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = []):
+	var generation = _dying_lifecycle_generation
+	var origin = _retained_effect_anchor(p)
 	_history_event("targets", "%s 的【%s】指定群体目标" % [p.player_name, card_name], p,
 		_prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster))
 	_sync_all_ui()
@@ -3662,9 +3688,10 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 		if not _has_character_body(target) or not target.is_alive():
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
-		if _game_over or response_revision != turn_manager.get_context_revision():
+		if _game_over or generation != _dying_lifecycle_generation or response_revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
+		if not _mountain_effect_reaches(origin,target): continue
 
 		# 【仁王盾】：南蛮入侵和万箭齐发对你无效（锁定技；判定在无懈询问之前，青釭剑只对杀生效不例外）
 		if target.get_armor() == CardData.CardSubType.RENWANG_DUN:
@@ -3688,9 +3715,13 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 		if nullified == NullificationOutcome.NULLIFIED:
 			_public_result("【%s】对 %s 的效果被【无懈可击】抵消" % [card_name, target.player_name])
 			continue
+		if generation != _dying_lifecycle_generation or response_revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
+		if not _mountain_effect_reaches(origin,target): continue
 
 		var responded = await _ask_basic_card_response_result(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
-		if _game_over or response_revision != turn_manager.get_context_revision():
+		if _game_over or generation != _dying_lifecycle_generation or response_revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
 		if not target.is_alive() or _is_kneeling(target):
@@ -3702,6 +3733,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 		if responded == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 		else:
+			if not _mountain_effect_reaches(origin,target): continue
 			_update_debug("%s 未能出【%s】响应【%s】" % [target.player_name, required_name, card_name])
 			var damage = await _deal_damage_result(p, target, 1, EffectChain.DamageType.PHYSICAL)
 			if damage.invalidated:

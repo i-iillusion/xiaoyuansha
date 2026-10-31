@@ -26,6 +26,16 @@ func reset() -> void:
 func markers() -> Array: return _ring.duplicate()
 func ids() -> Array[String]: return _mountains.duplicate()
 
+# Q31: a committed card keeps its original spatial origin after source death.
+# Add only that retained fixed marker to this connectivity query; it is never
+# restored to the turn roster, normal distance count or input ownership.
+func same_region_from_anchor(source: int, target: int, live: Array[int]) -> bool:
+	if not _fixed.has(source) or not live.has(target): return false
+	var query: Array[int] = live.duplicate()
+	if not query.has(source): query.append(source)
+	var view = snapshot(query)
+	return view != null and view.same_region(source,target)
+
 func player_order() -> Array[int]:
 	var result: Array[int] = []
 	for marker in _ring:
