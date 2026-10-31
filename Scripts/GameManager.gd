@@ -8146,7 +8146,6 @@ func _activate_jushan(p: Player) -> int:
 	var original_hand = HandSelection.new(p)
 	var space = mountain_space.markers()
 	var live = _mountain_live_seats()
-	var mountains = mountain_space.ids()
 	var order = _spatial_from(p)
 	order.append(order.pop_front()) # Q27: downstream first, owner last.
 	var lease = {"owner":p,"skill":"jushan"}
@@ -8189,15 +8188,19 @@ func _activate_jushan(p: Player) -> int:
 						if target.is_dying() and await _resolve_dying(target,null,"jushan") == CHOICE_INVALID:
 							result = CHOICE_INVALID; break
 					if not frame_valid.call(): result = CHOICE_INVALID; break
-					# Delivery guard pending Q28, NOT a rule cancelling committed Gather.
-					# Nested rescue can remove Jim/the mountains before later recipients.
-					if index < targets.size()-1 and (p.is_dead() or mountains != mountain_space.ids()):
-						result = CHOICE_INVALID; break
+					# Q28: committed Gather retains its original recipients even if
+					# nested rescue kills Jim and removes his mountains. Dead recipients
+					# are skipped above; technical lifecycle invalidation still stops it.
 				_sync_all_ui()
 			else: result = CHOICE_INVALID
 		elif paid != HandDiscardOutcome.DECLINED: result = CHOICE_INVALID
 	elif selected != -1: result = CHOICE_INVALID
 	if is_same(_jim_mountain_skill_pending,lease): _jim_mountain_skill_pending = {}
+	# The deceased PLAY actor cannot click End Play. Advance only after every
+	# original Gather recipient and nested rescue finished, in this same frame.
+	if result == 1 and p.is_dead() and not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and turn_manager.current_phase == TurnManager.Phase.PLAY and _play_actor() == p:
+		turn_manager.advance_phase()
 	return result
 
 func _play_skill_target_is_current() -> bool:

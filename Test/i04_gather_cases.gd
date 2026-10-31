@@ -71,6 +71,7 @@ func run(t):
 	t.check(events.size() == 1 and events[0].targets == [0], "I04 Gather counts the kneeling player but does not declare them as an effect target")
 	await dispose(t,game)
 	await rescue_order(t)
+	await owner_death(t)
 	for fault in ["cancel","index","fee","phase","space","reset","restore","reentry"]:
 		game = fixture(t)
 		owner = game.players[0]
@@ -187,6 +188,73 @@ func lan_rescue(t):
 	t.check(not bridge.submit(0,rescue) and bridge.submit(4,rescue), "I04 Q27 only E controls their one-card rescue response")
 	t.check(game.players[2].hp == 1 and game.players[3].is_dead() and game.players[4].hp == 2 and game.players[4].hand_size() == 0, "I04 Q27 real remote-style rescue token saves C, then completes D and E")
 	t.check(game._dying_contexts.is_empty() and game._jim_mountain_skill_pending.is_empty() and not bridge.submit(4,rescue), "I04 Q27 completed human rescue releases frames and rejects replay")
+	game._game_over = true
+	bridge.queue_free()
+	await t.process_frame
+
+func owner_death(t):
+	# Q28 revised legal layout: Jim A, Leo B and E share the larger side.
+	var game = load("res://Test/i04_initial_cases.gd").new().fixture(t,5,true,func(_p,options,_v): return options.find([[1,2],[3,4]]))
+	game._halt_countdown()
+	var owner = game.players[0]
+	var leo = game.players[1]
+	var last = game.players[4]
+	leo.general_name = "里奥·普利威尔"
+	for p in game.players:
+		p.hand.clear(); p.determined_cards.clear()
+		p.hp = 4
+	owner.hp = 2
+	leo.hp = 1
+	owner.hand.append(null)
+	game._jim_gather_choice_override = func(_p,options,_v): return options.find("lose")
+	game._hand_discard_override = func(snapshot,count,_m): return snapshot.defaults(count)
+	game._rescue_choice_override = func(_r,_d,_o): return -1
+	var mountains = game.unit_registry.active_units().duplicate()
+	var serial = game._card_action_serial
+	var events: Array = []
+	last.hp_changed.connect(func(hp): events.append([hp,owner.is_dead(),game.mountain_space.ids().size()]))
+	# Observe the real PLAY-to-DISCARD transition without starting a following AI.
+	# The separate LAN path below retains automatic phase handling.
+	game.turn_manager.phase_changed.disconnect(game._on_phase_changed)
+	game.turn_manager.phase_changed.connect(func(_old,phase,_seat):
+		if phase == TurnManager.Phase.DISCARD: events.append(["discard",last.hp]))
+	t.check(await game._activate_jushan(owner) == 1, "I04 Q28 real nested Yudaxi does not invalidate committed Gather after owner death")
+	t.check(owner.is_dead() and leo.hp == 1 and leo.hand_size() == 1 and last.hp == 1, "I04 Q28 E loses the remaining Gather HP after Leo revives from Jim's death")
+	t.check(mountains.all(func(body): return body.unit_disappeared and not body.is_dead()) and game.mountain_space.ids().is_empty() and owner.jim_rebuild_pending == 0, "I04 Q28 owner death removes old mountains without normal mountain deaths or Zaoshan cost")
+	t.check(events == [[2,false,2],[1,true,0],["discard",1]], "I04 Q28 original E continues after mountain removal before deceased owner's PLAY ends")
+	t.check(game.yudaxi.results.size() == 1 and game.yudaxi.results[0].deaths == 1 and game._card_action_serial == serial, "I04 Q28 disappears are not Yudaxi X or fabricated card actions")
+	t.check(game._jim_mountain_skill_pending.is_empty() and game._dying_contexts.is_empty() and not game.yudaxi.is_active() and not game._game_over, "I04 Q28 all parent and nested frames release without ending a live brawl")
+	await dispose(t,game)
+	await lan_owner_death(t)
+
+func lan_owner_death(t):
+	var bridge = LanGameBridge.new()
+	bridge._enable_mountain_rules_for_tests = true
+	t.root.add_child(bridge)
+	var roster: Array[Dictionary] = []
+	for seat in 5: roster.append({"name":"P%d"%seat,"general":"吉姆·芒顿" if seat == 0 else ("里奥·普利威尔" if seat == 1 else "稻草人")})
+	t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST), "I04 Q28 human adapter starts with a genuine Jim/Leo roster")
+	var helper = load("res://Test/i04_movement_cases.gd").new()
+	var placement = helper.find(bridge.snapshot(0),"山甲 玩家2→玩家3；山乙 玩家4→玩家5")
+	t.check(placement != "" and bridge.submit(0,placement), "I04 Q28 actual initial choice encloses C/D and leaves A/B/E together")
+	var game = bridge.game
+	game._halt_countdown()
+	for p in game.players:
+		p.hand.clear(); p.determined_cards.clear()
+		p.hp = 4
+	game.players[0].hp = 2
+	game.players[1].hp = 1
+	game.players[0].hand.append(null)
+	game._open_player_detail(game.players[0])
+	bridge.submit(0,helper.find(bridge.snapshot(0),"【聚山】"))
+	bridge.submit(0,helper.find(bridge.snapshot(0),"较多侧"))
+	bridge.submit(0,helper.find(bridge.snapshot(0),"任意牌"))
+	var confirm = helper.find(bridge.snapshot(0),"确认弃牌")
+	t.check(confirm != "" and bridge.submit(0,confirm), "I04 Q28 human's actual fee command starts nested Yudaxi and committed continuation")
+	for i in 5: await t.process_frame
+	t.check(game.players[0].is_dead() and game.players[4].hp == 1 and game.mountain_space.ids().is_empty(), "I04 Q28 real bridge continuation finishes E after Jim and mountains disappear")
+	t.check(game._jim_mountain_skill_pending.is_empty() and game._dying_contexts.is_empty() and not game._game_over and not bridge.submit(0,confirm), "I04 Q28 no dead-owner input lease or replay remains")
+	t.check(game.turn_manager.current_player_idx == 1 and game.turn_manager.current_phase == TurnManager.Phase.PLAY and bridge.snapshot(1).owner == 1, "I04 Q28 automatic round continuation reaches living Leo's PLAY without dead Jim clicking")
 	game._game_over = true
 	bridge.queue_free()
 	await t.process_frame
