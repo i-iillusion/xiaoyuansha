@@ -3856,6 +3856,8 @@ func _play_peach_garden():
 	await _replace_paid_global(p, CardData.CardSubType.PEACH_GARDEN, actions, revision)
 
 func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	var generation = _dying_lifecycle_generation
+	var origin = _retained_effect_anchor(p)
 	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster))
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
@@ -3865,19 +3867,24 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 
 	# 从使用者开始顺时针依次结算（与南蛮/万箭方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster):
+		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
 		if not _has_character_body(target) or not target.is_alive():
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
 			_update_debug("%s 处于【下跪】状态，【桃园结义】对其无效" % target.player_name)
 			continue
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
-		if not target.is_alive() or _is_kneeling(target):
+		if not _has_character_body(target) or not target.is_alive() or _is_kneeling(target):
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 		if nullified == NullificationOutcome.NULLIFIED:
 			_public_result("【桃园结义】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -3904,6 +3911,8 @@ func _play_harvest():
 	await _replace_paid_global(p, CardData.CardSubType.HARVEST, actions, revision)
 
 func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	var generation = _dying_lifecycle_generation
+	var origin = _retained_effect_anchor(p)
 	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.HARVEST, roster))
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
@@ -3914,9 +3923,13 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 
 	# 从使用者开始顺时针依次结算（与桃园结义方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.HARVEST, roster):
+		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
 		if not _has_character_body(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -3925,11 +3938,12 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
-		if not target.is_alive() or _is_kneeling(target):
+		if not _has_character_body(target) or not target.is_alive() or _is_kneeling(target):
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 		if nullified == NullificationOutcome.NULLIFIED:
 			_public_result("【五谷丰登】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -3963,6 +3977,8 @@ func _play_disarm():
 	await _replace_paid_global(p, CardData.CardSubType.DISARM, actions, revision)
 
 func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+	var generation = _dying_lifecycle_generation
+	var origin = _retained_effect_anchor(p)
 	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.DISARM, roster))
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
@@ -3973,9 +3989,13 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 
 	# 从使用者开始顺时针依次结算（与桃园结义/五谷丰登方向一致）
 	for target in _prep_group_scope(p, CardData.CardSubType.DISARM, roster):
+		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
 		if not _has_character_body(target) or not target.is_alive():
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -3984,11 +4004,12 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
-		if nullified == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision():
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
-		if not target.is_alive() or _is_kneeling(target):
+		if not _has_character_body(target) or not target.is_alive() or _is_kneeling(target):
 			continue
+		if not _mountain_effect_reaches(origin,target): continue
 		if nullified == NullificationOutcome.NULLIFIED:
 			_public_result("【卸甲归田】对 %s 的效果被【无懈可击】抵消" % target.player_name)
 			continue
@@ -5685,6 +5706,9 @@ func _execute_iron_chain(targets: Array[Player]):
 	await _resolve_prep_effect(p, targets, effect_sub, actions, replacements, valid, revision, "", roster)
 
 func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[CardActionEvent], force_chained: bool = false):
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var origin = _retained_effect_anchor(p)
 	_history_event("targets", "%s 的【铁索连环】指定%d名目标" % [p.player_name, targets.size()], p, targets)
 	_sync_all_ui()
 
@@ -5694,13 +5718,18 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 	_update_debug("%s 使用了【铁索连环】，目标：%s" % [p.player_name, "、".join(names)])
 
 	for t in targets:
-		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
-		if nullified == NullificationOutcome.INVALIDATED:
+		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
-		if not t.is_alive() or _is_kneeling(t):
+		if not _has_character_body(t) or not t.is_alive() or _is_kneeling(t) or not _mountain_effect_reaches(origin,t): continue
+		# 无懈可击：效果即将对目标生效前
+		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
+		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
+		if not _has_character_body(t) or not t.is_alive() or _is_kneeling(t):
 			continue
+		if not _mountain_effect_reaches(origin,t): continue
 		if nullified == NullificationOutcome.NULLIFIED:
 			_public_result("【铁索连环】对 %s 的效果被【无懈可击】抵消" % t.player_name)
 			continue
@@ -6034,6 +6063,9 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 		if reply.outcome == NullificationOutcome.PASSED:
 			_complete_card_actions(actions)
 			_sync_all_ui()
+			# Empty-hand responders can skip without opening a prompt, so there
+			# may be no prompt cleanup to return input to the suspended caller.
+			_restore_input_owner()
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
 		pending = not pending
 		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name

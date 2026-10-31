@@ -1,4 +1,4 @@
-# Windows local equivalent of the seven CI suites. Never starts an interactive game.
+# Windows local equivalent of the seven CI suites plus the mandatory I04 gate. No interactive game.
 param(
     [Parameter(Mandatory = $true)][string]$GodotPath,
     [ValidateSet('Normal','AboveNormal')][string]$ProcessPriority = 'Normal'
@@ -122,13 +122,13 @@ try {
     $outcomes = @(Invoke-CheckedGodot 'import' @('--editor', '--import', '--quit') 120)
     $outcomes | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $logDir 'results.json') -Encoding UTF8
     if ($outcomes[0].passed) {
-        $tests = @('test_rule_settlement', 'test_confirmed_rules', 'test_bill', 'test_hand_payment', 'test_card_transfer', 'test_identity_victory', 'test_free_for_all_victory')
+        $tests = @('test_rule_settlement', 'test_confirmed_rules', 'test_bill', 'test_hand_payment', 'test_card_transfer', 'test_identity_victory', 'test_free_for_all_victory', 'test_i04')
         foreach ($test in $tests) {
             $outcomes += Invoke-CheckedGodot $test @('--script', "Test/$test.gd") 60
             $outcomes | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $logDir 'results.json') -Encoding UTF8
         }
     }
-    if ($outcomes.Count -ne 8 -or @($outcomes | Where-Object { -not $_.passed }).Count -ne 0) { exit 1 }
+    if ($outcomes.Count -ne 9 -or @($outcomes | Where-Object { -not $_.passed }).Count -ne 0) { exit 1 }
 } finally {
     Pop-Location
 }
