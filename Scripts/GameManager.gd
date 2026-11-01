@@ -1259,16 +1259,19 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		_update_debug("%s 判定阶段：判定区 %d 张牌（后放置的先判定）" % [p.player_name, p.judgment_cards.size()])
 
 	while not p.judgment_cards.is_empty() and p.is_alive():
-		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not _has_character_body(p):
+		if _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation or not _has_damage_target_body(p):
 			return false
 		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
 		var card = _last_pending_judgment(p, deferred)
 		if card == null: break
+		# I04c-2d-4b-1 implements mountain Burning Camp only. Lightning's
+		# transfer path awaits Q38; this is a capability guard, not a card ban.
+		if _is_mountain_body(p) and card.sub_type != CardData.CardSubType.BURNING_CAMP: return false
 		var nullified = NullificationOutcome.PASSED
 		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
-			var valid = func(): return generation == _dying_lifecycle_generation and _has_character_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
+			var valid = func(): return generation == _dying_lifecycle_generation and _has_damage_target_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
 			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
@@ -5963,7 +5966,7 @@ func _show_duel_second_strike_prompt() -> int:
 
 # Q2：中心伤害及其传导/濒死结束后，按存活圆桌选下家、上家。
 # 即使中心最终死亡，也以其原空间位置为锚；不修改固定座号。
-func _burning_camp_neighbors(center: Player) -> Array[Player]:
+func _burning_camp_circle(center: Player) -> Array[Player]:
 	# UNIT-17: effect adjacency follows A->F->B, not F's base-distance
 	# anchor A. Keep a finally-dead center only as its original position anchor.
 	var circle: Array[Player] = []
@@ -5987,6 +5990,10 @@ func _burning_camp_neighbors(center: Player) -> Array[Player]:
 			if entry.kind == UnitRegistry.Kind.FIRE_DRAGON and entry.summoner == fixed \
 				and (body == center or unit_registry.contains_active(body)):
 				circle.append(body)
+	return circle
+
+func _burning_camp_neighbors(center: Player, retained_circle: Array[Player] = []) -> Array[Player]:
+	var circle = _burning_camp_circle(center) if retained_circle.is_empty() else retained_circle
 	var result: Array[Player] = []
 	var origin = circle.find(center)
 	if origin < 0: return result
@@ -6007,7 +6014,22 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var result = {"outcome": 0, "neighbors": []}
-	var valid = func(): return revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation and _has_character_body(center)
+	var terrain = _is_mountain_body(center)
+	if terrain and not _has_damage_target_body(center):
+		result.outcome = CHOICE_INVALID
+		return result
+	# A normal mountain death removes its marker. Retain only this effect's
+	# circle/anchor, while checking each body's current life/disappearance.
+	var retained_circle: Array[Player] = []
+	if terrain: retained_circle = _burning_camp_circle(center)
+	var valid = func():
+		if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation: return false
+		if _has_damage_target_body(center): return true
+		# Non-death disappearance during transferred center damage awaits Q39.
+		# Rejecting that continuation is a development guard, not a game ruling.
+		var entry = unit_registry.entry(unit_registry.id_for(center)) if terrain else {}
+		return not entry.is_empty() and center.is_dead() and not center.unit_disappeared \
+			and entry.removed and entry.reason == UnitRegistry.Removal.NORMAL_DEATH
 	if not valid.call():
 		result.outcome = CHOICE_INVALID
 		return result
@@ -6017,7 +6039,7 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 		result.outcome = CHOICE_INVALID
 		return result
 	if _game_over: return result
-	result.neighbors = _burning_camp_neighbors(center)
+	result.neighbors = _burning_camp_neighbors(center,retained_circle)
 	for victim in result.neighbors:
 		if not valid.call():
 			result.outcome = CHOICE_INVALID
