@@ -1310,7 +1310,9 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
 			var valid = func(): return generation == _dying_lifecycle_generation and _has_damage_target_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
-			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid)
+			var terrain_origin: Player
+			if _is_mountain_body(p): terrain_origin = p
+			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, terrain_origin)
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
 		p.judgment_cards.erase(card)
@@ -6249,14 +6251,18 @@ enum NullificationOutcome { PASSED, NULLIFIED, INVALIDATED }
 func _ask_nullification_chain(desc: String) -> bool:
 	return await _ask_nullification_chain_result(desc) == NullificationOutcome.NULLIFIED
 
-func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable()) -> NullificationOutcome:
+func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), terrain_origin: Player = null) -> NullificationOutcome:
 	var pending: bool = false        # 当前是否有一张生效中的无懈
 	var actions: Array[CardActionEvent] = []
 	var round_desc: String = desc
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
+	# Q42/Q45 terrain path only. Ordinary-card first-round order awaits Q46.
+	# Scope is local to this chain, never an input owner or display-name lookup.
+	var scope: Dictionary = {}
+	if terrain_origin != null: scope = {"origin":terrain_origin,"region":null}
 	while true:
-		var reply = await _ask_nullification_round_result(round_desc, allowed)
+		var reply = await _ask_nullification_round_result(round_desc, allowed, scope)
 		if reply.get("card_action") is CardActionEvent:
 			actions.append(reply.card_action)
 		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
@@ -6270,6 +6276,7 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 			_restore_input_owner()
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
 		pending = not pending
+		if not scope.is_empty(): scope = {"origin":reply.actor,"region":_retained_effect_anchor(reply.actor)}
 		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
 	return NullificationOutcome.INVALIDATED
 
@@ -6281,14 +6288,41 @@ func _ask_nullification_round(desc: String) -> String:
 		_abandon_card_actions([reply.card_action])
 	return reply.actor_name if reply.outcome == NullificationOutcome.NULLIFIED else ""
 
-func _ask_nullification_round_result(desc: String, allowed: Callable = Callable()) -> Dictionary:
+func _terrain_nullification_allows(p: Player, scope: Dictionary) -> bool:
+	if scope.is_empty(): return true
+	if not _has_character_body(p): return false
+	var anchor: Player = scope.region
+	if anchor == null or mountain_space.ids().is_empty(): return true
+	var destination = _retained_effect_anchor(p)
+	if destination == null or not _ensure_mountain_space(): return false
+	# Q20: an already-paid virtual counter survives its actor's final death.
+	# Query retained fixed positions only; do not restore dead actors to input,
+	# turn, target or live-distance membership while checking this paid scope.
+	var live = _mountain_live_seats()
+	for retained in [anchor,destination]:
+		if not live.has(retained.seat_index): live.append(retained.seat_index)
+	var view = mountain_space.snapshot(live)
+	return view != null and view.same_region(anchor.seat_index,destination.seat_index)
+
+func _terrain_nullification_order(scope: Dictionary) -> Array[Player]:
+	if scope.is_empty(): return _character_order_from(players[0])
+	var circle = _burning_camp_circle(scope.origin)
+	var start = circle.find(scope.origin)
+	var order: Array[Player] = []
+	if start < 0: return order
+	for offset in range(1,circle.size()+1):
+		var body = circle[(start+offset)%circle.size()]
+		if _has_character_body(body) and not body.is_dead() and _terrain_nullification_allows(body,scope): order.append(body)
+	return order
+
+func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(), scope: Dictionary = {}) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
 			and (not allowed.is_valid() or allowed.call())
-	for p in _character_order_from(players[0]):
+	for p in _terrain_nullification_order(scope):
 		if not valid.call():
 			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		if not p.is_alive():
@@ -6296,16 +6330,20 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 		# 【下跪】：无法使用或打出任何牌 → 不询问
 		if _is_kneeling(p):
 			continue
+		var paid_response: Array[bool] = [false]
+		var responder_valid = func(): return valid.call() and _terrain_nullification_allows(p,scope) \
+			and (scope.is_empty() or p.is_alive() or (paid_response[0] and p.is_dead()))
+		if not responder_valid.call(): continue
 		var snapshot = HandSelection.new(p)
 		var played = "skip"
 		if _is_human(p):
 			_set_input_player(p)
-			played = await _show_nullification_prompt(desc, p, valid)
+			played = await _show_nullification_prompt(desc, p, responder_valid)
 		else:
 			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else []
 			if await _choose_ai_response(p, "nullification", options, {"description": desc}) == CardData.CardSubType.NULLIFICATION:
 				played = "card"
-		if played == "invalidated" or not valid.call():
+		if played == "invalidated" or not responder_valid.call():
 			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		if played != "skip":
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
@@ -6313,8 +6351,8 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用无懈可击后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = played
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION), true, valid)
-			if yes_ah == "invalidated" or not valid.call():
+				yes_ah = await _ask_yes_ah(p, "无懈可击", HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION), true, responder_valid)
+			if yes_ah == "invalidated" or not responder_valid.call():
 				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
@@ -6325,7 +6363,8 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			var action_card: CardBase
 			if yes_ah == "skill":
 				var paid = await _pay_yes_ah_cost_result(p, true)
-				if paid == CHOICE_INVALID or not valid.call():
+				if paid == 1: paid_response[0] = true
+				if paid == CHOICE_INVALID or not responder_valid.call():
 					return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 				if paid == 0:
 					_sync_all_ui()
@@ -6337,14 +6376,15 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 					continue
 				deck.discard(used_card)
 				action_card = used_card
+				paid_response[0] = true
 			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
 			var revealed = await _maybe_ask_reveal()
-			if revealed == CHOICE_INVALID or not valid.call():
+			if revealed == CHOICE_INVALID or not responder_valid.call():
 				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": "", "card_action": action}
-			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name, "card_action": action}
+			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name, "actor": p, "card_action": action}
 	return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 
 # 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
