@@ -43,8 +43,11 @@ func run(suite):
 			game._ai_response_override = func(view, kind, options):
 				if mode == "restart_cost" and kind == "rescue": game.reset_game_over_state()
 				if kind == "nullification":
-					if mode == "invalid_after_cost": valid[0] = false
-					if view.actor == 4 and options.has(CardData.CardSubType.NULLIFICATION) and mode in ["even_refuse", "even_kill", "even_empty"]: return CardData.CardSubType.NULLIFICATION
+					# Q46 first asks the caster's downstream actors. This fixture
+					# explicitly has them decline until the promised virtual USE
+					# has paid its lethal cost; it never assumes fixed A priority.
+					if mode == "invalid_after_cost" and user.is_dead(): valid[0] = false
+					if user.is_dead() and view.actor == 4 and options.has(CardData.CardSubType.NULLIFICATION) and mode in ["even_refuse", "even_kill", "even_empty"]: return CardData.CardSubType.NULLIFICATION
 				return -1
 			# Cost rescue goes through the real dying window. No automatic rescue or weapon-save fixture.
 			game._rescue_choice_override = func(_rescuer, _victim, _options):

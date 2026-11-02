@@ -1310,6 +1310,8 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
 			var valid = func(): return generation == _dying_lifecycle_generation and _has_damage_target_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
+			# Mountain order is settled by Q45; ordinary-holder delayed-card
+			# origin awaits Q47 and retains the existing compatibility path.
 			var terrain_origin: Player
 			if _is_mountain_body(p): terrain_origin = p
 			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, terrain_origin)
@@ -3877,7 +3879,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 			continue
 
 		# 无懈可击：效果即将对目标生效前，询问所有角色
-		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name])
+		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name], Callable(), p, target)
 		if nullified == NullificationOutcome.INVALIDATED:
 			_abandon_card_actions(actions)
 			return
@@ -4047,7 +4049,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 			_update_debug("%s 处于【下跪】状态，【桃园结义】对其无效" % target.player_name)
 			continue
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4106,7 +4108,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4172,7 +4174,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name])
+		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4433,7 +4435,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		return
 	second_confirmed[0] = true
 	_history_event("target", "%s 指定 %s 对 %s 出杀" % [user.player_name, first.player_name, second.player_name], user, [first, second])
-	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid)
+	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid, user, first)
 	if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 		_abandon_card_actions(actions)
 		return
@@ -4723,7 +4725,7 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 		return
 
 	# 无懈可击：效果即将对目标生效前
-	var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name], valid)
+	var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, card_name, target.player_name], valid, attacker, target)
 	if nullified == NullificationOutcome.INVALIDATED:
 		_abandon_card_actions(actions)
 		return
@@ -5892,7 +5894,7 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 			return
 		if not _has_character_body(t) or not t.is_alive() or _is_kneeling(t) or not _mountain_effect_reaches(origin,t): continue
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name])
+		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name], Callable(), p, t)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -5958,7 +5960,7 @@ func _play_duel(attacker: Player, target: Player):
 	_update_debug("%s 对 %s 发起【决斗】！" % [attacker.player_name, target.player_name])
 
 	# 无懈可击：决斗即将对目标生效前
-	var nullified = await _ask_nullification_chain_result("%s的【决斗】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, target.player_name])
+	var nullified = await _ask_nullification_chain_result("%s的【决斗】即将对 %s 生效，是否打出一张【无懈可击】？" % [attacker.player_name, target.player_name], Callable(), attacker, target)
 	if nullified == NullificationOutcome.INVALIDATED:
 		return CHOICE_INVALID
 	if nullified == NullificationOutcome.NULLIFIED:
@@ -6251,16 +6253,17 @@ enum NullificationOutcome { PASSED, NULLIFIED, INVALIDATED }
 func _ask_nullification_chain(desc: String) -> bool:
 	return await _ask_nullification_chain_result(desc) == NullificationOutcome.NULLIFIED
 
-func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), terrain_origin: Player = null) -> NullificationOutcome:
+func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), first_origin: Player = null, first_region: Player = null) -> NullificationOutcome:
 	var pending: bool = false        # 当前是否有一张生效中的无懈
 	var actions: Array[CardActionEvent] = []
 	var round_desc: String = desc
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
-	# Q42/Q45 terrain path only. Ordinary-card first-round order awaits Q46.
+	# Q42/Q45/Q46: each effect supplies its actual use/judgment origin and
+	# target region. Terrain judgment initially admits both sides.
 	# Scope is local to this chain, never an input owner or display-name lookup.
 	var scope: Dictionary = {}
-	if terrain_origin != null: scope = {"origin":terrain_origin,"region":null}
+	if first_origin != null: scope = {"origin":first_origin,"region":_retained_effect_anchor(first_region)}
 	while true:
 		var reply = await _ask_nullification_round_result(round_desc, allowed, scope)
 		if reply.get("card_action") is CardActionEvent:
@@ -6288,7 +6291,7 @@ func _ask_nullification_round(desc: String) -> String:
 		_abandon_card_actions([reply.card_action])
 	return reply.actor_name if reply.outcome == NullificationOutcome.NULLIFIED else ""
 
-func _terrain_nullification_allows(p: Player, scope: Dictionary) -> bool:
+func _nullification_scope_allows(p: Player, scope: Dictionary) -> bool:
 	if scope.is_empty(): return true
 	if not _has_character_body(p): return false
 	var anchor: Player = scope.region
@@ -6304,7 +6307,7 @@ func _terrain_nullification_allows(p: Player, scope: Dictionary) -> bool:
 	var view = mountain_space.snapshot(live)
 	return view != null and view.same_region(anchor.seat_index,destination.seat_index)
 
-func _terrain_nullification_order(scope: Dictionary) -> Array[Player]:
+func _nullification_response_order(scope: Dictionary) -> Array[Player]:
 	if scope.is_empty(): return _character_order_from(players[0])
 	var circle = _burning_camp_circle(scope.origin)
 	var start = circle.find(scope.origin)
@@ -6312,7 +6315,7 @@ func _terrain_nullification_order(scope: Dictionary) -> Array[Player]:
 	if start < 0: return order
 	for offset in range(1,circle.size()+1):
 		var body = circle[(start+offset)%circle.size()]
-		if _has_character_body(body) and not body.is_dead() and _terrain_nullification_allows(body,scope): order.append(body)
+		if _has_character_body(body) and not body.is_dead() and _nullification_scope_allows(body,scope): order.append(body)
 	return order
 
 func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(), scope: Dictionary = {}) -> Dictionary:
@@ -6322,7 +6325,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
 			and (not allowed.is_valid() or allowed.call())
-	for p in _terrain_nullification_order(scope):
+	for p in _nullification_response_order(scope):
 		if not valid.call():
 			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		if not p.is_alive():
@@ -6331,7 +6334,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 		if _is_kneeling(p):
 			continue
 		var paid_response: Array[bool] = [false]
-		var responder_valid = func(): return valid.call() and _terrain_nullification_allows(p,scope) \
+		var responder_valid = func(): return valid.call() and _nullification_scope_allows(p,scope) \
 			and (scope.is_empty() or p.is_alive() or (paid_response[0] and p.is_dead()))
 		if not responder_valid.call(): continue
 		var snapshot = HandSelection.new(p)

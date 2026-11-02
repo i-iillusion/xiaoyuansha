@@ -45,7 +45,13 @@ func run(suite):
 				if mode == "nullified":
 					game.players[3].determined_cards.append(CardBase.create(CardData.CardSubType.NULLIFICATION))
 					game._ai_response_override = func(_view, kind, options):
-						return CardData.CardSubType.NULLIFICATION if kind == "nullification" and options.has(CardData.CardSubType.NULLIFICATION) else -1
+						if kind == "nullification" and options.has(CardData.CardSubType.NULLIFICATION):
+							# Q46 may reach downstream AI before A's first prompt.
+							# Keep the same deferred-marker assertion at that real
+							# payment boundary, rather than requiring fixed A priority.
+							suite.check(actor.prep_tokens == 0, "F02b-1d-b：生效前/铁索逐目标无懈期间仍0")
+							return CardData.CardSubType.NULLIFICATION
+						return -1
 				game._zone_pick_override = func(): return "hand"
 				if sub == CardData.CardSubType.IRON_CHAIN:
 					var targets: Array[Player] = [game.players[1], game.players[2]]

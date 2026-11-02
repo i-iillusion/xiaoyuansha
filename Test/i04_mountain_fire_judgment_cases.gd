@@ -178,25 +178,27 @@ func disappeared_center(t):
 func lightning_lan(t):
 	var helper = load("res://Test/i04_aoe_region_cases.gd").new()
 	var bridge = helper.bridge_fixture(t)
-	helper.click(t,bridge,0,"山甲 玩家5→玩家1；山乙 玩家1→玩家2")
+	# Q42: E shares A's region. B across the first mountain cannot counter
+	# A's ordinary Lightning judgment; use legal remote E instead.
+	helper.click(t,bridge,0,"山甲 玩家1→玩家2；山乙 玩家4→玩家5")
 	var game = bridge.game
 	load("res://Test/i04_burning_interception_cases.gd").new().prepare(game)
 	game._nullify_override = Callable()
-	game.players[1].hand.append(null)
+	game.players[4].hand.append(null)
 	var original = CardBase.create(CardData.CardSubType.LIGHTNING)
 	game.players[0].judgment_cards.append(original)
 	var result: Array = []
 	var drive = func(): result.append(await game._run_judgment(game.players[0],false))
 	drive.call()
 	for i in 3: await t.process_frame
-	var token = load("res://Test/i04_movement_cases.gd").new().find(bridge.snapshot(1),"无懈可击")
-	t.check(token != "" and bridge.input_owner() == 1 and not bridge.submit(0,token), "I04 Q38 actual Lightning counter belongs only to responding human")
-	t.check(bridge.submit(1,token), "I04 Q38 human pays a real arbitrary card as Nullification")
+	var token = load("res://Test/i04_movement_cases.gd").new().find(bridge.snapshot(4),"无懈可击")
+	t.check(token != "" and bridge.input_owner() == 4 and not bridge.submit(0,token) and not bridge.submit(1,token), "I04 Q38/Q42 actual Lightning counter belongs only to legal same-region E")
+	t.check(bridge.submit(4,token), "I04 Q38 legal remote E pays a real arbitrary card as Nullification")
 	for i in 3: await t.process_frame
 	var mountain = game._burning_camp_neighbors(game.players[0])[0]
 	t.check(result == [true] and mountain.judgment_cards == [original] and game.players[0].judgment_cards.is_empty() and mountain.hp == 5, "I04 Q38 actual nullified Lightning moves its original into adjacent mountain without damage")
-	t.check(game.players[1].hand_size() == 0 and game._card_action_serial == 1 and not game.deck._discard.has(original), "I04 Q38 counter payment occurs once; transfer itself creates no USE or discard")
-	t.check(bridge.input_owner() == 0 and bridge.acting_unit() == "" and not bridge.submit(1,token), "I04 Q38 settled counter restores parent actor and rejects replay")
+	t.check(game.players[4].hand_size() == 0 and game._card_action_serial == 1 and not game.deck._discard.has(original), "I04 Q38 counter payment occurs once; transfer itself creates no USE or discard")
+	t.check(bridge.input_owner() == 0 and bridge.acting_unit() == "" and not bridge.submit(4,token), "I04 Q38 settled counter restores parent actor and rejects replay")
 	game._game_over = true
 	bridge.queue_free()
 	await t.process_frame
