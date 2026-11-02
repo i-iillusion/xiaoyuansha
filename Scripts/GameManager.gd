@@ -1234,12 +1234,15 @@ func _last_pending_judgment(p: Player, deferred: Array[CardBase]) -> CardBase:
 	return null
 
 func _move_lightning(p: Player, card: CardBase) -> Player:
-	# UNIT-20: follow actual character order, but skip a dragon still hidden
-	# from the current judgment holder. This is movement, never a new card USE.
-	var circle = _character_order_from(p)
+	# Q38: terrain participates in spatial transfer. Skipping an occupied
+	# mountain may cross its partition; this is movement, never a new USE.
+	# UNIT-20 still skips a dragon hidden from the current judgment holder.
+	var circle = _burning_camp_circle(p)
+	var origin = circle.find(p)
 	for offset in range(1, circle.size()):
-		var target = circle[offset]
-		if not target.is_alive() or _is_kneeling(target) or not _can_target_body(p, target) \
+		var target = circle[(origin + offset) % circle.size()]
+		if not _has_damage_target_body(target) or not target.is_alive() or _is_kneeling(target) \
+			or (not _is_mountain_body(target) and not _can_target_body(p, target)) \
 			or _has_delayed_card(target, card.sub_type): continue
 		target.judgment_cards.append(card)
 		_public_result("【闪电】原牌移至 %s 的判定区，等待其判定" % target.player_name)
@@ -1264,9 +1267,8 @@ func _run_judgment(p: Player, granted: bool) -> bool:
 		# 等待无懈期间原牌仍归判定区；失效不丢牌，也不恢复已被独立效果移走的牌。
 		var card = _last_pending_judgment(p, deferred)
 		if card == null: break
-		# I04c-2d-4b-1 implements mountain Burning Camp only. Lightning's
-		# transfer path awaits Q38; this is a capability guard, not a card ban.
-		if _is_mountain_body(p) and card.sub_type != CardData.CardSubType.BURNING_CAMP: return false
+		# Q34: terrain only has these two delayed-card judgments.
+		if _is_mountain_body(p) and card.sub_type not in [CardData.CardSubType.BURNING_CAMP, CardData.CardSubType.LIGHTNING]: return false
 		var nullified = NullificationOutcome.PASSED
 		var needs_nullification = card.sub_type in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.BURNING_CAMP] \
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
@@ -6025,11 +6027,12 @@ func _resolve_burning_camp_result(center: Player, amount: int) -> Dictionary:
 	var valid = func():
 		if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation: return false
 		if _has_damage_target_body(center): return true
-		# Non-death disappearance during transferred center damage awaits Q39.
-		# Rejecting that continuation is a development guard, not a game ruling.
+		# Q39: an established fire survives the carrier's disappearance when
+		# its summoner finally dies. Retain only the effect's original position.
 		var entry = unit_registry.entry(unit_registry.id_for(center)) if terrain else {}
-		return not entry.is_empty() and center.is_dead() and not center.unit_disappeared \
-			and entry.removed and entry.reason == UnitRegistry.Removal.NORMAL_DEATH
+		if entry.is_empty() or not entry.removed: return false
+		return (center.is_dead() and not center.unit_disappeared and entry.reason == UnitRegistry.Removal.NORMAL_DEATH) \
+			or (center.unit_disappeared and entry.reason == UnitRegistry.Removal.SUMMONER_LOST)
 	if not valid.call():
 		result.outcome = CHOICE_INVALID
 		return result

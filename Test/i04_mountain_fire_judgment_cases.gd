@@ -20,8 +20,8 @@ func run(t):
 			owner.equip_card_to_slot("armor",CardBase.create(CardData.CardSubType.SAGE_PROTECTION))
 			owner.sage_activated = true
 			game._sage_save_override = func(): return true
-		# A legal previously-received Lightning is a cleanup fixture only, not
-		# proof of its still-unimplemented transfer or normal judgment path.
+		# Here Lightning is only a cleanup fixture; its actual transfer and
+		# supported judgment paths are exercised separately below.
 		var remaining = CardBase.create(CardData.CardSubType.LIGHTNING) if mode == "remaining_card" else null
 		if remaining != null: source.judgment_cards.append(remaining)
 		var original = helper.put_fire(source)
@@ -53,6 +53,8 @@ func run(t):
 		await helper.dispose(t,game)
 	await expired(t)
 	await lan(t)
+	await lightning(t)
+	await disappeared_center(t)
 	GameManager.selected_players=saved[0]
 	GameManager.selected_mode=saved[1]
 	GameManager.selected_general=saved[2]
@@ -95,6 +97,106 @@ func lan(t):
 	for i in 3: await t.process_frame
 	t.check(result == [true] and mountain.hp == 3 and game.players[0].hp == 5 and game.players[1].hp == 4, "I04 explicit terrain judgment completes actual remote-style counter, center and neighbor damage")
 	t.check(game.deck._discard.count(original) == 1 and bridge.input_owner() == 0 and bridge.acting_unit() == "" and not bridge.submit(1,token), "I04 settled terrain judgment restores the suspended player's controls and rejects replay")
+	game._game_over = true
+	bridge.queue_free()
+	await t.process_frame
+
+func lightning(t):
+	var helper = load("res://Test/i04_burning_interception_cases.gd").new()
+	for mode in ["receive","skip","wrap","hit","lethal"]:
+		var game = fixture(t)
+		var owner = game.players[0]
+		var mountain = game._burning_camp_neighbors(owner)[0]
+		var original = CardBase.create(CardData.CardSubType.LIGHTNING)
+		original.source_seat = 3
+		if mode in ["receive","skip","wrap"]:
+			# Exercise spatial movement independently of counter payment; the LAN
+			# case below covers the actual nullification input and original card.
+			if mode == "skip": mountain.judgment_cards.append(CardBase.create(CardData.CardSubType.LIGHTNING))
+			if mode == "wrap":
+				for body in game._burning_camp_circle(owner):
+					if body != owner: body.judgment_cards.append(CardBase.create(CardData.CardSubType.LIGHTNING))
+			var recipient = game._move_lightning(owner,original)
+			var expected = mountain if mode == "receive" else (game.players[1] if mode == "skip" else owner)
+			t.check(recipient == expected and recipient.judgment_cards.count(original) == 1, "I04 Q38 Lightning uses actual terrain order, skips duplicates across partition or wraps: "+mode)
+			t.check(original.source_seat == 3 and not game.deck._discard.has(original) and game._card_action_serial == 0, "I04 Q38 transfer preserves original resource and metadata without USE")
+		else:
+			if mode == "lethal": mountain.hp = 4
+			mountain.judgment_cards.append(original)
+			var frame = [game.turn_manager.turn_id,game.turn_manager.phase_id,game.turn_manager.current_player_idx,game.turn_manager.current_unit_id]
+			t.check(await game._run_judgment(mountain,false), "I04 Q34 mountain resolves its supported Lightning judgment: "+mode)
+			t.check(mountain.hp == (1 if mode == "hit" else 0) and mountain.is_dead() == (mode == "lethal"), "I04 mountain takes three thunder plus its one elemental bonus")
+			t.check(owner.hp == (6 if mode == "hit" else 5) and owner.max_hp == owner.hp and owner.jim_rebuild_pending == (0 if mode == "hit" else 1), "I04 lethal Lightning commits one mountain death and immediate Zaoshan cost")
+			t.check(game.deck._discard.count(original) == 1 and mountain.judgment_cards.is_empty() and game._card_action_serial == 0, "I04 mountain Lightning discards once without new card USE")
+			t.check(frame == [game.turn_manager.turn_id,game.turn_manager.phase_id,game.turn_manager.current_player_idx,game.turn_manager.current_unit_id] and ActorIdentity.key_for(game.players,game.unit_registry,mountain) == null, "I04 Lightning judgment cannot grant a terrain actor or whole turn")
+		await helper.dispose(t,game)
+	for wrap in [false,true]:
+		var game = fixture(t)
+		var owner = game.players[0]
+		var mountain = game._burning_camp_neighbors(owner)[0]
+		var original = CardBase.create(CardData.CardSubType.LIGHTNING)
+		mountain.judgment_cards.append(original)
+		if wrap:
+			for body in game._burning_camp_circle(mountain):
+				if body != mountain: body.judgment_cards.append(CardBase.create(CardData.CardSubType.LIGHTNING))
+		owner.hand.append(null)
+		var offered: Array = []
+		game._nullify_override = func(): offered.append(true); return offered.size() == 1
+		t.check(await game._run_judgment(mountain,false), "I04 mountain Lightning nullifies through a paid counter: wrap="+str(wrap))
+		var recipient = mountain if wrap else game.players[1]
+		t.check(recipient.judgment_cards.count(original) == 1 and mountain.hp == 5 and owner.hand_size() == 0 and game._card_action_serial == 1, "I04 nullified terrain Lightning transfers once, or defers its wrapped original without rejudging")
+		t.check(not game.deck._discard.has(original) and offered.size() == 2, "I04 wrapped Lightning does not restart counter/payment loop during the same judgment")
+		await helper.dispose(t,game)
+	await lightning_lan(t)
+
+func disappeared_center(t):
+	# Exact Q39 layout: mountain at A/B and the other at C/D, not a
+	# pre-damage neighbor snapshot. A's death removes both before selection.
+	var game = load("res://Test/i04_initial_cases.gd").new().fixture(t,5,true,func(_p,options,_v): return options.find([[2,3],[0,1]]))
+	load("res://Test/i04_burning_interception_cases.gd").new().prepare(game)
+	var owner = game.players[0]
+	var mountain = game._burning_camp_neighbors(owner)[0]
+	var other = game.unit_registry.all_bodies().filter(func(body): return body != mountain)[0]
+	owner.hp = 1
+	owner.hand.append(null)
+	game._sacrifice_actor_override = func(p,target,_amount): return p == owner and target == mountain
+	var original = load("res://Test/i04_burning_interception_cases.gd").new().put_fire(mountain)
+	var deaths: Array = []
+	game.unit_death_committed.connect(func(id): deaths.append(id))
+	t.check(await game._run_judgment(mountain,false), "I04 Q39 fire completes after paid Sacrifice kills summoner and removes its carrier")
+	t.check(owner.is_dead() and owner.hand_size() == 0 and owner.max_hp == 6 and owner.jim_rebuild_pending == 0, "I04 Q39 owner pays Sacrifice and dies without fake Zaoshan cost")
+	t.check(mountain.hp == 5 and not mountain.is_dead() and mountain.unit_disappeared and other.unit_disappeared and deaths.is_empty(), "I04 Q39 uninjured carrier disappears, never commits a unit death")
+	t.check(game.unit_registry.entry(game.unit_registry.id_for(mountain)).reason == UnitRegistry.Removal.SUMMONER_LOST and game.mountain_space.ids().is_empty(), "I04 Q39 original position survives only inside the established effect")
+	for seat in [1,4]:
+		t.check(game.players[seat].hp == game.players[seat].max_hp-1 and game.players[seat].judgment_cards.size() == 1, "I04 Q39 retained center finds living B/E and continues damage and spread")
+	t.check(game.players[2].hp == game.players[2].max_hp and game.players[3].hp == game.players[3].max_hp and game.deck._discard.count(original) == 1, "I04 Q39 no extra recipients or duplicate original discard")
+	var before = game.players.map(func(p): return p.hp)
+	var rejected = await game._resolve_burning_camp_result(mountain,1)
+	t.check(rejected.outcome == game.CHOICE_INVALID and before == game.players.map(func(p): return p.hp), "I04 Q39 retired positive-HP carrier cannot start a fresh fire")
+	await load("res://Test/i04_burning_interception_cases.gd").new().dispose(t,game)
+
+func lightning_lan(t):
+	var helper = load("res://Test/i04_aoe_region_cases.gd").new()
+	var bridge = helper.bridge_fixture(t)
+	helper.click(t,bridge,0,"山甲 玩家5→玩家1；山乙 玩家1→玩家2")
+	var game = bridge.game
+	load("res://Test/i04_burning_interception_cases.gd").new().prepare(game)
+	game._nullify_override = Callable()
+	game.players[1].hand.append(null)
+	var original = CardBase.create(CardData.CardSubType.LIGHTNING)
+	game.players[0].judgment_cards.append(original)
+	var result: Array = []
+	var drive = func(): result.append(await game._run_judgment(game.players[0],false))
+	drive.call()
+	for i in 3: await t.process_frame
+	var token = load("res://Test/i04_movement_cases.gd").new().find(bridge.snapshot(1),"无懈可击")
+	t.check(token != "" and bridge.input_owner() == 1 and not bridge.submit(0,token), "I04 Q38 actual Lightning counter belongs only to responding human")
+	t.check(bridge.submit(1,token), "I04 Q38 human pays a real arbitrary card as Nullification")
+	for i in 3: await t.process_frame
+	var mountain = game._burning_camp_neighbors(game.players[0])[0]
+	t.check(result == [true] and mountain.judgment_cards == [original] and game.players[0].judgment_cards.is_empty() and mountain.hp == 5, "I04 Q38 actual nullified Lightning moves its original into adjacent mountain without damage")
+	t.check(game.players[1].hand_size() == 0 and game._card_action_serial == 1 and not game.deck._discard.has(original), "I04 Q38 counter payment occurs once; transfer itself creates no USE or discard")
+	t.check(bridge.input_owner() == 0 and bridge.acting_unit() == "" and not bridge.submit(1,token), "I04 Q38 settled counter restores parent actor and rejects replay")
 	game._game_over = true
 	bridge.queue_free()
 	await t.process_frame
