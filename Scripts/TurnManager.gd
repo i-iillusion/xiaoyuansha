@@ -37,6 +37,9 @@ var current_unit_id: String = "":
 		if value != current_unit_id: _context_revision += 1
 		current_unit_id = value
 var _ordinary_selecting := false
+# Last completed whole-turn body. Terrain passage uses this spatial origin;
+# it is not an actor, quota, extra turn, or per-round terrain visited set.
+var ordinary_origin: Variant = null
 var _extra_frames: Array[Dictionary] = []
 var _turn_sequence := 0
 # Explicit state ownership for suspended turns, not Player/general-card state.
@@ -201,6 +204,7 @@ func get_play_actor_key() -> Variant:
 
 func start_game():
 	_context_revision += 1
+	ordinary_origin = null
 	current_unit_id = ""
 	current_player_idx = 0
 	_extra_frames.clear()
@@ -224,6 +228,12 @@ func _enter_ordinary():
 	_ordinary_selecting = false
 	if selected < 0 or (rounds != null and not rounds.select_pending(selected)): return
 	current_player_idx = selected
+	# A terrain judgment may kill the already-queued nominee. Its spatial
+	# position is passed, but no START, fresh turn counters or attached actor
+	# belongs to that dead player. Continue from this passed position.
+	if rounds != null and live_seats.is_valid() and not live_seats.call().has(selected):
+		await next_turn()
+		return
 	_begin_turn()
 	_change_phase(Phase.START)
 
@@ -273,6 +283,7 @@ func advance_phase():
 func next_turn():
 	if _ordinary_selecting: return
 	_context_revision += 1
+	var finished_actor = get_turn_actor_key()
 	# Q8: only a completed whole ordinary turn admits its attached actor.
 	# Standalone phase completion never reaches this boundary. Hold the ordinary
 	# ledger frame until the unit finishes, including a flipped/skipped unit.
@@ -292,6 +303,7 @@ func next_turn():
 		_context_revision += 1
 		if not _standalone_play_frame.is_empty(): _standalone_play_frame.revision = _context_revision
 		return
+	ordinary_origin = finished_actor
 	if rounds != null:
 		rounds.finish()
 		current_player_idx = rounds.begin_next(live_seats.call())

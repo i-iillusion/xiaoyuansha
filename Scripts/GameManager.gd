@@ -460,6 +460,7 @@ var _dying_contexts: Dictionary = {}
 var _dying_lifecycle_generation: int = 0
 # Judgment-scoped spatial origins only; terrain never gets ActorIdentity/input.
 var _mountain_judgment_contexts: Array[Dictionary] = []
+var _timeweave_spatial_relocation: Dictionary = {}
 var _sage_save_serial: int = 0
 var _sage_save_pending: Dictionary = {}
 var _rescue_choice_serial: int = 0
@@ -1091,6 +1092,7 @@ func _retire_final_unit(body: Player) -> bool:
 	return true
 
 func _reset_unit_registry() -> void:
+	_timeweave_spatial_relocation = {}
 	_jim_opening_pending = {}
 	_jim_rebuild_pending = {}
 	_jim_mountain_skill_pending = {}
@@ -2308,7 +2310,10 @@ func _ensure_mountain_space() -> bool:
 
 func _on_mountain_spatial_relocated(seat: int, before: int, ledger_id: int) -> void:
 	if _mountain_ledger == null or _mountain_ledger.get_instance_id() != ledger_id or _mountain_ledger != turn_manager.rounds: return
-	mountain_space.relocate_before(seat, before)
+	var destination: Variant = before
+	if _timeweave_spatial_relocation.get("seat",-1) == seat and _timeweave_spatial_relocation.get("before",-1) == before:
+		destination = _timeweave_spatial_relocation.marker
+	mountain_space.relocate_before(seat, destination)
 
 # Internal body/position transaction, not an authorization to use a Jim skill.
 # I04c supplies the skill window, payment, limits and post-death permit.
@@ -2388,6 +2393,129 @@ func _spatial_from(owner: Player) -> Array[Player]:
 	return result
 
 func _choose_ordinary_actor(nominee: int) -> int:
+	if _mountain_rules_enabled and not mountain_space.ids().is_empty():
+		return await _choose_spatial_ordinary_actor(nominee)
+	return await _choose_ordinary_actor_without_terrain(nominee)
+
+# Complete the spatial interval before entering another ordinary START. A
+# circle is local to this passage, not a round-wide visited list (Q36).
+func _choose_spatial_ordinary_actor(nominee: int) -> int:
+	var ledger = turn_manager.rounds
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+		and revision == turn_manager.get_context_revision() and ledger == turn_manager.rounds
+	var origin: Player
+	var key = turn_manager.ordinary_origin
+	if typeof(key) == TYPE_INT and key >= 0 and key < players.size(): origin = players[key]
+	elif typeof(key) == TYPE_STRING: origin = unit_registry.entry(key).get("body")
+	if origin == null:
+		var opening = await _offer_spatial_timeweave(nominee,nominee,valid)
+		return opening.seat
+	var circle = _burning_camp_circle(origin)
+	var start = circle.find(origin)
+	if start < 0: return -1
+	var seeking_nominee = true
+	for offset in range(1,circle.size()+1):
+		if not valid.call(): return -1
+		var body = circle[(start+offset)%circle.size()]
+		if _is_mountain_body(body):
+			if not _has_damage_target_body(body) or not body.is_alive(): continue
+			var decision = await _offer_spatial_timeweave(ledger.current().seat,unit_registry.id_for(body),valid)
+			if decision.seat < 0 or decision.accept: return decision.seat
+			if not valid.call(): return -1
+			# A phase record, without assigning terrain to the suspended turn's
+			# acting/input fields or resetting any player's turn counters.
+			action_history.append("phase","%s · 判定" % body.player_name,turn_manager.turn_id,
+				TurnManager.Phase.JUDGE,-1,[],{"actor_unit":unit_registry.id_for(body)})
+			if not await _run_judgment(body,false) or not valid.call(): return -1
+		elif players.has(body) and ledger.pending_seats().has(body.seat_index):
+			# A new round still starts at its fixed live head, even when Sunny's
+			# permanent placement leaves other fresh quotas before that head.
+			if body.seat_index == nominee: seeking_nominee = false
+			if seeking_nominee: continue
+			# Pass a nominee killed during terrain effects without a live turn
+			# or replaying the interval that was already judged.
+			if body.is_dead(): return body.seat_index
+			if not ledger.select_pending(body.seat_index): return -1
+			var decision = await _offer_spatial_timeweave(body.seat_index,body.seat_index,valid)
+			if decision.seat < 0 or not decision.defer: return decision.seat
+	return -1
+
+# A mountain boundary is approached from its preceding region. Adjacent
+# mountains may enclose an empty region; no player can insert into that cell.
+func _timeweave_boundary_reaches(actor: Player, boundary: Variant) -> bool:
+	var view = _mountain_snapshot()
+	if view == null: return false
+	if typeof(boundary) == TYPE_INT: return view.same_region(actor.seat_index,boundary)
+	var ring = mountain_space.markers()
+	var index = ring.find(boundary)
+	if index < 0: return false
+	for step in range(1,ring.size()):
+		var previous = ring[posmod(index-step,ring.size())]
+		if typeof(previous) == TYPE_STRING: return false
+		if players[previous].is_alive(): return view.same_region(actor.seat_index,previous)
+	return false
+
+func _timeweave_fixed_successor(boundary: Variant) -> int:
+	if typeof(boundary) == TYPE_INT: return boundary
+	var ring = mountain_space.markers()
+	var index = ring.find(boundary)
+	if index < 0: return -1
+	for offset in range(1,ring.size()):
+		var marker = ring[(index+offset)%ring.size()]
+		if typeof(marker) == TYPE_INT: return marker
+	return -1
+
+func _offer_spatial_timeweave(nominee: int, boundary: Variant, passage_valid: Callable) -> Dictionary:
+	var result = {"seat":nominee,"accept":false,"defer":false}
+	var ledger = turn_manager.rounds
+	var candidates: Array = _timeweave_candidates_override.call() if _timeweave_candidates_override.is_valid() else \
+		players.filter(func(p): return p.general_name == "桑尼·泰姆" and GeneralData.get_implementation_status(p.general_name) == "prototype")
+	for actor in candidates:
+		if not _has_character_body(actor) or not actor.is_alive() or not ledger.pending_seats().has(actor.seat_index): continue
+		if not _timeweave_boundary_reaches(actor,boundary): continue
+		var own_position = typeof(boundary) == TYPE_INT and boundary == actor.seat_index and actor.seat_index == nominee
+		var live_pending = ledger.pending_seats().filter(func(seat): return players[seat].is_alive())
+		if live_pending.size() == 1:
+			if own_position:
+				result.accept = true
+				return result
+			# The last quota must start at its own position. Do not open an
+			# optional, indefinitely deferrable insertion before intervening hills.
+			continue
+		var allowed = func(): return passage_valid.call() and actor.is_alive() and ledger.pending_seats().has(actor.seat_index) \
+			and ledger.current().get("seat",-1) == nominee and _timeweave_boundary_reaches(actor,boundary)
+		var choice: int
+		if _timeweave_choice_override.is_valid(): choice = await _timeweave_choice_override.call(actor,nominee)
+		elif not _is_human(actor): choice = 0
+		else:
+			_set_input_player(actor)
+			choice = await _show_choice_popup("【时光交错】本轮是否现在行动？",["现在行动","不插入，继续等待"],allowed,false)
+		if choice == CHOICE_INVALID or not allowed.call(): result.seat = -1; return result
+		if choice != 0:
+			if own_position: result.defer = true; return result
+			continue
+		var moved = true
+		var before = _timeweave_fixed_successor(boundary)
+		if before < 0: result.seat = -1; return result
+		if actor.seat_index != before:
+			var relocation = {"seat":actor.seat_index,"before":before,"marker":boundary}
+			_timeweave_spatial_relocation = relocation
+			moved = ledger.relocate_before(actor.seat_index,before)
+			if is_same(_timeweave_spatial_relocation,relocation): _timeweave_spatial_relocation = {}
+		elif typeof(boundary) == TYPE_STRING:
+			moved = mountain_space.relocate_before(actor.seat_index,boundary)
+		if not moved or not passage_valid.call(): result.seat = -1; return result
+		_layout_player_panels()
+		_public_result("%s 发动时光交错，插入本轮普通回合。" % actor.player_name)
+		result.seat = actor.seat_index
+		result.accept = true
+		return result
+	return result
+
+# Existing I01 path remains unchanged when terrain is absent/disabled.
+func _choose_ordinary_actor_without_terrain(nominee: int) -> int:
 	if _game_over: return -1
 	var ledger = turn_manager.rounds
 	var candidates: Array = []

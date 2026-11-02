@@ -107,8 +107,9 @@ func remove(id: String) -> bool:
 
 # Mirrors the already-authorized RoundLedger operation. Removing just the
 # player leaves the mountains at their original spatial positions (I04-Q3).
-func relocate_before(seat: int, before: int) -> bool:
-	if seat == before or not _fixed.has(seat) or not _fixed.has(before): return false
+func relocate_before(seat: int, before: Variant) -> bool:
+	if typeof(before) not in [TYPE_INT,TYPE_STRING]: return false
+	if is_same(seat,before) or not _fixed.has(seat) or not _ring.has(before): return false
 	_ring.erase(seat)
 	_ring.insert(_ring.find(before), seat)
 	return true
