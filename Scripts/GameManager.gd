@@ -5912,8 +5912,11 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 	if element == EffectChain.DamageType.PHYSICAL or not damaged.chained:
 		return
 	var linked: Array[Player] = []
+	# Q44: propagation originates at the body that actually took damage,
+	# independently of its damage source (which may be absent or retired).
+	var spatial_origin = _retained_effect_anchor(damaged)
 	for other in _character_order_from(damaged):
-		if other != damaged and other.is_alive() and other.chained:
+		if other != damaged and other.is_alive() and other.chained and _mountain_effect_reaches(spatial_origin,other):
 			linked.append(other)
 	_update_debug("%s 受到属性伤害，触发【铁索连环】！" % damaged.player_name)
 	# 先解除本次连环，反伤等嵌套伤害不会重入同一传导。
@@ -5923,7 +5926,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 	for other in linked:
 		if _game_over:
 			break
-		if not other.is_alive() or _is_kneeling(other):
+		if not _has_character_body(other) or not other.is_alive() or _is_kneeling(other) or not _mountain_effect_reaches(spatial_origin,other):
 			continue
 		var chain = _new_damage_chain(source, other, null, amount, element)
 		chain.skip_targeting = true
@@ -10784,6 +10787,9 @@ func _maybe_sacrifice(_source: Player, target: Player, amount: int, _element: Ef
 
 # 生产伤害链必须区分无人舍己与旧窗口失效，不能仅用null猜测。
 func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _element: EffectChain.DamageType, allowed: Callable = Callable()) -> Dictionary:
+	# Q43 supersedes Q16: terrain cannot be protected by Sacrifice, regardless
+	# of region, card/virtual-card payment, damage channel or willing responder.
+	if _is_mountain_body(target): return {"invalidated": false, "player": null}
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var valid = func():

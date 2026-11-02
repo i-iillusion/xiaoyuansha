@@ -170,7 +170,7 @@ func spear_terrain(t):
 
 func sacrifice_terrain(t):
 	for lan in [false,true]:
-		for sub in [CardData.CardSubType.STRIKE,CardData.CardSubType.FIRE_STRIKE]:
+		for sub in [CardData.CardSubType.STRIKE,CardData.CardSubType.FIRE_STRIKE,CardData.CardSubType.THUNDER_STRIKE]:
 			var bridge: LanGameBridge
 			var game: GameManager
 			if lan:
@@ -197,12 +197,12 @@ func sacrifice_terrain(t):
 			var actions: Array = []
 			game.card_action_committed.connect(func(event): actions.append(event))
 			await game.execute_card_on_target(mountain,sub)
-			t.check(offered.has(volunteer) and volunteer.hand_size() == cards-1 and volunteer.hp == hp-(1 if sub == CardData.CardSubType.STRIKE else 2), "I04 Q16 revised: willing volunteer pays once and takes independent damage: %s/%s" % [lan,sub])
-			t.check(mountain.hp == 5 and source.hand_size() == before_source-1, "I04 Q16 revised: protected terrain is unharmed; original Strike payment remains")
-			t.check(actions.size() == 2 and actions[0].sub_type == sub and actions[1].sub_type == CardData.CardSubType.SACRIFICE and actions[0].settlement_completed and actions[1].settlement_completed, "I04 Q16 revised: original Strike and real Sacrifice both complete")
-			t.check(game._pending_card_actions.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 revised: independent transfer leaves no abandoned receipts")
+			t.check(offered.is_empty() and volunteer.hand_size() == cards and volunteer.hp == hp, "I04 Q43 supersedes Q16: terrain never offers Sacrifice or charges a willing volunteer: %s/%s" % [lan,sub])
+			t.check(mountain.hp == (4 if sub == CardData.CardSubType.STRIKE else 3) and source.hand_size() == before_source-1, "I04 Q43 terrain receives actual Strike damage and original payment remains")
+			t.check(actions.size() == 1 and actions[0].sub_type == sub and actions[0].settlement_completed, "I04 Q43 only original Strike completes; no forbidden Sacrifice USE")
+			t.check(game._pending_card_actions.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q43 rejected protection leaves no abandoned receipts")
 			if lan:
-				t.check(bridge.snapshot(2).controls.is_empty(), "I04 Q16 revised: automatic-response fixture leaves no LAN rescue controls")
+				t.check(bridge.snapshot(2).controls.is_empty(), "I04 Q43 no remote protection controls appear for terrain")
 			game._game_over = true
 			if lan: bridge.queue_free()
 			else: game.queue_free()
@@ -233,6 +233,10 @@ func pending_strike(game, mountain, done):
 	await game.execute_card_on_target(mountain,CardData.CardSubType.STRIKE)
 	done.append(true)
 
+func pending_character_damage(game, victim, done):
+	await game._deal_damage_result(null,victim,1,EffectChain.DamageType.PHYSICAL)
+	done.append(true)
+
 func lan_sacrifice_choice(t):
 	var bridge = LanGameBridge.new()
 	t.root.add_child(bridge)
@@ -245,10 +249,19 @@ func lan_sacrifice_choice(t):
 	game._spawn_mountain_at(game.players[1],game.unit_registry.id_for(mountain),1)
 	var hand = game.players[2].hand_size()
 	var hp = game.players[2].hp
+	var source_hand = game.players[0].hand_size()
 	var done: Array = []
 	var paid = false
 	var stale = ""
 	pending_strike(game,mountain,done)
+	for i in 3: await t.process_frame
+	t.check(done == [true] and mountain.hp == 4 and game.players[2].hp == hp and game.players[2].hand_size() == hand and game.players[0].hand_size() == source_hand-1, "I04 Q43 real LAN terrain Strike finishes with damage, no forbidden protection payment")
+	t.check(game._choice_prompt_stack.is_empty() and bridge.snapshot(2).controls.is_empty(), "I04 Q43 no human Sacrifice prompt is created for mountain")
+	# Preserve the actual private response/input-authority test on a lawful
+	# ordinary-character damage boundary; Q43 only prohibits terrain protection.
+	done.clear()
+	var victim_hp = game.players[4].hp
+	pending_character_damage(game,game.players[4],done)
 	for step in 25:
 		if not done.is_empty(): break
 		var owner = bridge.input_owner()
@@ -264,7 +277,7 @@ func lan_sacrifice_choice(t):
 			break
 		await t.process_frame
 		await t.process_frame
-	t.check(paid and not done.is_empty() and mountain.hp == 5 and game.players[2].hp == hp-1 and game.players[2].hand_size() == hand-1, "I04 Q16 revised real LAN private command pays and protects terrain")
+	t.check(paid and not done.is_empty() and mountain.hp == 4 and game.players[4].hp == victim_hp and game.players[2].hp == hp-1 and game.players[2].hand_size() == hand-1, "I04 Q43 ordinary-character Sacrifice still accepts real private payment and prevents damage")
 	t.check(not stale.is_empty() and not bridge.submit(2,stale) and game._pending_card_actions.is_empty(), "I04 Q16 revised consumed Sacrifice token cannot replay")
 	game._game_over = true
 	await t.process_frame

@@ -150,26 +150,26 @@ func lightning(t):
 	await lightning_lan(t)
 
 func disappeared_center(t):
-	# Exact Q39 layout: mountain at A/B and the other at C/D, not a
-	# pre-damage neighbor snapshot. A's death removes both before selection.
+	# Q43 withdraws the old Q39 Sacrifice-to-mountain premise. Preserve legal
+	# disappearance continuation via a neighbor's Yudaxi killing the summoner.
 	var game = load("res://Test/i04_initial_cases.gd").new().fixture(t,5,true,func(_p,options,_v): return options.find([[2,3],[0,1]]))
 	load("res://Test/i04_burning_interception_cases.gd").new().prepare(game)
 	var owner = game.players[0]
 	var mountain = game._burning_camp_neighbors(owner)[0]
 	var other = game.unit_registry.all_bodies().filter(func(body): return body != mountain)[0]
 	owner.hp = 1
-	owner.hand.append(null)
-	game._sacrifice_actor_override = func(p,target,_amount): return p == owner and target == mountain
+	game.players[1].general_name = "里奥·普利威尔"
+	game.players[1].hp = 1
 	var original = load("res://Test/i04_burning_interception_cases.gd").new().put_fire(mountain)
 	var deaths: Array = []
 	game.unit_death_committed.connect(func(id): deaths.append(id))
-	t.check(await game._run_judgment(mountain,false), "I04 Q39 fire completes after paid Sacrifice kills summoner and removes its carrier")
-	t.check(owner.is_dead() and owner.hand_size() == 0 and owner.max_hp == 6 and owner.jim_rebuild_pending == 0, "I04 Q39 owner pays Sacrifice and dies without fake Zaoshan cost")
-	t.check(mountain.hp == 5 and not mountain.is_dead() and mountain.unit_disappeared and other.unit_disappeared and deaths.is_empty(), "I04 Q39 uninjured carrier disappears, never commits a unit death")
+	t.check(await game._run_judgment(mountain,false), "I04 Q43 legal neighbor Yudaxi removes summoner/carrier without aborting established fire")
+	t.check(owner.is_dead() and owner.hand_size() == 0 and owner.max_hp == 6 and owner.jim_rebuild_pending == 0, "I04 summoner dies to Yudaxi without forbidden Sacrifice or fake Zaoshan cost")
+	t.check(mountain.hp == 3 and not mountain.is_dead() and mountain.unit_disappeared and other.unit_disappeared and deaths.is_empty(), "I04 damaged carrier disappears, never commits a unit death")
 	t.check(game.unit_registry.entry(game.unit_registry.id_for(mountain)).reason == UnitRegistry.Removal.SUMMONER_LOST and game.mountain_space.ids().is_empty(), "I04 Q39 original position survives only inside the established effect")
-	for seat in [1,4]:
-		t.check(game.players[seat].hp == game.players[seat].max_hp-1 and game.players[seat].judgment_cards.size() == 1, "I04 Q39 retained center finds living B/E and continues damage and spread")
-	t.check(game.players[2].hp == game.players[2].max_hp and game.players[3].hp == game.players[3].max_hp and game.deck._discard.count(original) == 1, "I04 Q39 no extra recipients or duplicate original discard")
+	t.check(game.players[1].hp == 1 and game.players[1].hand_size() == 1 and game.players[1].judgment_cards.size() == 1, "I04 legal neighbor Yudaxi revives Leo, and original fire spreads to that surviving selected neighbor")
+	t.check(game.players[4].hp == game.players[4].max_hp-2 and game.players[4].judgment_cards.is_empty(), "I04 disappeared carrier does not replace its already-selected dead neighbor with E")
+	t.check(game.players[2].hp == game.players[2].max_hp-2 and game.players[3].hp == game.players[3].max_hp-2 and game.deck._discard.count(original) == 1, "I04 legal nested death preserves committed Yudaxi deductions and discards original fire once")
 	var before = game.players.map(func(p): return p.hp)
 	var rejected = await game._resolve_burning_camp_result(mountain,1)
 	t.check(rejected.outcome == game.CHOICE_INVALID and before == game.players.map(func(p): return p.hp), "I04 Q39 retired positive-HP carrier cannot start a fresh fire")
