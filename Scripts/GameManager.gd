@@ -158,6 +158,20 @@ func _can_target_body(source: Player, target: Player) -> bool:
 	return fire_dragon_state.stealth_allows_target(unit_registry.id_for(target), source)
 
 func _rescue_order_for_turn() -> Array[Player]:
+	# Q41: a terrain judgment has a spatial rescue origin, not a playable
+	# actor. Nested damage/dying retains that origin until the judgment ends.
+	if not _mountain_judgment_contexts.is_empty():
+		var frame = _mountain_judgment_contexts.back()
+		if frame.generation == _dying_lifecycle_generation and frame.revision == turn_manager.get_context_revision():
+			var circle: Array[Player] = frame.circle
+			if _has_damage_target_body(frame.center): circle = _burning_camp_circle(frame.center)
+			var origin = circle.find(frame.center)
+			var terrain_order: Array[Player] = []
+			if origin >= 0:
+				for offset in range(1,circle.size()):
+					var body = circle[(origin + offset) % circle.size()]
+					if _has_character_body(body) and not body.is_dead(): terrain_order.append(body)
+				return terrain_order
 	var order = _character_order_from(_phase_actor(turn_manager.current_player_idx))
 	if not order.is_empty(): return order
 	# Q9: an established card can outlive its unit source. Rescue still starts
@@ -444,6 +458,8 @@ var _dead_processed: Array[Player] = []
 # 尚未完成的濒死窗口：同一角色不重开，嵌套窗口全部结束后才检查终局。
 var _dying_contexts: Dictionary = {}
 var _dying_lifecycle_generation: int = 0
+# Judgment-scoped spatial origins only; terrain never gets ActorIdentity/input.
+var _mountain_judgment_contexts: Array[Dictionary] = []
 var _sage_save_serial: int = 0
 var _sage_save_pending: Dictionary = {}
 var _rescue_choice_serial: int = 0
@@ -1253,6 +1269,24 @@ func _move_lightning(p: Player, card: CardBase) -> Player:
 	return p
 
 func _run_judgment(p: Player, granted: bool) -> bool:
+	if not _is_mountain_body(p): return await _run_judgment_cards(p,granted)
+	if not _has_damage_target_body(p): return false
+	for pending in _mountain_judgment_contexts:
+		if pending.center == p and pending.generation == _dying_lifecycle_generation \
+			and pending.revision == turn_manager.get_context_revision(): return false
+	var frame = {"center": p, "circle": _burning_camp_circle(p),
+		"generation": _dying_lifecycle_generation, "revision": turn_manager.get_context_revision()}
+	_mountain_judgment_contexts.append(frame)
+	var completed = await _run_judgment_cards(p,granted)
+	# A reset/new judgment may have replaced the stack while awaiting input.
+	# Retire only this frame, never another continuation's spatial origin.
+	for index in _mountain_judgment_contexts.size():
+		if is_same(_mountain_judgment_contexts[index],frame):
+			_mountain_judgment_contexts.remove_at(index)
+			break
+	return completed
+
+func _run_judgment_cards(p: Player, granted: bool) -> bool:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var deferred: Array[CardBase] = []
@@ -11234,6 +11268,7 @@ func reset_game_over_state():
 	_history_hp.clear()
 	for player in players: _history_hp[player] = player.hp
 	_dying_lifecycle_generation += 1
+	_mountain_judgment_contexts.clear()
 	_pending_card_actions.clear()
 	_awaken_in_progress.clear()
 	_card_target_generation += 1
