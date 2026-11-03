@@ -10838,8 +10838,10 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 	var valid = func():
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
-			and target.is_alive() and (not allowed.is_valid() or allowed.call())
-	for p in _character_order_from(players[0]):
+			and _has_character_body(target) and target.is_alive() and (not allowed.is_valid() or allowed.call())
+	# Q48: target is skipped below, so this starts at its actual downstream
+	# character (including attached turn units), never fixed seat A or source.
+	for p in _character_order_from(target):
 		if not valid.call():
 			return {"invalidated": true, "player": null}
 		if p == target or not p.is_alive():
@@ -10847,6 +10849,12 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		# 【下跪】：无法使用或打出任何牌 → 不能打出舍己为人
 		if _is_kneeling(p):
 			continue
+		# Eligibility and spatial reach must survive every asynchronous choice.
+		# Keep survival/payment checks separate: a failed lethal virtual cost
+		# still follows the existing no-Sacrifice continuation, not Q20's Wuxie.
+		var responder_valid = func(): return valid.call() and _has_character_body(p) \
+			and _mountain_effect_reaches(_retained_effect_anchor(p),target)
+		if not responder_valid.call(): continue
 
 		var snapshot = HandSelection.new(p)
 		var play = "skip"
@@ -10854,13 +10862,13 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
 		elif _is_human(p):
 			_set_input_player(p)
-			play = await _show_sacrifice_prompt(target, amount, valid)
+			play = await _show_sacrifice_prompt(target, amount, responder_valid)
 		else:
 			var options: Array = [CardData.CardSubType.SACRIFICE] if HandPayment.has_card(p, CardData.CardSubType.SACRIFICE) else []
 			if await _choose_ai_response(p, "sacrifice", options, {"target": target.seat_index, "amount": amount}) == CardData.CardSubType.SACRIFICE:
 				play = "card"
 
-		if play == "invalidated" or not valid.call():
+		if play == "invalidated" or not responder_valid.call():
 			return {"invalidated": true, "player": null}
 		if play != "skip":
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
@@ -10868,8 +10876,8 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			# 【是~啊~】（安普提·斯丢皮得）：确认使用舍己为人后询问是否发动（发动流失体力不消耗手牌；无手牌时取消 = 视为没有打出）
 			var yes_ah = play
 			if yes_ah == "card":
-				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE), true, valid)
-			if yes_ah == "invalidated" or not valid.call():
+				yes_ah = await _ask_yes_ah(p, "舍己为人", HandPayment.has_card(p, CardData.CardSubType.SACRIFICE), true, responder_valid)
+			if yes_ah == "invalidated" or not responder_valid.call():
 				return {"invalidated": true, "player": null}
 			if not p.is_alive() or _is_kneeling(p) or p.hand != snapshot.hand or p.determined_cards != snapshot.determined:
 				continue
@@ -10880,7 +10888,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			var action_card: CardBase
 			if yes_ah == "skill":
 				var paid = await _pay_yes_ah_cost_result(p)
-				if paid == CHOICE_INVALID or not valid.call():
+				if paid == CHOICE_INVALID or not responder_valid.call():
 					return {"invalidated": true, "player": null}
 				if paid == 0:
 					_sync_all_ui()
@@ -10893,10 +10901,10 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 				deck.discard(used_card)
 				action_card = used_card
 			_sync_all_ui()
-			if not valid.call() or not p.is_alive():
+			if not responder_valid.call() or not p.is_alive():
 				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
 			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
-			if not valid.call():
+			if not responder_valid.call():
 				return {"invalidated": true, "player": null, "card_action": action}
 			return {"invalidated": false, "player": p, "card_action": action}
 	return {"invalidated": false, "player": null}
