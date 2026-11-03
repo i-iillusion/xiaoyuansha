@@ -10855,8 +10855,11 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		# Eligibility and spatial reach must survive every asynchronous choice.
 		# Keep survival/payment checks separate: Q49 permits a fully paid
 		# virtual Sacrifice to survive final death, not a dead actor to respond.
+		var paid_response: Array[bool] = [false]
 		var responder_valid = func(): return valid.call() and _has_character_body(p) \
-			and _mountain_effect_reaches(_retained_effect_anchor(p),target)
+			and _mountain_effect_reaches(_retained_effect_anchor(p),target) \
+			and (_can_target_body(p,target) or (paid_response[0] and p.is_dead() \
+				and fire_dragon_state.is_revealed_to(unit_registry.id_for(target),p)))
 		if not responder_valid.call(): continue
 
 		var snapshot = HandSelection.new(p)
@@ -10865,7 +10868,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			play = "card" if await _sacrifice_actor_override.call(p, target, amount) else "skip"
 		elif _is_human(p):
 			_set_input_player(p)
-			play = await _show_sacrifice_prompt(target, amount, responder_valid)
+			play = await _show_sacrifice_prompt(target, amount, responder_valid, p)
 		else:
 			var options: Array = [CardData.CardSubType.SACRIFICE] if HandPayment.has_card(p, CardData.CardSubType.SACRIFICE) else []
 			if await _choose_ai_response(p, "sacrifice", options, {"target": target.seat_index, "amount": amount}) == CardData.CardSubType.SACRIFICE:
@@ -10892,6 +10895,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 			var virtual_paid := false
 			if yes_ah == "skill":
 				var paid = await _pay_yes_ah_cost_result(p, true)
+				if paid == 1: paid_response[0] = true
 				if paid == CHOICE_INVALID or not responder_valid.call():
 					return {"invalidated": true, "player": null}
 				if paid == 0:
@@ -10905,6 +10909,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 					continue
 				deck.discard(used_card)
 				action_card = used_card
+				paid_response[0] = true
 			_sync_all_ui()
 			if not responder_valid.call() or (not p.is_alive() and not (virtual_paid and p.is_dead())):
 				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
@@ -10915,8 +10920,10 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 	return {"invalidated": false, "player": null}
 
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
-func _show_sacrifice_prompt(target: Player, amount: int, allowed: Callable = Callable()) -> String:
-	var p = _local_player()
+func _show_sacrifice_prompt(target: Player, amount: int, allowed: Callable = Callable(), responder: Player = null) -> String:
+	# The controller owns the input, but the response uses the actual body's
+	# hand/skill. An empty dragon must not offer its controller's cards.
+	var p = responder if responder != null else _local_player()
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.SACRIFICE)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。

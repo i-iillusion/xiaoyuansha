@@ -217,13 +217,17 @@ func sacrifice_terrain(t):
 			victim = FireDragonState.create_body()
 			var id = game._register_unit_body(UnitRegistry.Kind.FIRE_DRAGON,victim,game.players[1])
 			game.fire_dragon_state.attach(id)
+			# Q50: this positive protection fixture explicitly has the dragon
+			# visible to both the damage source and the willing protector.
+			var shown: Array[Player] = [game.players[0],game.players[2]]
+			game.fire_dragon_state.record_use(id,1,shown)
 		var volunteer = game.players[2]
 		game._sacrifice_actor_override = func(p,_target,_amount): return p == volunteer
 		var cards = volunteer.hand_size()
 		var hp = volunteer.hp
 		var target_hp = victim.hp
 		var result = await game._deal_damage_result(game.players[0],victim,1,EffectChain.DamageType.PHYSICAL)
-		t.check(not result.invalidated and victim.hp == target_hp and volunteer.hp == hp-1 and volunteer.hand_size() == cards-1, "I04 Q16 fixed-player/dragon damage still supports paid Sacrifice: "+str(dragon))
+		t.check(not result.invalidated and victim.hp == target_hp and volunteer.hp == hp-1 and volunteer.hand_size() == cards-1, "I04 Q50 fixed-player/visible-dragon damage still supports paid Sacrifice: "+str(dragon))
 		t.check(game._pending_card_actions.is_empty() and game._choice_prompt_stack.is_empty(), "I04 Q16 ordinary character transfer completes its existing action")
 		game._game_over = true
 		game.queue_free()
