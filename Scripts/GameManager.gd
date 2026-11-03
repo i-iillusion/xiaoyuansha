@@ -1310,11 +1310,11 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			or (not granted and card.sub_type in [CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE])
 		if needs_nullification:
 			var valid = func(): return generation == _dying_lifecycle_generation and _has_damage_target_body(p) and p.is_alive() and _last_pending_judgment(p, deferred) == card
-			# Mountain order is settled by Q45; ordinary-holder delayed-card
-			# origin awaits Q47 and retains the existing compatibility path.
-			var terrain_origin: Player
-			if _is_mountain_body(p): terrain_origin = p
-			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, terrain_origin)
+			# Q45/Q47: start downstream of the current judgment holder,
+			# not the delayed card's original source. A mountain's initial
+			# response admits both sides; character judgments use its region.
+			var region: Player = null if _is_mountain_body(p) else p
+			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, p, region)
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
 		p.judgment_cards.erase(card)
