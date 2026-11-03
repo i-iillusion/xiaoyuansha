@@ -79,6 +79,8 @@ func _live_entry(id: String) -> Dictionary:
 
 # Authorized USE (not RESPONSE/discard/payment); supply the full designated
 # target list once, before effects. Nullification does not undo a USE fact.
+# Q51 counter USE supplies no revealing targets; Q52 direct USE reveals on
+# declaration even if a later counter cancels its effect.
 func record_use(id: String, action_id: int, targets: Array[Player]) -> bool:
 	var entry = _live_entry(id)
 	if entry.is_empty() or action_id <= int(_dragons[id].last_use): return false

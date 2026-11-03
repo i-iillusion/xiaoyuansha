@@ -2942,7 +2942,10 @@ func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind =
 	event.actor_key = ActorIdentity.key_for(players, unit_registry, p)
 	if kind == CardActionEvent.Kind.USE and typeof(event.actor_key) == TYPE_STRING:
 		var unit_targets: Array[Player] = []
-		unit_targets.assign(declared_targets)
+		# Q51: counters/redirects never reveal R, even if a caller supplies
+		# the protected/countered role. Keep the USE serial, not those targets.
+		if card.sub_type not in [CardData.CardSubType.NULLIFICATION, CardData.CardSubType.SACRIFICE]:
+			unit_targets.assign(declared_targets)
 		fire_dragon_state.record_use(event.actor_key, event.id, unit_targets)
 	_pending_card_actions[event.id] = {"event": event, "actor": p, "generation": _dying_lifecycle_generation}
 	var name = "暗置" + card.hidden_category if card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else card.card_name
