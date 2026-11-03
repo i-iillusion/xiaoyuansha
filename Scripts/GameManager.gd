@@ -6850,7 +6850,10 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				record.transfer_target = substitute
 				record.transfer_amount = data["value"]
 				record.transfer_action = reply.get("card_action")
-				_public_result("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
+				if substitute.is_dead():
+					_public_result("%s 使用【舍己为人】：防止 %s 的此次伤害；已死亡，不再承受转移伤害" % [substitute.player_name, subject.player_name])
+				else:
+					_public_result("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
 				return true
 
 	if event_name == "damage_applied":
@@ -7523,8 +7526,8 @@ func _pay_yes_ah_cost_result(p: Player, allow_final_death: bool = false) -> int:
 		if await _resolve_dying(p, null, "yes_ah") == CHOICE_INVALID: return CHOICE_INVALID
 	if revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation \
 			or not _has_character_body(p): return CHOICE_INVALID
-	# Q20仅已明确虚拟无懈：完整支付后最终死亡不撤销这张响应。
-	# 其他虚拟锦囊/舍己费用沿原分支，不能借此自动扩大裁决范围。
+	# Q20/Q49: explicitly opted-in Nullification/Sacrifice survive final
+	# death after payment. Other virtual uses keep their own payment contract.
 	return 1 if p.is_alive() or (allow_final_death and p.is_dead()) else 0
 
 # 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
@@ -10850,8 +10853,8 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		if _is_kneeling(p):
 			continue
 		# Eligibility and spatial reach must survive every asynchronous choice.
-		# Keep survival/payment checks separate: a failed lethal virtual cost
-		# still follows the existing no-Sacrifice continuation, not Q20's Wuxie.
+		# Keep survival/payment checks separate: Q49 permits a fully paid
+		# virtual Sacrifice to survive final death, not a dead actor to respond.
 		var responder_valid = func(): return valid.call() and _has_character_body(p) \
 			and _mountain_effect_reaches(_retained_effect_anchor(p),target)
 		if not responder_valid.call(): continue
@@ -10886,13 +10889,15 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 				_sync_all_ui()
 				continue
 			var action_card: CardBase
+			var virtual_paid := false
 			if yes_ah == "skill":
-				var paid = await _pay_yes_ah_cost_result(p)
+				var paid = await _pay_yes_ah_cost_result(p, true)
 				if paid == CHOICE_INVALID or not responder_valid.call():
 					return {"invalidated": true, "player": null}
 				if paid == 0:
 					_sync_all_ui()
 					continue
+				virtual_paid = true
 				action_card = CardBase.create(CardData.CardSubType.SACRIFICE)
 			else:
 				var used_card = HandPayment.take_card(p, CardData.CardSubType.SACRIFICE)
@@ -10901,7 +10906,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 				deck.discard(used_card)
 				action_card = used_card
 			_sync_all_ui()
-			if not responder_valid.call() or not p.is_alive():
+			if not responder_valid.call() or (not p.is_alive() and not (virtual_paid and p.is_dead())):
 				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
 			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
 			if not responder_valid.call():
