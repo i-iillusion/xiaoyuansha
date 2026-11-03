@@ -11619,6 +11619,9 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 		return options
 	if not dying.is_dying() or _is_kneeling(dying) or _is_kneeling(rescuer):
 		return options
+	# M2: rescue effects cannot cross mountain regions. This shared query
+	# also gates post-choice validation and the actual payment entry point.
+	if not _mountain_effect_reaches(_retained_effect_anchor(rescuer),dying): return options
 	var target_unit = unit_registry.id_for(dying)
 	if not target_unit.is_empty() and not fire_dragon_state.stealth_allows_target(target_unit, rescuer): return options
 	if rescuer != dying and not rescuer.is_alive():
