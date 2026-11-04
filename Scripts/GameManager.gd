@@ -7456,12 +7456,17 @@ func _do_ping_dian(challenger: Player, opponent: Player, allowed: Callable = Cal
 	return r
 
 # 已支付费用不回滚；旧阶段/行动者或死去的目标不能继续拼点及其技能伤害。
+func _paid_skill_target_allowed(actor: Player, target: Player) -> bool:
+	return target != null and target != actor and _has_character_body(target) and target.is_alive() \
+		and not _is_kneeling(target) and _can_target_body(actor, target) \
+		and _mountain_effect_reaches(_retained_effect_anchor(actor), target)
+
 func _paid_skill_rps_valid(actor: Player, target: Player, revision: int) -> bool:
 	return not _game_over and revision == turn_manager.get_context_revision() \
 		and turn_manager.current_phase == TurnManager.Phase.PLAY \
 		and turn_manager.get_play_actor_idx() >= 0 and turn_manager.get_play_actor_idx() < players.size() \
 		and _play_actor() == actor \
-		and actor.is_alive() and (target == null or (target.is_alive() and not _is_kneeling(target) and _can_target_body(actor, target)))
+		and actor.is_alive() and (target == null or _paid_skill_target_allowed(actor, target))
 
 # ============================
 #  【是~啊~】锦囊白嫖（安普提·斯丢皮得）
@@ -8581,7 +8586,7 @@ func _on_zhuangbi_skill_clicked(p: Player) -> void:
 	# 至少有一个可选目标（存活且有手牌的其他角色）
 	var any = false
 	for pl in _character_targets(p):
-		if pl != p and pl.is_alive() and pl.hand_size() > 0 and not _is_kneeling(pl):
+		if _paid_skill_target_allowed(p, pl) and pl.hand_size() > 0:
 			any = true
 			break
 	if not any:
@@ -8619,7 +8624,7 @@ func _on_zhuangbi_target_click(target: Player):
 	if not _is_zhuangbi_targeting or not _play_skill_target_is_current():
 		return
 	var p = _local_player()
-	if not _can_target_body(p, target): return
+	if not _paid_skill_target_allowed(p, target): return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -8813,7 +8818,7 @@ func _on_campus_skill_clicked(p: Player) -> void:
 	# 至少有一个可选目标（存活且有手牌的其他角色）
 	var any = false
 	for pl in _character_targets(p):
-		if pl != p and pl.is_alive() and pl.hand_size() > 0 and not _is_kneeling(pl):
+		if _paid_skill_target_allowed(p, pl) and pl.hand_size() > 0:
 			any = true
 			break
 	if not any:
@@ -8840,7 +8845,7 @@ func _on_campus_target_click(target: Player):
 	if not _is_campus_targeting or not _play_skill_target_is_current():
 		return
 	var p = _local_player()
-	if not _can_target_body(p, target): return
+	if not _paid_skill_target_allowed(p, target): return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return

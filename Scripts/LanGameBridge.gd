@@ -76,6 +76,8 @@ func acting_unit() -> String:
 	return key if typeof(key) == TYPE_STRING and ActorIdentity.resolve_live(game.players, game.unit_registry, key) != null else ""
 
 func _declaration_target_allowed(target: Player) -> bool:
+	if game._is_zhuangbi_targeting or game._is_campus_targeting:
+		return game._paid_skill_target_allowed(game._play_actor(), target) and target.hand_size() > 0
 	if game._is_iron_chain_targeting:
 		return game.get_trick_targets(game._play_actor(),CardData.CardSubType.IRON_CHAIN).has(target)
 	if game._is_targeting and game._targeting_card_sub in GameManager.TARGET_TRICKS:
