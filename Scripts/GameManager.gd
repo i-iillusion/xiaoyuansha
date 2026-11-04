@@ -8073,15 +8073,16 @@ func _show_sao_reveal_picker(texts: Array, allowed: Callable = Callable(), title
 #  【装傻】濒死拼点（安普提·斯丢皮得，锁定技）
 # ============================
 
-# 将要死亡时与场上所有存活玩家各拼点一次；赢至少一半（向上取整）则回复至 1 点体力；每名对手只猜一次，平局不重猜
+# Q53/Q54: only other living players in the same region; no opponents means no recovery.
+# Each opponent plays once; ties do not replay.
 func _try_zhuangsha(dying: Player) -> int:
 	var opponents: Array[Player] = []
 	for pl in players:
-		if pl != dying and pl.is_alive():
+		if pl != dying and pl.is_alive() and _mountain_effect_reaches(_retained_effect_anchor(dying), pl):
 			opponents.append(pl)
 	if opponents.is_empty():
 		return 0
-	_public_result("%s 发动【装傻】：与场上所有存活玩家拼点！" % dying.player_name)
+	_public_result("%s 发动【装傻】：与同区其他存活玩家拼点！" % dying.player_name)
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var context = _dying_contexts.get(dying)
@@ -8090,7 +8091,8 @@ func _try_zhuangsha(dying: Player) -> int:
 		var valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
 				and generation == _dying_lifecycle_generation and _dying_contexts.get(dying) == context \
-				and _has_character_body(dying) and players.has(opp) and dying.is_dying() and opp.is_alive()
+				and _has_character_body(dying) and players.has(opp) and dying.is_dying() and opp.is_alive() \
+				and _mountain_effect_reaches(_retained_effect_anchor(dying), opp)
 		var r = await _do_ping_dian_once(dying, opp, valid)
 		if r == RPS_INVALID or not valid.call():
 			return CHOICE_INVALID
