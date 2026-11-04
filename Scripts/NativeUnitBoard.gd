@@ -21,6 +21,10 @@ func _init():
 	scroll.add_child(_list)
 
 func refresh(game: GameManager):
+	# LAN renders its separate value-only board; do not allocate a hidden native view every frame.
+	if game.lan_enabled:
+		visible=false
+		return
 	var rows = UnitObservation.capture(game.unit_registry, game._local_player())
 	visible = not rows.is_empty() and not game.lan_enabled
 	if not visible: return
@@ -34,9 +38,15 @@ func refresh(game: GameManager):
 	for child in _list.get_children():
 		_list.remove_child(child)
 		child.queue_free()
+	if rows.any(func(row): return row.kind==UnitRegistry.Kind.MOUNTAIN):
+		var circle=Label.new()
+		circle.text="圆桌位置："+TerrainObservation.describe(game.terrain_markers(),rows)
+		circle.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
+		_list.add_child(circle)
 	for row in rows:
 		var body: Player = game.unit_registry.entry(row.id).get("body")
 		var text = "%s（%d号附属）  %d/%d  手牌%d%s%s" % [row.name, row.summoner + 1, row.hp, row.max_hp, row.hand_count, " 翻面" if row.facedown else "", " 横置" if row.chained else ""]
+		if row.kind==UnitRegistry.Kind.MOUNTAIN: text += "\n位置："+TerrainObservation.location(row.id,game.terrain_markers(),rows)
 		if row.wine > 0: text += " 酒：%d" % row.wine
 		if row.kind != UnitRegistry.Kind.FIRE_DRAGON and not (game._selecting_strike_targets() and game._get_strike_targets(game._play_actor()).has(body)):
 			var label = Label.new()

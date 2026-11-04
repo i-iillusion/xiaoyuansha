@@ -5,7 +5,13 @@ func add_unit(game: GameManager, kind: int, summoner: Player) -> Player:
 	body.identity = ""
 	body.player_name = "火龙" if kind == UnitRegistry.Kind.FIRE_DRAGON else "山"
 	body.max_hp = 3 if kind == UnitRegistry.Kind.FIRE_DRAGON else 5
-	game._register_unit_body(kind, body, summoner)
+	var id=game._register_unit_body(kind, body, summoner)
+	# Explicit registered-unit fixture, now also gives ordinary terrain a valid
+	# spatial marker. It is not evidence of upstream Jim skill payment.
+	if kind==UnitRegistry.Kind.MOUNTAIN and not id.is_empty() and game._ensure_mountain_space():
+		var live=game._mountain_live_seats()
+		var gap=game.mountain_space.gaps(live).back()
+		game.mountain_space.place(id,gap[0],gap[1],live)
 	return body
 
 func run(t):

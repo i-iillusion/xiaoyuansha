@@ -115,7 +115,7 @@ func _refresh_commands() -> void:
 	var selector_busy = root is CardSelector and root._confirm_pending
 	shape.append(selector_busy)
 	shape.append(acting_unit())
-	shape.append(game.mountain_space.markers())
+	shape.append(game.terrain_markers())
 	shape.append(_unit_targets().map(func(unit): return game.unit_registry.id_for(unit)))
 	for button in buttons:
 		shape.append([button.get_instance_id(), button.text, button.disabled, button.button_pressed])
@@ -172,6 +172,7 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 	state["mode"] = game.game_mode
 	state["count"] = game.players.size()
 	state["space"] = game.spatial_players().map(func(player): return player.seat_index)
+	state["terrain_space"] = game.terrain_markers()
 	state["round"] = game.turn_manager.rounds.round_id if game.turn_manager.rounds != null else 0
 	state["units"] = UnitObservation.capture(game.unit_registry, p)
 	state["targets"] = {}

@@ -216,6 +216,7 @@ func _state_changed(state: Dictionary) -> void:
 		button.tooltip_text = "\n".join(equipment) + "\n" + skill_text
 	var units: Array = state.get("units", [])
 	if not units.is_empty():
+		_label(body,"圆桌位置："+TerrainObservation.describe(state.terrain_space,units))
 		var unit_board = GridContainer.new()
 		unit_board.name = "UnitBoard"
 		unit_board.columns = SeatLayout.columns(units.size(), get_viewport_rect().size.x - 36)
@@ -223,6 +224,7 @@ func _state_changed(state: Dictionary) -> void:
 		for unit in units:
 			var text = "%s · 召唤者%d号\n体力%d/%d · 手牌%d" % [unit.name, unit.summoner + 1, unit.hp, unit.max_hp, unit.hand_count]
 			if unit.controller >= 0: text += "\n操作控制者%d号" % [unit.controller + 1]
+			if unit.kind==UnitRegistry.Kind.MOUNTAIN: text += "\n位置："+TerrainObservation.location(unit.id,state.terrain_space,state.units)
 			if unit.dying: text += "\n濒死中"
 			if unit.facedown: text += "\n翻面"
 			if unit.chained: text += "\n横置"

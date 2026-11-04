@@ -310,6 +310,7 @@ var ai_driver = DecisionDriver.new()
 var ai_pacer = AiActionPacer.new()
 var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
+var _ai_terrain_snapshot: Array = []
 var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
 var _prep_replace_override: Callable = Callable()
@@ -1735,11 +1736,17 @@ func _do_play(pid: int):
 	if not _is_human(p):
 		await _run_ai_play(p)
 
+func terrain_markers() -> Array:
+	var markers=mountain_space.markers()
+	return spatial_players().map(func(player): return player.seat_index) if markers.is_empty() else markers
+
 func _ai_observation(actor: Player) -> Dictionary:
 	var view = PlayerObservation.capture(players, actor, turn_manager.current_phase,
 		turn_manager.get_context_revision())
 	view["mode"] = game_mode
 	view["actor"] = ActorIdentity.key_for(players, unit_registry, actor)
+	view["units"] = UnitObservation.capture(unit_registry,actor)
+	view["terrain_space"] = terrain_markers()
 	return view
 
 # 决策只接收白名单值快照；合法选项是牌型，-1表示自愿放弃。
@@ -1837,6 +1844,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 	var p = ActorIdentity.resolve_live(players, unit_registry, seat)
 	if p == null: return []
 	_ai_hand_snapshot = HandSelection.new(p)
+	_ai_terrain_snapshot = terrain_markers()
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
 	var choices: Array = []
@@ -1909,6 +1917,7 @@ func _execute_ai_action(action: Dictionary):
 	if not _ai_offered_actions.has(action) or _ai_hand_snapshot == null:
 		return
 	var p = _ai_hand_snapshot.owner
+	if _ai_terrain_snapshot != terrain_markers(): return
 	if _game_over or not p.is_alive() or not turn_manager.can_play_card() \
 			or typeof(action.actor) != typeof(turn_manager.get_play_actor_key()) \
 			or action.actor != turn_manager.get_play_actor_key() or action.revision != turn_manager.get_context_revision() \
@@ -1956,6 +1965,7 @@ func _run_ai_play(actor: Player):
 		var target = TargetIdentity.resolve_live(players, unit_registry, action.target)
 		var eligible = func():
 			if snapshot == null or snapshot != _ai_hand_snapshot or not _ai_offered_actions.has(action): return false
+			if _ai_terrain_snapshot != terrain_markers(): return false
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
 			if target == null: return true
 			if not is_instance_valid(target) or not _has_damage_target_body(target) or not target.is_alive(): return false
