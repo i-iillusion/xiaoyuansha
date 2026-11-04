@@ -28,7 +28,7 @@ func refresh(game: GameManager):
 	for unit in game.unit_registry.turn_units():
 		if game._is_human(unit):
 			for card in unit.determined_cards: originals.append(card.get_instance_id())
-	var signature = var_to_str([rows, originals, game.turn_manager.get_context_revision(), game._game_over])
+	var signature = var_to_str([rows, originals, game.turn_manager.get_context_revision(), game._game_over, game._selecting_strike_targets(), game.mountain_space.markers()])
 	if signature == _signature: return
 	_signature = signature
 	for child in _list.get_children():
@@ -38,7 +38,7 @@ func refresh(game: GameManager):
 		var body: Player = game.unit_registry.entry(row.id).get("body")
 		var text = "%s（%d号附属）  %d/%d  手牌%d%s%s" % [row.name, row.summoner + 1, row.hp, row.max_hp, row.hand_count, " 翻面" if row.facedown else "", " 横置" if row.chained else ""]
 		if row.wine > 0: text += " 酒：%d" % row.wine
-		if row.kind != UnitRegistry.Kind.FIRE_DRAGON:
+		if row.kind != UnitRegistry.Kind.FIRE_DRAGON and not (game._selecting_strike_targets() and game._get_strike_targets(game._play_actor()).has(body)):
 			var label = Label.new()
 			label.text = text
 			_list.add_child(label)

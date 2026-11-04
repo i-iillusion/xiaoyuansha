@@ -1853,7 +1853,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 		else:
 			for target in _get_strike_targets(p):
 				if _ai_same_controller(p, target): continue
-				choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 120 if p.wine_stacks > 0 else 80})
+				choices.append({"sub": sub, "target": TargetIdentity.key_for(players, unit_registry, target), "priority": 120 if p.wine_stacks > 0 else 80})
 	for sub in TARGET_TRICKS + GLOBAL_TRICKS:
 		if not can_declare_trick(p, sub):
 			continue
@@ -1868,7 +1868,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 					if judgment.sub_type == sub:
 						duplicate = true
 				if not duplicate:
-					choices.append({"sub": sub, "target": ActorIdentity.key_for(players, unit_registry, target), "priority": 60})
+					choices.append({"sub": sub, "target": TargetIdentity.key_for(players, unit_registry, target), "priority": 60})
 		else:
 			# Strategy only: do not harm our own attached body/controller with AOE.
 			if sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS, CardData.CardSubType.DISARM] \
@@ -1916,7 +1916,7 @@ func _execute_ai_action(action: Dictionary):
 		return
 	var sub = int(action.sub)
 	if typeof(action.target) == TYPE_STRING or action.target >= 0:
-		var target = ActorIdentity.resolve_live(players, unit_registry, action.target)
+		var target = TargetIdentity.resolve_live(players, unit_registry, action.target)
 		if target == null: return
 		if sub in TARGET_TRICKS:
 			if not can_declare_trick(p, sub) or not get_trick_targets(p, sub).has(target):
@@ -1953,13 +1953,13 @@ func _run_ai_play(actor: Player):
 	await _run_ai_dragon_skills(actor, valid)
 	var before_execute = func(action: Dictionary):
 		var snapshot = _ai_hand_snapshot
-		var target = ActorIdentity.resolve_live(players, unit_registry, action.target)
+		var target = TargetIdentity.resolve_live(players, unit_registry, action.target)
 		var eligible = func():
 			if snapshot == null or snapshot != _ai_hand_snapshot or not _ai_offered_actions.has(action): return false
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
 			if target == null: return true
-			if not is_instance_valid(target) or not _has_character_body(target) or not target.is_alive(): return false
-			if ActorIdentity.resolve_live(players, unit_registry, action.target) != target: return false
+			if not is_instance_valid(target) or not _has_damage_target_body(target) or not target.is_alive(): return false
+			if TargetIdentity.resolve_live(players, unit_registry, action.target) != target: return false
 			return get_trick_targets(actor, int(action.sub)).has(target) if int(action.sub) in TARGET_TRICKS \
 				else _get_strike_targets(actor).has(target)
 		return await ai_pacer.before_action(self, valid, eligible)
@@ -2089,6 +2089,9 @@ func _get_attackable_targets(attacker: Player) -> Array[Player]:
 # 杀的目标查询：【麒麟弓】无距离限制（任意存活角色）；否则攻击范围内
 # 【藤甲】锁定技：不能成为【杀】的目标（杀专属过滤；顺手牵羊/兵粮/火烧等不受影响）
 # 【裸奔】锁定技（凯文·罗本）：装备区没有装备时，不能成为【杀】的目标
+func _selecting_strike_targets() -> bool:
+	return _is_multi_targeting or (_is_targeting and _targeting_card_sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE])
+
 func _get_strike_targets(attacker: Player) -> Array[Player]:
 	var targets: Array[Player]
 	if attacker.get_weapon() == CardData.CardSubType.QILING_BOW:
@@ -2704,6 +2707,7 @@ func _exit_multi_target_mode():
 # 方天画戟：点击角色头像 toggle 加入/移除目标
 func _on_multi_target_click(target: Player):
 	var attacker = _play_actor()
+	if not _get_strike_targets(attacker).has(target): return
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -9844,7 +9848,7 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 	return 1
 
 func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, phase: TurnManager.Phase) -> int:
-	var frame = turn_manager.begin_standalone_phase(ActorIdentity.key_for(players, unit_registry, target), phase)
+	var frame = turn_manager.begin_standalone_phase(TargetIdentity.key_for(players, unit_registry, target), phase)
 	if frame.is_empty(): return CHOICE_INVALID
 	var revision: int = frame.revision
 	frame.allowed = func():
@@ -9863,7 +9867,7 @@ func _run_meiyong_granted_nonplay(source: Player, target: Player, owner: int, ph
 	return 1
 
 func _run_meiyong_granted_play(source: Player, target: Player, owner: int) -> int:
-	var frame = turn_manager.begin_standalone_play(ActorIdentity.key_for(players, unit_registry, target))
+	var frame = turn_manager.begin_standalone_play(TargetIdentity.key_for(players, unit_registry, target))
 	if frame.is_empty(): return CHOICE_INVALID
 	var play_revision: int = frame.revision
 	frame.allowed = func():
@@ -11961,7 +11965,10 @@ func _on_target_click(target: Player):
 	if not _is_targeting or _card_target_confirm_owner == _card_target_generation: return
 	if turn_manager.get_play_actor_idx() < 0 or turn_manager.get_play_actor_idx() >= players.size(): return
 	var attacker = _play_actor()
-	if not _can_use_play_skill(attacker) or not _has_character_body(target) or not _can_target_body(attacker, target): return
+	if not _can_use_play_skill(attacker): return
+	if _selecting_strike_targets():
+		if not _get_strike_targets(attacker).has(target): return
+	elif not _has_character_body(target) or not _can_target_body(attacker, target): return
 
 	if target == attacker:
 		_update_debug("不能选择自己作为目标")
@@ -12032,7 +12039,7 @@ func _on_target_click(target: Player):
 		return _can_use_play_skill(attacker) and generation == _card_target_generation \
 			and revision == turn_manager.get_context_revision() and _is_targeting \
 			and _targeting_card_sub == selected_sub and _pending_determined_card == pending_card \
-			and _has_character_body(target) and target.is_alive() and not _is_kneeling(target) \
+			and (_has_damage_target_body(target) if is_strike_target else _has_character_body(target)) and target.is_alive() and not _is_kneeling(target) \
 			and (not is_strike_target or _get_strike_targets(attacker).has(target)) \
 			and (selected_sub not in TARGET_TRICKS or get_trick_targets(attacker, selected_sub).has(target)) \
 			and (selected_sub != CardData.CardSubType.BORROWED_SWORD or _equipment_resource_for_pick(target, "weapon") == borrowed_weapon)

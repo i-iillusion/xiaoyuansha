@@ -234,7 +234,7 @@ func _state_changed(state: Dictionary) -> void:
 			var own: Array[String] = []
 			for card in unit.own_cards: own.append("任意牌" if int(card.sub) < 0 else CardData.get_type_name(int(card.sub)))
 			if not own.is_empty(): text += "\n你控制的单位手牌：" + "、".join(own)
-			if unit.kind == UnitRegistry.Kind.FIRE_DRAGON:
+			if unit.kind == UnitRegistry.Kind.FIRE_DRAGON or not str(state.targets.get(unit.id, "")).is_empty():
 				var token: String = state.targets.get(unit.id, "")
 				var button = _button(unit_board, text, func(): _send(token))
 				button.set_meta("unit", unit.id)

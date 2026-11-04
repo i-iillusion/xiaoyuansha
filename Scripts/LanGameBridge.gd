@@ -76,6 +76,8 @@ func acting_unit() -> String:
 	return key if typeof(key) == TYPE_STRING and ActorIdentity.resolve_live(game.players, game.unit_registry, key) != null else ""
 
 func _declaration_target_allowed(target: Player) -> bool:
+	if game._selecting_strike_targets(): return game._get_strike_targets(game._play_actor()).has(target)
+	if game._is_mountain_body(target): return false
 	if game._is_gay_targeting:
 		return game._gay_target_valid(game._play_actor(), target)
 	if game._is_meiyong_targeting:
@@ -92,8 +94,10 @@ func _declaration_target_allowed(target: Player) -> bool:
 
 func _unit_targets() -> Array[Player]:
 	var result: Array[Player] = []
-	for unit in game.unit_registry.turn_units():
-		if not _targeting() or game._can_target_body(game._play_actor(), unit): result.append(unit)
+	for unit in game.unit_registry.active_units():
+		if game._is_mountain_body(unit):
+			if game._selecting_strike_targets() and _declaration_target_allowed(unit): result.append(unit)
+		elif not _targeting() or game._can_target_body(game._play_actor(), unit): result.append(unit)
 	return result
 
 func _refresh_commands() -> void:
@@ -111,6 +115,7 @@ func _refresh_commands() -> void:
 	var selector_busy = root is CardSelector and root._confirm_pending
 	shape.append(selector_busy)
 	shape.append(acting_unit())
+	shape.append(game.mountain_space.markers())
 	shape.append(_unit_targets().map(func(unit): return game.unit_registry.id_for(unit)))
 	for button in buttons:
 		shape.append([button.get_instance_id(), button.text, button.disabled, button.button_pressed])
@@ -210,8 +215,8 @@ func submit(seat: int, token: String) -> bool:
 				if command.value < 0 or command.value >= game.players.size(): return false
 				target = game.players[command.value]
 			elif typeof(command.value) == TYPE_STRING:
-				target = ActorIdentity.resolve_live(game.players, game.unit_registry, command.value)
-				if target == null or (_targeting() and not game._can_target_body(game._play_actor(), target)): return false
+				target = TargetIdentity.resolve_live(game.players, game.unit_registry, command.value)
+				if target == null: return false
 			else: return false
 			if not _declaration_target_allowed(target): return false
 			var panel = Control.new()
