@@ -9294,7 +9294,7 @@ func _start_lanzhonghou_mode():
 func _on_lanzhonghou_target_click(target: Player):
 	if not _is_lanzhonghou_targeting or not _play_skill_target_is_current():
 		return
-	if not _can_target_body(_local_player(), target): return
+	if not _equipment_swap_target_valid(_local_player(), target): return
 	if not target.is_alive():
 		_update_debug("目标已阵亡")
 		return
@@ -9324,6 +9324,10 @@ func _on_lanzhonghou_target_click(target: Player):
 		_sync_all_ui()
 
 # 区域选择循环：武器/防具/坐骑 各最多一次；「完成交换」后弃 X 张牌并统一执行交换
+func _equipment_swap_target_valid(actor: Player, target: Player) -> bool:
+	return target != null and _has_character_body(target) and target.is_alive() and not _is_kneeling(target) \
+		and _can_target_body(actor, target) and _mountain_effect_reaches(_retained_effect_anchor(actor), target)
+
 func _run_lanzhonghou(a: Player, b: Player) -> void:
 	if _play_skill_execution_busy():
 		return
@@ -9347,7 +9351,7 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 			and selection == _play_skill_selection_generation and revision == turn_manager.get_context_revision() \
 			and _can_use_play_skill(p) and p.general_name == "麦克斯·欧尼斯特" \
 			and _has_character_body(a) and _has_character_body(b) and a != b and a.is_alive() and b.is_alive() \
-			and _can_target_body(p, a) and _can_target_body(p, b) \
+			and _equipment_swap_target_valid(p, a) and _equipment_swap_target_valid(p, b) \
 			and not _is_kneeling(a) and not _is_kneeling(b)
 	if not action_valid.call():
 		return
@@ -10015,7 +10019,7 @@ func _pick_meiyong_target(option: int, p: Player, allowed: Callable = Callable()
 
 func _meiyong_target_valid(p: Player, target: Player, option: int) -> bool:
 	return target != null and _has_character_body(target) and target != p and target.is_alive() and not _is_kneeling(target) \
-		and _can_target_body(p, target) \
+		and _can_target_body(p, target) and _mountain_effect_reaches(_retained_effect_anchor(p), target) \
 		and (option != 0 or not target.judgment_cards.is_empty())
 
 # 烂忠厚联合界面：头像仅选人，最终阶段按钮才提交。
