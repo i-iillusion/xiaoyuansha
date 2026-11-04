@@ -1437,6 +1437,7 @@ func _medicine_candidates(p: Player) -> Array[Player]:
 	characters.append_array(unit_registry.character_unit_candidates())
 	for target in characters:
 		if target == p or not target.is_alive() or _is_kneeling(target) or target.hand_size() == 0: continue
+		if not _mountain_effect_reaches(_retained_effect_anchor(p), target): continue
 		var id = unit_registry.id_for(target)
 		if not id.is_empty() and not fire_dragon_state.stealth_allows_target(id, p): continue
 		result.append(target)
