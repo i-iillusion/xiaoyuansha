@@ -2,12 +2,13 @@ extends RefCounted
 
 func run(t):
 	var helper=load("res://Test/i04_paid_skill_lan_cases.gd").new()
-	for mode in ["gift","gift_invalid","swap","swap_invalid"]:
+	for mode in ["gift","gift_judge","gift_invalid","swap","swap_invalid"]:
 		var bridge=load("res://Test/i04_sacrifice_region_cases.gd").new().bridge_fixture(t)
 		var game=bridge.game
 		game.players[1].general_name="麦克斯·欧尼斯特"
 		var target=game.players[2]
 		var weapon=CardBase.create(CardData.CardSubType.LIANNU)
+		if mode=="gift_judge": target.judgment_cards.append(CardBase.create(CardData.CardSubType.INDULGENCE))
 		if mode.begins_with("swap"): target.equip_card_to_slot("weapon",weapon)
 		await helper.click(t,bridge,0,"结束出牌")
 		if mode.begins_with("gift"):
@@ -23,8 +24,11 @@ func run(t):
 				await helper.frames(t)
 				t.check(not bridge.submit(1,old) and target.hand_size()==1 and game.players[1].hand_size()==0,"I04 technical invalidation grants no stage/bonus and cannot advance stale source START")
 			else:
-				await helper.click(t,bridge,1,"摸牌")
-				t.check(target.hand_size()==3 and game.players[1].hand_size()==1,"I04 actual gift DRAW gives C two, source one bonus and skips own DRAW")
+				await helper.click(t,bridge,1,"判定" if mode=="gift_judge" else "摸牌")
+				if mode=="gift_judge":
+					t.check(target.judgment_cards.is_empty() and target.hand_size()==1 and game.players[1].hand_size()==3,"I04 real combined gift JUDGE settles C delayed card, then source draws bonus plus normal two")
+				else:
+					t.check(target.hand_size()==3 and game.players[1].hand_size()==1,"I04 actual gift DRAW gives C two, source one bonus and skips own DRAW")
 		else:
 			await helper.click(t,bridge,1,"取消")
 			var inspect=bridge.snapshot(1).targets.get("1","")
