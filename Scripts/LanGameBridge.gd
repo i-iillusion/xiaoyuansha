@@ -76,6 +76,8 @@ func acting_unit() -> String:
 	return key if typeof(key) == TYPE_STRING and ActorIdentity.resolve_live(game.players, game.unit_registry, key) != null else ""
 
 func _declaration_target_allowed(target: Player) -> bool:
+	if game._is_gay_targeting:
+		return game._gay_target_valid(game._play_actor(), target)
 	if game._is_meiyong_targeting:
 		return game._meiyong_target_valid(game.players[game.turn_manager.current_player_idx], target, 1)
 	if game._is_lanzhonghou_targeting:

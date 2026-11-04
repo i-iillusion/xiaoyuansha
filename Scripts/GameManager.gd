@@ -9109,6 +9109,11 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 # ============================
 
 # 详情弹窗技能按钮 → 【Gay】发动入口
+func _gay_target_valid(actor: Player, target: Player) -> bool:
+	return target != null and _has_character_body(target) and target != actor and target.is_alive() \
+		and target.gender == actor.gender and target.hp < target.max_hp and not _is_kneeling(target) \
+		and _can_target_body(actor, target) and _mountain_effect_reaches(_retained_effect_anchor(actor), target)
+
 func _on_gay_skill_clicked(p: Player) -> void:
 	if _play_skill_execution_busy() or not _can_use_play_skill(p):
 		return
@@ -9127,8 +9132,8 @@ func _on_gay_skill_clicked(p: Player) -> void:
 		_update_debug("你没有手牌，无法发动【Gay】")
 		return
 	var has_target := false
-	for pl in players:
-		if pl != p and pl.is_alive() and pl.gender == p.gender and pl.hp < pl.max_hp and not _is_kneeling(pl):
+	for pl in _character_targets(p):
+		if _gay_target_valid(p, pl):
 			has_target = true
 			break
 	if not has_target:
@@ -9150,6 +9155,7 @@ func _on_gay_target_click(target: Player):
 	if not _is_gay_targeting or not _play_skill_target_is_current():
 		return
 	var p = _local_player()
+	if not _gay_target_valid(p, target): return
 	if target == p:
 		_update_debug("不能选择自己作为目标")
 		return
@@ -9200,7 +9206,7 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 			and _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
 			and p.general_name == "比尔·盖伊" and _has_character_body(target) and target != p \
 			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
-			and not _is_kneeling(target) and not _gay_used
+			and _gay_target_valid(p, target) and not _gay_used
 	if not valid.call():
 		return
 	var max_x = mini(p.max_hp, target.max_hp)
