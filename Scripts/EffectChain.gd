@@ -48,6 +48,9 @@ var target_player: Player:
 	get: return damage.target
 	set(value): damage.target = value
 var source_card: CardBase
+# Explicit original declaration supplied by a multi-target card, never inferred
+# from this single damage record or its surviving targets.
+var declared_targets: Array[Player] = []
 var damage: DamageRecord
 var scheduler: RuleScheduler
 var skip_targeting: bool = false

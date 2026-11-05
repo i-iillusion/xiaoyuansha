@@ -227,6 +227,7 @@ var _mountain_rules_enabled := true
 var _peter_rules_enabled := false
 var _peter_peach_override: Callable = Callable()
 var _peter_exclusion_override: Callable = Callable()
+var _peter_ignore_override: Callable = Callable()
 var _jim_opening_pending: Dictionary = {}
 var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()
@@ -3138,7 +3139,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 # 杀次数/手牌/酒 buff 已在调用方消耗
 # 返回 true = 本次结算对目标造成了伤害（供【灾厄剑】转移判定：全部处理完成后再转移）
 # 已提交伤害后的选择失效须通知多目标调用者；普通命中/闪仍为bool。
-func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false) -> Variant:
+func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false, declared_targets: Array[Player] = []) -> Variant:
 	if _game_over or target == null or not target.is_alive():
 		return false
 	if _is_mountain_body(target) and not _has_damage_target_body(target):
@@ -3149,6 +3150,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 		return false
 	var chain = _new_damage_chain(p, target, card, base_damage, element)
 	chain.ignore_target_restrictions = ignore_target_restrictions
+	chain.declared_targets = declared_targets.duplicate()
 	chain.response_callback = _on_chain_response_check
 	var strike_revision = turn_manager.get_context_revision()
 	var strike_generation = _dying_lifecycle_generation
@@ -3324,7 +3326,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		# 胜负已分：不再结算后续目标
 		if _game_over:
 			break
-		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
+		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage, false, targets)
 		if (dealt is int and dealt == CHOICE_INVALID) or action_revision != turn_manager.get_context_revision():
 			_abandon_card_actions([action])
 			return
@@ -3868,8 +3870,9 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = []):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
+	var audience = _prep_group_scope(p,CardData.CardSubType.BARBARIAN_INVASION,roster)
 	_history_event("targets", "%s 的【%s】指定群体目标" % [p.player_name, card_name], p,
-		_prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster))
+		audience)
 	_sync_all_ui()
 	turn_manager.use_card("aoe")
 	_reset_play_countdown_if_p0()
@@ -3877,7 +3880,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 	_update_debug("%s 使用了【%s】，所有人需出【%s】或受到 1 点伤害" % [p.player_name, card_name, required_name])
 
 	# 从当前玩家座位顺时针依次结算
-	for target in _prep_group_scope(p, CardData.CardSubType.BARBARIAN_INVASION, roster):
+	for target in audience:
 		if not _has_character_body(target) or not target.is_alive():
 			continue
 		# 胜负已分（如目标为主公/最后一名反贼阵亡）：不再结算后续目标
@@ -3885,6 +3888,11 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 			_abandon_card_actions(actions)
 			return
 		if not _mountain_effect_reaches(origin,target): continue
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and response_revision == turn_manager.get_context_revision() and _has_character_body(target) and target.is_alive()
+		var immune = await _peter_ignore_effect(target,audience,"aoe",current,true)
+		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
+		if immune == 1: continue
 
 		# 【仁王盾】：南蛮入侵和万箭齐发对你无效（锁定技；判定在无懈询问之前，青釭剑只对杀生效不例外）
 		if target.get_armor() == CardData.CardSubType.RENWANG_DUN:
@@ -4051,7 +4059,8 @@ func _play_peach_garden():
 func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
-	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster))
+	var audience = _prep_group_scope(p,CardData.CardSubType.PEACH_GARDEN,roster)
+	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
 	_reset_play_countdown_if_p0()
@@ -4059,13 +4068,30 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 	_update_debug("%s 使用了【桃园结义】，所有角色回复 1 点体力" % p.player_name)
 
 	# 从使用者开始顺时针依次结算（与南蛮/万箭方向一致）
-	for target in _prep_group_scope(p, CardData.CardSubType.PEACH_GARDEN, roster):
+	var excluded: Array = []
+	if _peter_owner_allowed(p):
+		var candidates: Array[Player] = []
+		for body in audience:
+			if body != p and _peter_selection_allowed(p,body): candidates.append(body)
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision()
+		var choice = await _choose_peter_exclusions(p,candidates,"【关你屁事】本牌对所选其他角色不生效","peach_garden",current)
+		if choice.invalidated: _abandon_card_actions(actions); return
+		excluded = choice.selected
+		if not excluded.is_empty(): _history_event("skill","%s 发动【关你屁事】：本牌对所选角色不生效" % p.player_name,p,excluded)
+	for target in audience:
 		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
 		if not _has_character_body(target) or not target.is_alive():
 			continue
 		if not _mountain_effect_reaches(origin,target): continue
+		if excluded.has(target): continue
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and _has_character_body(target) and target.is_alive()
+		var immune = await _peter_ignore_effect(target,audience,"peach_garden",current,false)
+		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
+		if immune == 1: continue
+
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
 			_update_debug("%s 处于【下跪】状态，【桃园结义】对其无效" % target.player_name)
@@ -4106,7 +4132,8 @@ func _play_harvest():
 func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
-	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.HARVEST, roster))
+	var audience = _prep_group_scope(p,CardData.CardSubType.HARVEST,roster)
+	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
 	_reset_play_countdown_if_p0()
@@ -4115,7 +4142,17 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 	_update_debug("每名角色摸「已损失体力值」数量的牌（体力上限 - 当前体力），最多 3 张")
 
 	# 从使用者开始顺时针依次结算（与桃园结义方向一致）
-	for target in _prep_group_scope(p, CardData.CardSubType.HARVEST, roster):
+	var excluded: Array = []
+	if _peter_owner_allowed(p):
+		var candidates: Array[Player] = []
+		for body in audience:
+			if body != p and _peter_selection_allowed(p,body): candidates.append(body)
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision()
+		var choice = await _choose_peter_exclusions(p,candidates,"【关你屁事】本牌对所选其他角色不生效","harvest",current)
+		if choice.invalidated: _abandon_card_actions(actions); return
+		excluded = choice.selected
+		if not excluded.is_empty(): _history_event("skill","%s 发动【关你屁事】：本牌对所选角色不生效" % p.player_name,p,excluded)
+	for target in audience:
 		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4123,6 +4160,12 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 		if not _mountain_effect_reaches(origin,target): continue
+		if excluded.has(target): continue
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and _has_character_body(target) and target.is_alive()
+		var immune = await _peter_ignore_effect(target,audience,"harvest",current,false)
+		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
+		if immune == 1: continue
 
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -4172,7 +4215,8 @@ func _play_disarm():
 func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
-	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, _prep_group_scope(p, CardData.CardSubType.DISARM, roster))
+	var audience = _prep_group_scope(p,CardData.CardSubType.DISARM,roster)
+	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, audience)
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
@@ -4181,7 +4225,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 	_update_debug("所有有装备的角色弃置所有装备牌，之后摸相同数量的牌")
 
 	# 从使用者开始顺时针依次结算（与桃园结义/五谷丰登方向一致）
-	for target in _prep_group_scope(p, CardData.CardSubType.DISARM, roster):
+	for target in audience:
 		if _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4189,6 +4233,11 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 			_update_debug("%s 已阵亡，跳过" % target.player_name)
 			continue
 		if not _mountain_effect_reaches(origin,target): continue
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and _has_character_body(target) and target.is_alive()
+		var immune = await _peter_ignore_effect(target,audience,"disarm",current,true)
+		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
+		if immune == 1: continue
 
 		# 【下跪】：下跪状态不会成为任何效果的目标
 		if _is_kneeling(target):
@@ -4512,7 +4561,7 @@ func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, al
 	if first == null or not _has_character_body(first) or not first.is_alive() or _game_over: return CHOICE_INVALID
 	if not allowed.call() or targets.is_empty() or not strike_sub in [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]: return CHOICE_INVALID
 	if targets.size() > 1 and first.get_weapon() != CardData.CardSubType.FANGTIAN_HALBERD: return CHOICE_INVALID
-	var seen: Array = []
+	var seen: Array[Player] = []
 	var legal = _get_strike_targets(first)
 	for target in targets:
 		if not target is Player or not legal.has(target) or seen.has(target): return CHOICE_INVALID
@@ -4533,7 +4582,7 @@ func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, al
 			_abandon_card_actions([strike_action])
 			return CHOICE_INVALID
 		if not target.is_alive(): continue
-		var dealt = await _execute_single_strike(first, target, card, strike_sub, element, damage)
+		var dealt = await _execute_single_strike(first, target, card, strike_sub, element, damage, false, seen)
 		if (typeof(dealt) == TYPE_INT and dealt == CHOICE_INVALID) or _game_over \
 				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions([strike_action])
@@ -5915,6 +5964,11 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 			_abandon_card_actions(actions)
 			return
 		if not _has_character_body(t) or not t.is_alive() or _is_kneeling(t) or not _mountain_effect_reaches(origin,t): continue
+		var current = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and _has_character_body(t) and t.is_alive()
+		var immune = await _peter_ignore_effect(t,targets,"iron_chain",current)
+		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
+		if immune == 1: continue
 		# 无懈可击：效果即将对目标生效前
 		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name], Callable(), p, t)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
@@ -6727,6 +6781,16 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		return true
 	var record = chain.damage
 	if event_name == "on_being_targeted":
+		var target_revision = turn_manager.get_context_revision()
+		var target_generation = _dying_lifecycle_generation
+		var target_valid = func(): return not _game_over and target_revision == turn_manager.get_context_revision() \
+			and target_generation == _dying_lifecycle_generation and _has_damage_target_body(subject) \
+			and subject.is_alive() and chain.target_player == subject
+		var immune = await _peter_ignore_effect(subject,chain.declared_targets,"strike",target_valid)
+		if immune == CHOICE_INVALID:
+			chain.continuation_invalid = true
+			return true
+		if immune == 1: return true
 		return not await _prepare_strike_target(source, subject, chain.ignore_target_restrictions)
 
 	if event_name == "before_deal_damage":
@@ -11670,6 +11734,32 @@ func _do_sage_save(p: Player):
 	_draw_blank_cards(p, 4)
 	_public_result("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
+
+# The declaration size is not the number still affected/alive. Q4 excludes
+# Borrowed Sword itself, but its later Fangtian Strike has its own audience.
+func _peter_ignore_effect(target: Player, audience: Array[Player], effect: String, allowed: Callable, harmful: bool = true) -> int:
+	if not _peter_owner_allowed(target) or _is_kneeling(target) or audience.size()<2 or not audience.has(target) or effect=="borrowed_sword": return 0
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var general_revision = target.awakening_revision
+	var registry_generation = unit_registry.generation()
+	var space = terrain_markers()
+	var valid = func(): return not _game_over and _peter_owner_allowed(target) and generation==_dying_lifecycle_generation \
+		and revision==turn_manager.get_context_revision() and general_revision==target.awakening_revision \
+		and registry_generation==unit_registry.generation() and space==terrain_markers() \
+		and (not allowed.is_valid() or allowed.call())
+	var choice: int = 0
+	if _peter_ignore_override.is_valid(): choice = await _peter_ignore_override.call(target,audience.duplicate(),effect,valid)
+	elif not _is_human(target): choice = 1 if harmful else 0
+	else:
+		_set_input_player(target)
+		var reply = await _show_choice_popup("【关我屁事】是否使此多目标效果对自己无效？",["免除此效果"],valid)
+		choice = CHOICE_INVALID if reply==CHOICE_INVALID else (1 if reply==0 else 0)
+	if not valid.call() or choice not in [-1,0,1]: return CHOICE_INVALID
+	if choice==1:
+		_history_event("skill","%s 发动【关我屁事】：此多目标效果对自己无效" % target.player_name,target,[target])
+		return 1
+	return 0
 
 # Q9-Q12 use value snapshots for committed exclusions, not a global response
 # flag. Callers supply the legal set for this one effect/response category.
