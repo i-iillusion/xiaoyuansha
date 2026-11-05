@@ -14,6 +14,7 @@ var _labels: Array = []
 # Server rule capability. Historical name retained for explicit integration fixtures.
 # Public Jim entry is enabled after the complete I04 acceptance gate.
 var _enable_mountain_rules_for_tests := true
+var _enable_peter_rules_for_tests := false
 
 func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	if game != null or not GameModes.initializable(mode, roster.size()): return false
@@ -24,6 +25,7 @@ func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	game = preload("res://Scenes/Game.tscn").instantiate()
 	game.auto_start = false
 	game._mountain_rules_enabled = _enable_mountain_rules_for_tests
+	game._peter_rules_enabled = _enable_peter_rules_for_tests
 	var configured = AiActionPacer.preferred_speed if pace == -1 else pace
 	game.ai_pacer.speed = configured if AiActionPacer.valid_speed(configured) else AiActionPacer.Speed.STANDARD
 	game.lan_enabled = true

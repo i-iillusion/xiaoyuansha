@@ -11,6 +11,9 @@ var cause: String
 var effect_chain: EffectChain
 var stage: Stage = Stage.RESCUE
 var invalidated: bool = false
+# Peter Q3: only this rescue frame restricts third-party Peaches. Not a
+# permanent victim/source state; self-rescue and source rescue remain legal.
+var peter_peach_restricted: bool = false
 
 func _init(target: Player, source: Player, reason: String, chain: EffectChain = null):
 	victim = target

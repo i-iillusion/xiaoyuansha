@@ -223,6 +223,9 @@ var mountain_space := MountainSpace.new()
 var _mountain_ledger: RoundLedger
 # Development gate: no metadata-only Jim silently gains partial skills.
 var _mountain_rules_enabled := true
+# Private until all Peter skills and the I05a opening gates are verified.
+var _peter_rules_enabled := false
+var _peter_peach_override: Callable = Callable()
 var _jim_opening_pending: Dictionary = {}
 var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()
@@ -11139,6 +11142,9 @@ func _check_dying(dying: Player) -> int:
 		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(dying) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
 
+	if await _choose_peter_peach_restriction(context, valid) == CHOICE_INVALID: return CHOICE_INVALID
+	if not valid.call(): return CHOICE_INVALID
+
 	# 经典基线：从当前回合角色开始轮询，含濒死本人；放弃后本窗口不回头。
 	# 普通求救全部结束后，才进入既有装傻/贤者及死亡前规则。
 	if await _run_rescue_round(dying) == CHOICE_INVALID: return CHOICE_INVALID
@@ -11654,6 +11660,40 @@ func _do_sage_save(p: Player):
 	_public_result("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
 
+# Q3/Q5: an optional choice before the first ordinary rescue offer. The
+# context carries the committed result, so nested dying windows cannot inherit
+# another victim's ban. Only real damage attribution activates this branch.
+func _choose_peter_peach_restriction(context: DyingContext, allowed: Callable) -> int:
+	if not _peter_rules_enabled or context == null or context.cause != "damage" or context.effect_chain == null: return 0
+	var source = context.killer
+	if not is_instance_valid(source) or not players.has(source) or not source.is_alive() \
+		or source.general_name != "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹" \
+		or context.effect_chain.source_player != source: return 0
+	var victim = context.victim
+	var general_revision = source.awakening_revision
+	var space = terrain_markers()
+	var registry_generation = unit_registry.generation()
+	var valid = func():
+		return _peter_rules_enabled and allowed.call() and not context.invalidated and _dying_contexts.get(victim) == context \
+			and context.stage == DyingContext.Stage.RESCUE and victim.is_dying() \
+			and space == terrain_markers() and registry_generation == unit_registry.generation() \
+			and _has_character_body(source) and source.is_alive() and source.awakening_revision == general_revision \
+			and source.general_name == "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹"
+	var choice: int = 0
+	if _peter_peach_override.is_valid():
+		choice = await _peter_peach_override.call(source,victim,valid)
+	elif _is_human(source):
+		_set_input_player(source)
+		var selected = await _show_choice_popup("【关你屁事】是否禁止第三方用桃救援 %s？本人仍可自救" % victim.player_name,["发动禁桃"],valid)
+		choice = CHOICE_INVALID if selected == CHOICE_INVALID else (1 if selected == 0 else 0)
+	# Conservative optional AI choice: decline, without changing legal choices.
+	if not valid.call() or choice == CHOICE_INVALID: return CHOICE_INVALID
+	if choice not in [-1,0,1]: return CHOICE_INVALID
+	if choice == 1:
+		context.peter_peach_restricted = true
+		_history_event("skill","%s 发动【关你屁事】：禁止第三方用桃救援 %s（本人可自救）" % [source.player_name,victim.player_name],source,[victim])
+	return 0
+
 # 合法性与持牌情况是所有人共用的规则；是否愿意救援是另一个决策层。
 func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 	var options: Array[int] = []
@@ -11671,6 +11711,10 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 	if _dying_contexts.has(dying) and _dying_contexts[dying].stage != DyingContext.Stage.RESCUE:
 		return options
 	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE]:
+		var context = _dying_contexts.get(dying)
+		if sub == CardData.CardSubType.PEACH and context != null and context.peter_peach_restricted \
+			and rescuer != dying and rescuer != context.killer:
+			continue
 		if sub == CardData.CardSubType.WINE and rescuer != dying:
 			continue
 		if HandPayment.has_card(rescuer, sub):
