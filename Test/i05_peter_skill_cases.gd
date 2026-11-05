@@ -9,6 +9,7 @@ func run(t):
 	await yudaxi(t)
 	await swap_and_gay(t)
 	await zhuangsha(t)
+	await lone_zhuangsha(t)
 	await medicine_and_gather(t)
 	await chain_damage(t)
 	await burning_camp(t)
@@ -331,3 +332,22 @@ func paid_skill_bridge(t):
 			game._game_over=true
 			bridge.queue_free()
 			await helper.frames(t)
+
+func lone_zhuangsha(t):
+	for win in [false,true]:
+		var game=Cards.new().fixture(t,2)
+		var dying=game.players[0]
+		dying.general_name="安普提·斯丢皮得"
+		dying.hp=1
+		for p in game.players: p.hand.clear(); p.determined_cards.clear()
+		var immune_offers: Array=[]
+		var punches: Array=[]
+		game._peter_ignore_override=func(_p,_s,_k,_v): immune_offers.append(true); return 1
+		game._rps_override=func(p):
+			punches.append(p)
+			return GameManager.RPS_ROCK if p==dying else (GameManager.RPS_SCISSORS if win else GameManager.RPS_PAPER)
+		await game._deal_damage_result(null,dying,1,EffectChain.DamageType.FIRE)
+		t.check(immune_offers.is_empty() and punches.has(game.players[1]),"I05 Q21 lone Peter opponent cannot exit Zhuangsha and must play normal RPS")
+		t.check(dying.is_alive()==win and dying.hp==(1 if win else 0),"I05 Q21 one opponent counts normally: winning saves Ampiti, losing kills him")
+		t.check(game._dying_contexts.is_empty() and game._choice_prompt_stack.is_empty(),"I05 Q21 single-opponent resolution releases actual dying and input contexts")
+		await Cards.new().dispose(t,game)
