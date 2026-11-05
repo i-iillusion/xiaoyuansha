@@ -11,9 +11,9 @@ var _signature := ""
 var _commands: Dictionary = {}
 var _controls: Array = []
 var _labels: Array = []
-# Internal integration-test gate only, not a lobby option or client command.
-# Jim stays metadata-only until the complete I04 acceptance gate is closed.
-var _enable_mountain_rules_for_tests := false
+# Server rule capability. Historical name retained for explicit integration fixtures.
+# Public Jim entry is enabled after the complete I04 acceptance gate.
+var _enable_mountain_rules_for_tests := true
 
 func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	if game != null or not GameModes.initializable(mode, roster.size()): return false

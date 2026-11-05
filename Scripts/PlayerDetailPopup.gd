@@ -108,14 +108,16 @@ func _populate():
 			# 【Gay】：可点击的按钮（出牌阶段限一次，弃 X 张手牌双方回血）
 			elif sk.begins_with("【Gay】"):
 				_add_skill_btn("Gay", sk)
+			elif _mountain_skills_enabled and (sk.begins_with("【护山】") or sk.begins_with("【移山】") or sk.begins_with("【聚山】")):
+				_add_skill_btn(sk.substr(1, 2), sk)
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
 			else:
 				_add_skill_label(sk, Color(0.9, 0.9, 0.7))
 
-	# I04 internal gate: publishing the whole general still requires d/e validation.
-	if _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":
+	# Private metadata fixtures retain the same three actions before publication.
+	if skills.is_empty() and _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":
 		_add_skill_btn("护山", "【护山】出牌阶段限一次，弃置一张手牌，使一座山恢复至体力上限（满血也可发动）")
 		_add_skill_btn("移山", "【移山】出牌阶段限一次，弃置一张手牌，将一座山移至另一个间隔")
 		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")

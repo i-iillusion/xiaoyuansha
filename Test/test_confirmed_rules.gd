@@ -158,16 +158,16 @@ func _run():
 	check(owner.judgment_cards.size() == 1 and game.players[2].judgment_cards.size() == 1, "判定生效后才向相邻判定区蔓延")
 	# GEN-01：抽将池只含可用武将；随机分配无放回，不拿稻草人补足。
 	var pool = GeneralData.get_available_random_generals()
-	check(pool.size() == 9 and pool.has("里奥·普利威尔") and pool.count("克里斯·西弗") == 1 and not pool.has("稻草人"), "随机池含当前九名非占位武将，克里斯已开放一次")
+	check(pool.size() == 10 and pool.count("吉姆·芒顿") == 1 and GeneralData.get_implementation_status("吉姆·芒顿") == "prototype" and pool.has("里奥·普利威尔") and pool.count("克里斯·西弗") == 1 and not pool.has("稻草人"), "随机池含当前十名非占位武将，克里斯与吉姆均开放一次")
 	for count in [2, 3, 5, 7, 8]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}
 		for name in draw:
 			unique[name] = true
 		check(draw.size() == count and unique.size() == count, "%d人随机选将无重复" % count)
-	check(GeneralData.METADATA_ONLY_GENERALS.size() == 22
+	check(GeneralData.METADATA_ONLY_GENERALS.size() == 21
 		and GeneralData.get_implementation_status("安迪·沃费尔") == "deferred",
-		"手册其余22将均有资料状态，安迪仍暂缓")
+		"手册其余21将均有资料状态，安迪仍暂缓")
 	for count in [8, 10]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}

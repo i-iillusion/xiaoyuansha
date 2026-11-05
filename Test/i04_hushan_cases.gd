@@ -48,7 +48,7 @@ func run(t):
 	game._mountain_rules_enabled = false
 	game._open_player_detail(owner)
 	var popup = game._detail_popup_root.get_child(0)
-	t.check(popup._skills_container.get_children().all(func(node): return not node is Button) and GeneralData.get_implementation_status(owner.general_name) == "metadata_only", "I04 Hushan stays hidden behind the disabled general gate")
+	t.check(popup._skills_container.get_children().all(func(node): return not node is Button) and GeneralData.get_implementation_status(owner.general_name) == "prototype", "I04 explicit disabled rules hide active Hushan even after general publication")
 	game._mountain_rules_enabled = true
 	t.check(await game._activate_hushan(owner) == 1 and mountains[0].hp == 5 and owner.hand_size() == full_hand-1, "I04 Q23 full mountain accepts one genuine card fee without extra recovery")
 	t.check(turn_used(game,owner) and await game._activate_hushan(owner) == 0 and owner.hand_size() == full_hand-1, "I04 Q23 full mountain consumes the same once-per-PLAY quota")

@@ -186,7 +186,7 @@ func run(t):
 		t.check(names.all(func(name): return names.count(name) == 1 and name != "稻草人"), "H01a expanded random opening remains unique")
 		t.check(game.players.all(func(p): return p.max_hp == GeneralData.get_max_hp(p.general_name, count)), "H01a initial HP uses existing general metadata and player count")
 		if count == 10:
-			t.check(game.players.any(func(p): return GeneralData.get_implementation_status(p.general_name) == "metadata_only"), "H01a larger pool uses declared unimplemented generals without invented skills")
+			t.check(game.players.filter(func(p): return GeneralData.get_implementation_status(p.general_name) == "metadata_only").size() == maxi(0,count-GeneralData.get_available_random_generals().size()), "H01a actual expanded roster supplements exactly the remaining pool gap")
 		game._game_over = true
 		game.queue_free()
 		await frames(t)

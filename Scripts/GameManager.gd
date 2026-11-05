@@ -222,7 +222,7 @@ var fire_dragon_state := FireDragonState.new()
 var mountain_space := MountainSpace.new()
 var _mountain_ledger: RoundLedger
 # Development gate: no metadata-only Jim silently gains partial skills.
-var _mountain_rules_enabled := false
+var _mountain_rules_enabled := true
 var _jim_opening_pending: Dictionary = {}
 var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()

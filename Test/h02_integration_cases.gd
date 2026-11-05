@@ -146,12 +146,20 @@ func network_setup(t):
 	t.check(session.begin_match(), "H02d 10 random slots filled without insufficient-pool crash")
 	var game = session.bridge.game
 	var names = game.players.map(func(p): return p.general_name)
-	t.check(names.all(func(name): return names.count(name) == 1) and names.any(func(name): return GeneralData.get_implementation_status(name) == "metadata_only"), "H02d supplement pool unique and explicitly unimplemented")
+	t.check(names.all(func(name): return names.count(name) == 1) and names.all(func(name): return GeneralData.get_implementation_status(name) == "prototype"), "H02d ten random slots retain ten unique actual playable generals")
 	t.check(names.filter(func(name): return GeneralData.get_implementation_status(name) == "metadata_only").size() == 10 - LanSession.GENERALS.size(), "H02d supplements fill only missing slots, preserving all available implemented generals")
 	var room = load("res://Scenes/LanRoom.tscn").instantiate()
 	t.root.add_child(room)
 	room._state_changed(session.bridge.snapshot(0))
-	t.check(room._board.get_child_count() == 10 and room._board.get_children().any(func(b): return "技能尚未实装" in b.tooltip_text), "H02d actual LAN renders metadata generals without missing dictionary key")
+	t.check(room._board.get_child_count() == 10 and room._board.get_children().all(func(b): return "技能尚未实装" not in b.tooltip_text), "H02d actual ten-general LAN board does not label implemented skills as metadata")
+	# Explicit presentation fixture preserves metadata UI coverage now that ten
+	# supported seats fit the full playable pool; no 11-player game is invented.
+	var supplement=GeneralData.draw_unique_random_generals(LanSession.GENERALS.size()+1)
+	t.check(supplement.filter(func(name): return GeneralData.get_implementation_status(name)=="metadata_only").size()==1 and supplement.all(func(name): return supplement.count(name)==1),"H02d helper still supplements a pool shortage with exactly one unique metadata general")
+	var display=session.bridge.snapshot(0).duplicate(true)
+	display.players[0].general="彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹"
+	room._state_changed(display)
+	t.check(room._board.get_child_count()==10 and "技能尚未实装" in room._board.get_child(0).tooltip_text,"H02d explicit metadata display fixture retains actual LAN fallback rendering")
 	t.check(session.lobby.mode == GameModes.FREE_FOR_ALL and session.latest.mode == session.mode, "H02d lobby and game carry explicit same mode")
 	session.close()
 	for pair in [[6, GameModes.CLASSIC], [5, GameModes.AMBITIOUS], [5, "unknown"]]:
