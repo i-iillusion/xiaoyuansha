@@ -184,7 +184,10 @@ func _journal_and_panel(t: SceneTree) -> void:
 	for dimensions in [Vector2i(960, 540), Vector2i(3840, 2160)]:
 		t.root.size = dimensions
 		panel.size = Vector2(424, 310)
-		receiver.append("result", "长中文".repeat(100), 3, 3)
+		# Font advance/fallback metrics differ across desktop and Linux CI.
+		# This is an overflow fixture: use enough text to exceed 240px even
+		# with narrow glyphs, retaining the exact scrollbar/width assertions.
+		receiver.append("result", "长中文".repeat(1000), 3, 3)
 		await frames(t)
 		t.check(panel.text_view.get_v_scroll_bar().max_value > panel.text_view.get_v_scroll_bar().page and panel.text_view.size.x <= panel.size.x, "LOG long Chinese remains scrollable at viewport %s" % dimensions)
 	t.root.size = old_size
