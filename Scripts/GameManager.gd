@@ -31,6 +31,9 @@ signal unit_removed(id: String, reason: int)
 signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
+# I05b stays private until both skills and native/LAN lifecycle pass acceptance.
+# Not a client setting or a substitute for GeneralData's metadata-only status.
+var _david_rules_enabled := false
 var action_history := ActionHistory.new()
 var _history_hp: Dictionary = {}
 var _history_panel: ActionHistoryPanel
@@ -2977,8 +2980,25 @@ func _record_card_action(p: Player, card: CardBase, kind: CardActionEvent.Kind =
 	var name = "暗置" + card.hidden_category if card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT else card.card_name
 	_history_event("response" if kind == CardActionEvent.Kind.RESPONSE else "use", "%s %s【%s】%s" % [p.player_name,
 		"打出" if kind == CardActionEvent.Kind.RESPONSE else "使用", name, "（虚拟）" if is_virtual else ""], p, [], {"action": event.id, "card": name, "virtual": is_virtual})
+	_apply_farming_card_action(p, event)
 	card_action_committed.emit(event)
 	return event
+
+func _apply_farming_card_action(p: Player, event: CardActionEvent) -> void:
+	# Q1: committed, before responses, rather than Leo's completion boundary.
+	# This hook is invoked once by _record_card_action, never by completion/replay.
+	if not _david_rules_enabled or p.general_name != "大卫·法米尔" or p.is_dead() or not _has_character_body(p): return
+	if event.actor_body != p or typeof(event.actor_key) != TYPE_INT or typeof(event.turn_owner_key) != TYPE_INT: return
+	if event.actor_key != p.seat_index or event.actor_key != event.turn_owner_key: return
+	if not event.from_hand or event.is_virtual: return
+	if event.kind not in [CardActionEvent.Kind.USE, CardActionEvent.Kind.RESPONSE]: return
+	if p.farm_action_turn != event.turn_id:
+		p.farm_action_turn = event.turn_id
+		p.farm_hand_actions = 0
+	p.farm_hand_actions += 1
+	if p.farm_hand_actions % 2 == 0:
+		p.farm_empty_fields += 1
+		_public_result("%s 发动【种田】：获得1块空田（空田%d，好田%d）" % [p.player_name, p.farm_empty_fields, p.farm_good_fields])
 
 func _complete_card_actions(events: Array):
 	var completed: Array[CardActionEvent] = []
