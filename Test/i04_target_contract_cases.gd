@@ -62,6 +62,13 @@ func native(t):
 	var buttons=game._native_unit_board._list.get_children().filter(func(child): return child is Button and child.has_meta("unit"))
 	t.check(not buttons.is_empty(),"I04 native board presents legal mountain as target button during strike selection")
 	if not buttons.is_empty():
+		var reused=buttons[0]
+		mountain.hp=4
+		game._native_unit_board.refresh(game)
+		t.check(is_instance_valid(reused) and not reused.is_queued_for_deletion() and "4/5" in reused.text and reused.pressed.get_connections().size()==1,"I04 live HP refresh keeps one current target callback, no duplicated attack")
+		mountain.hp=5
+		game._native_unit_board.refresh(game)
+		t.check("5/5" in reused.text and reused.pressed.get_connections().size()==1,"I04 repeated board refresh updates immediately without accumulating callbacks")
 		buttons[0].pressed.emit()
 		for i in 3: await t.process_frame
 		if not game._choice_prompt_stack.is_empty():

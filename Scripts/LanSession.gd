@@ -9,6 +9,8 @@ const PROTOCOL := "campus-lan-12"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
 	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊", "克里斯·西弗"]
+# Private integration gate; never a lobby setting or an RPC argument.
+var _enable_mountain_rules_for_tests := false
 var members: Dictionary = {}
 var count := 2
 var mode := GameModes.FREE_FOR_ALL
@@ -97,7 +99,7 @@ func _choose(general: String, ready: bool) -> void:
 
 func _apply_choice(peer: int, general: String, ready: bool) -> void:
 	if bridge != null or not members.has(peer): return
-	if general not in GENERALS and general not in ["随机", "稻草人"]: return
+	if general not in GENERALS and general not in ["随机", "稻草人"] and not (_enable_mountain_rules_for_tests and general=="吉姆·芒顿"): return
 	members[peer].general = general
 	members[peer].ready = ready
 	_publish_lobby()
@@ -137,6 +139,7 @@ func begin_match() -> bool:
 		roster.append({"name": entry.name, "general": pool.pop_back() if entry.general == "随机" else entry.general})
 	match_id = Crypto.new().generate_random_bytes(16).hex_encode()
 	bridge = LanGameBridge.new()
+	if _enable_mountain_rules_for_tests: bridge._enable_mountain_rules_for_tests=true
 	add_child(bridge)
 	if not bridge.start(roster, mode, pace):
 		bridge.abort()
