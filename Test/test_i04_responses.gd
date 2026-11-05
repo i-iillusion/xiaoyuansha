@@ -19,5 +19,6 @@ func _run():
 	await load("res://Test/i04_terrain_transport_cases.gd").new().run(self)
 	await load("res://Test/i04_public_opening_cases.gd").new().run(self)
 	await load("res://Test/i05_peter_peach_cases.gd").new().run(self)
+	await load("res://Test/i05_peter_sacrifice_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

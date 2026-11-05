@@ -7,6 +7,8 @@ const WINE=CardData.CardSubType.WINE
 func fixture(t):
 	var game=load("res://Test/h02_integration_cases.gd").new().fixture(t,5,GameModes.FREE_FOR_ALL)
 	game._peter_rules_enabled=true
+	# Isolate the established Peach flow from the newly optional Sacrifice list.
+	game._peter_exclusion_override=func(_p,_c,_k,_v): return []
 	game.lan_enabled=true
 	game._sacrifice_actor_override=func(_p,_t,_a): return false
 	for body in game.players:
@@ -169,6 +171,7 @@ func bridge_cases(t):
 		t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST),"I05 private Bridge fixture starts without public Peter opening")
 		var game=bridge.game
 		game._halt_countdown()
+		game._peter_exclusion_override=func(_p,_c,_k,_v): return []
 		game._sacrifice_actor_override=func(_p,_v,_n): return false
 		game._duel_respond_override=func(): return false
 		game._nullify_override=func(): return false

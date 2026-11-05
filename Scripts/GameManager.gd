@@ -226,6 +226,7 @@ var _mountain_rules_enabled := true
 # Private until all Peter skills and the I05a opening gates are verified.
 var _peter_rules_enabled := false
 var _peter_peach_override: Callable = Callable()
+var _peter_exclusion_override: Callable = Callable()
 var _jim_opening_pending: Dictionary = {}
 var _jim_rebuild_pending: Dictionary = {}
 var _jim_rebuild_choice_override: Callable = Callable()
@@ -10880,12 +10881,22 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		return not _game_over and revision == turn_manager.get_context_revision() \
 			and generation == _dying_lifecycle_generation \
 			and _has_character_body(target) and target.is_alive() and (not allowed.is_valid() or allowed.call())
+	var excluded: Array = []
+	if _peter_owner_allowed(_source):
+		var candidates: Array[Player] = []
+		for body in _character_order_from(target):
+			if body != _source and body != target and _peter_selection_allowed(_source,body): candidates.append(body)
+		var choice = await _choose_peter_exclusions(_source,candidates,"【关你屁事】禁止第三方舍己","sacrifice",valid)
+		if choice.invalidated or not valid.call(): return {"invalidated":true,"player":null}
+		excluded = choice.selected
+		if not excluded.is_empty():
+			_history_event("skill","%s 发动【关你屁事】：禁止所选角色参与此次舍己响应" % _source.player_name,_source,excluded)
 	# Q48: target is skipped below, so this starts at its actual downstream
 	# character (including attached turn units), never fixed seat A or source.
 	for p in _character_order_from(target):
 		if not valid.call():
 			return {"invalidated": true, "player": null}
-		if p == target or not p.is_alive():
+		if p == target or not p.is_alive() or excluded.has(p):
 			continue
 		# 【下跪】：无法使用或打出任何牌 → 不能打出舍己为人
 		if _is_kneeling(p):
@@ -10894,7 +10905,7 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 		# Keep survival/payment checks separate: Q49 permits a fully paid
 		# virtual Sacrifice to survive final death, not a dead actor to respond.
 		var paid_response: Array[bool] = [false]
-		var responder_valid = func(): return valid.call() and _has_character_body(p) \
+		var responder_valid = func(): return valid.call() and not excluded.has(p) and _has_character_body(p) \
 			and _mountain_effect_reaches(_retained_effect_anchor(p),target) \
 			and (_can_target_body(p,target) or (paid_response[0] and p.is_dead() \
 				and fire_dragon_state.is_revealed_to(unit_registry.id_for(target),p)))
@@ -11659,6 +11670,105 @@ func _do_sage_save(p: Player):
 	_draw_blank_cards(p, 4)
 	_public_result("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
+
+# Q9-Q12 use value snapshots for committed exclusions, not a global response
+# flag. Callers supply the legal set for this one effect/response category.
+func _peter_owner_allowed(owner: Player) -> bool:
+	return _peter_rules_enabled and is_instance_valid(owner) and players.has(owner) and owner.is_alive() \
+		and owner.general_name == "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹"
+
+func _peter_selection_allowed(owner: Player, target: Player) -> bool:
+	return _has_character_body(target) and target.is_alive() and not _is_kneeling(target) \
+		and _can_target_body(owner,target) and _mountain_effect_reaches(_retained_effect_anchor(owner),target)
+
+func _choose_peter_exclusions(owner: Player, candidates: Array[Player], title: String, kind: String, allowed: Callable) -> Dictionary:
+	var empty = {"invalidated":false,"selected":[]}
+	if not _peter_owner_allowed(owner) or candidates.is_empty(): return empty
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var general_revision = owner.awakening_revision
+	var registry_generation = unit_registry.generation()
+	var space = terrain_markers()
+	var offered: Array[Player] = candidates.duplicate()
+	var valid = func():
+		return not _game_over and _peter_owner_allowed(owner) and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and owner.awakening_revision == general_revision \
+			and registry_generation == unit_registry.generation() and space == terrain_markers() \
+			and (not allowed.is_valid() or allowed.call()) \
+			and offered.all(func(body): return _peter_selection_allowed(owner,body))
+	var reply: Variant = []
+	if _peter_exclusion_override.is_valid():
+		reply = await _peter_exclusion_override.call(owner,offered.duplicate(),kind,valid)
+	elif _is_human(owner):
+		_set_input_player(owner)
+		var remaining: Array = [STEP_SECONDS]
+		var first = await _show_choice_popup(title,["发动【关你屁事】"],valid,true,remaining[0],remaining)
+		if first == CHOICE_INVALID or not valid.call(): return {"invalidated":true,"selected":[]}
+		if first != 0: return empty
+		_set_input_player(owner)
+		reply = await _show_peter_exclusion_picker(offered,title,valid,remaining[0])
+	# Optional AI declines; the same validated path remains available to it.
+	if not valid.call() or (typeof(reply)==TYPE_INT and reply==CHOICE_INVALID): return {"invalidated":true,"selected":[]}
+	if typeof(reply)!=TYPE_ARRAY: return {"invalidated":true,"selected":[]}
+	var selected: Array[Player] = []
+	for body in reply:
+		if not body is Player or not offered.has(body) or selected.has(body): return {"invalidated":true,"selected":[]}
+		selected.append(body)
+	return {"invalidated":false,"selected":selected}
+
+func _show_peter_exclusion_picker(candidates: Array[Player], title: String, allowed: Callable, remaining: float) -> Variant:
+	var answer = ChoicePromptAnswer.new()
+	var selected: Array[Player] = []
+	var overlay = ColorRect.new()
+	overlay.name = "PeterExclusionPicker"
+	overlay.color = Color(0,0,0,0.55)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.z_index = 100
+	$UI.add_child(overlay)
+	var box = VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	box.position = Vector2(-340,-230)
+	box.custom_minimum_size = Vector2(680,0)
+	overlay.add_child(box)
+	var label = Label.new()
+	label.text = title+"：选择禁止角色，确认后才生效"
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size",20)
+	box.add_child(label)
+	var scroll = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(680,300)
+	box.add_child(scroll)
+	var grid = GridContainer.new()
+	grid.columns = 2
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(grid)
+	for body in candidates:
+		var button = Button.new()
+		var seat_text = "%d号" % (body.seat_index+1)
+		if not players.has(body):
+			var entry = unit_registry.entry(unit_registry.id_for(body))
+			seat_text = "%d号的附属单位" % (entry.summoner.seat_index+1)
+		button.text = "禁止：%s（%s）" % [body.player_name,seat_text]
+		button.toggle_mode = true
+		button.custom_minimum_size = Vector2(310,44)
+		button.toggled.connect(func(on):
+			if on and not selected.has(body): selected.append(body)
+			elif not on: selected.erase(body))
+		grid.add_child(button)
+	var confirm = Button.new()
+	confirm.text = "确认禁止名单"
+	confirm.custom_minimum_size.y = 44
+	confirm.pressed.connect(answer.submit.bind(0))
+	box.add_child(confirm)
+	var cancel = Button.new()
+	cancel.text = "取消"
+	cancel.custom_minimum_size.y = 44
+	cancel.pressed.connect(answer.submit.bind(-1))
+	box.add_child(cancel)
+	var choice = await _wait_choice_prompt(overlay,answer,allowed,true,remaining)
+	if choice == CHOICE_INVALID: return CHOICE_INVALID
+	return selected.duplicate() if choice == 0 else []
 
 # Q3/Q5: an optional choice before the first ordinary rescue offer. The
 # context carries the committed result, so nested dying windows cannot inherit
