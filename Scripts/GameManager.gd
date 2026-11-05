@@ -223,8 +223,8 @@ var mountain_space := MountainSpace.new()
 var _mountain_ledger: RoundLedger
 # Development gate: no metadata-only Jim silently gains partial skills.
 var _mountain_rules_enabled := true
-# Private until all Peter skills and the I05a opening gates are verified.
-var _peter_rules_enabled := false
+# Public capability after I05a acceptance; explicit test overrides remain available.
+var _peter_rules_enabled := true
 var _peter_peach_override: Callable = Callable()
 var _peter_exclusion_override: Callable = Callable()
 var _peter_ignore_override: Callable = Callable()

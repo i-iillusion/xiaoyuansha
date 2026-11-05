@@ -4,6 +4,8 @@ param(
     [ValidateRange(2,10)][int]$Players = 2,
     [ValidateSet('','classic_identity','ambitious_identity','free_for_all')][string]$Mode = '',
     [switch]$DropCase,
+    [switch]$ReserveCase,
+    [switch]$CancelCase,
     [switch]$SpaceCase,
     [switch]$UnitCase,
     [switch]$MedicineCase,
@@ -27,6 +29,8 @@ $info.FileName = $executable
 $info.Arguments = '--headless --disable-render-loop --path "' + $projectPath + '" --script "' + $Script + '" -- --players=' + $Players
 if ($Mode -ne '') { $info.Arguments += ' --mode=' + $Mode }
 if ($DropCase) { $info.Arguments += ' --drop-case' }
+if ($ReserveCase) { $info.Arguments += ' --reserve-case' }
+if ($CancelCase) { $info.Arguments += ' --cancel-case' }
 if ($SpaceCase) { $info.Arguments += ' --space-case' }
 if ($UnitCase) { $info.Arguments += ' --unit-case' }
 if ($MedicineCase) { $info.Arguments += ' --medicine-case' }

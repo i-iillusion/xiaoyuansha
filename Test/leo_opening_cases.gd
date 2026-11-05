@@ -26,7 +26,7 @@ func run(suite):
 		var leo_buttons = buttons.filter(func(b): return name in b.text)
 		suite.check(leo_buttons.size() == 1 and "体力 5" in leo_buttons[0].text and "【丑态】" in leo_buttons[0].text
 			and "【预习】" in leo_buttons[0].text and "【预大习】" in leo_buttons[0].text, "F03c actual %d-player menu has exactly one Leo button with all skills" % count)
-		suite.check(buttons.size() == GeneralData.GENERALS.size() + 1 and not buttons.any(func(b): return "彼得·伊茨" in b.text or "安迪·沃费尔" in b.text), "F03c selectable menu count remains exact; metadata and deferred generals not opened")
+		suite.check(buttons.size() == GeneralData.GENERALS.size() + 1 and not buttons.any(func(b): return "大卫·法米尔" in b.text or "安迪·沃费尔" in b.text), "F03c selectable menu count remains exact; metadata and deferred generals not opened")
 		if leo_buttons.is_empty(): continue # Failure recorded above; never call a missing button.
 		var scroller: ScrollContainer = menu.get_node("Center")
 		scroller.ensure_control_visible(leo_buttons[0])

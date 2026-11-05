@@ -170,7 +170,7 @@ func bridge_cases(t):
 		t.root.add_child(bridge)
 		var roster: Array[Dictionary]=[]
 		for seat in 5: roster.append({"name":"P%d"%seat,"general":PETER if seat==1 else "稻草人"})
-		t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST),"I05 private Bridge fixture starts without public Peter opening")
+		t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST),"I05 Bridge fixture starts with Peter capability")
 		var game=bridge.game
 		game._peter_ignore_override=func(_p,_s,_k,_v): return 0
 		game._halt_countdown()

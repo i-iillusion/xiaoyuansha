@@ -158,16 +158,16 @@ func _run():
 	check(owner.judgment_cards.size() == 1 and game.players[2].judgment_cards.size() == 1, "判定生效后才向相邻判定区蔓延")
 	# GEN-01：抽将池只含可用武将；随机分配无放回，不拿稻草人补足。
 	var pool = GeneralData.get_available_random_generals()
-	check(pool.size() == 10 and pool.count("吉姆·芒顿") == 1 and GeneralData.get_implementation_status("吉姆·芒顿") == "prototype" and pool.has("里奥·普利威尔") and pool.count("克里斯·西弗") == 1 and not pool.has("稻草人"), "随机池含当前十名非占位武将，克里斯与吉姆均开放一次")
+	check(pool.size() == 11 and pool.count("彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹") == 1 and pool.count("吉姆·芒顿") == 1 and GeneralData.get_implementation_status("吉姆·芒顿") == "prototype" and pool.has("里奥·普利威尔") and pool.count("克里斯·西弗") == 1 and not pool.has("稻草人"), "随机池含当前十一名非占位武将，彼得、克里斯与吉姆均开放一次")
 	for count in [2, 3, 5, 7, 8]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}
 		for name in draw:
 			unique[name] = true
 		check(draw.size() == count and unique.size() == count, "%d人随机选将无重复" % count)
-	check(GeneralData.METADATA_ONLY_GENERALS.size() == 21
+	check(GeneralData.METADATA_ONLY_GENERALS.size() == 20
 		and GeneralData.get_implementation_status("安迪·沃费尔") == "deferred",
-		"手册其余21将均有资料状态，安迪仍暂缓")
+		"手册其余20将均有资料状态，安迪仍暂缓")
 	for count in [8, 10]:
 		var draw = GeneralData.draw_unique_random_generals(count)
 		var unique = {}
@@ -191,7 +191,7 @@ func _run():
 		and GeneralData.get_gender("里奥·普利威尔") == "male",
 		"手册女性武将资料不再沿用全员男性默认")
 	var metadata_player = Player.new()
-	metadata_player.general_name = "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹"
+	metadata_player.general_name = "大卫·法米尔"
 	metadata_player.max_hp = GeneralData.get_max_hp(metadata_player.general_name, 5)
 	root.add_child(metadata_player)
 	var metadata_popup = PlayerDetailPopup.create(root, metadata_player)
@@ -199,7 +199,7 @@ func _run():
 	var skill_rows = metadata_popup.get_node("Panel/Content/SkillsSection/SkillsList").get_children()
 	var warning_found = false
 	for row in skill_rows:
-		if row is Label and row.text.contains("技能尚未实装") and row.text.contains("6.8"):
+		if row is Label and row.text.contains("技能尚未实装") and row.text.contains("6.9"):
 			warning_found = true
 	check(warning_found, "资料武将详情明确显示技能未实装及手册章节，而非没有技能")
 	check(GeneralData.get_implementation_status(metadata_player.general_name) == "metadata_only", "资料警告仍以未实装武将验收，不把已开放里奥当资料将")

@@ -4,7 +4,7 @@ func run(t):
 	var saved=[GameManager.selected_players,GameManager.selected_mode,GameManager.selected_general,GameManager.random_general,GameManager.random_identity,MainMenu.random_mode]
 	var name="吉姆·芒顿"
 	t.check(GeneralData.get_implementation_status(name)=="prototype" and GeneralData.get_max_hp(name)==6 and not GeneralData.METADATA_ONLY_GENERALS.has(name),"I04 public Jim has one playable six-HP entry, no metadata duplicate")
-	t.check(GeneralData.get_available_random_generals().size()==10 and GeneralData.get_available_random_generals().count(name)==1 and LanSession.GENERALS.count(name)==1,"I04 native random pool and LAN choice list include Jim exactly once")
+	t.check(GeneralData.get_available_random_generals().size()==11 and GeneralData.get_available_random_generals().count(name)==1 and LanSession.GENERALS.count(name)==1,"I04 native random pool and LAN choice list include Jim exactly once")
 	MainMenu.random_mode=false
 	var menu=load("res://Scenes/MainMenu.tscn").instantiate()
 	menu.set_script(load("res://Test/leo_menu_observer.gd"))

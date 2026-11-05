@@ -12,9 +12,9 @@ var _commands: Dictionary = {}
 var _controls: Array = []
 var _labels: Array = []
 # Server rule capability. Historical name retained for explicit integration fixtures.
-# Public Jim entry is enabled after the complete I04 acceptance gate.
+# Public Jim/Peter capabilities follow their complete opening acceptance gates.
 var _enable_mountain_rules_for_tests := true
-var _enable_peter_rules_for_tests := false
+var _enable_peter_rules_for_tests := true
 
 func start(roster: Array[Dictionary], mode: String, pace: int = -1) -> bool:
 	if game != null or not GameModes.initializable(mode, roster.size()): return false
