@@ -87,6 +87,7 @@ func bridge_cases(t):
 		for seat in 5: roster.append({"name":"P%d"%seat,"general":load("res://Test/i05_peter_peach_cases.gd").PETER if seat==0 else "稻草人"})
 		t.check(bridge.start(roster,GameModes.FREE_FOR_ALL,AiActionPacer.Speed.FAST),"I05 actual source-controlled Bridge starts")
 		var game=bridge.game
+		game._peter_ignore_override=func(_p,_s,_k,_v): return 0
 		game._halt_countdown()
 		game._nullify_override=func(): return false
 		game._duel_respond_override=func(): return false

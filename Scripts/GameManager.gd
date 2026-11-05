@@ -1499,6 +1499,12 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 	_history_event("skill", "%s 发动【偷药品】，放弃本阶段摸牌" % p.player_name, p, checked)
 	for target in checked:
 		if not valid.call() or not _medicine_candidates(p).has(target): return CHOICE_INVALID
+		var recipient_valid = func():
+			return valid.call() and _medicine_candidates(p).has(target) \
+				and target.hand == snapshots[target].hand and target.determined_cards == snapshots[target].determined
+		var immune = await _peter_ignore_effect(target,checked,"medicine",recipient_valid)
+		if immune == CHOICE_INVALID: return CHOICE_INVALID
+		if immune == 1: continue
 		# Existing hand-transfer policy; arbitrary stays null, concrete keeps ID.
 		var card: CardBase = target.take_hand_cards(1)[0]
 		p.hand.append(card)
@@ -8170,22 +8176,30 @@ func _try_zhuangsha(dying: Player) -> int:
 	var generation = _dying_lifecycle_generation
 	var context = _dying_contexts.get(dying)
 	var wins := 0
+	var excluded := 0
 	for opp in opponents:
 		var valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
 				and generation == _dying_lifecycle_generation and _dying_contexts.get(dying) == context \
 				and _has_character_body(dying) and players.has(opp) and dying.is_dying() and opp.is_alive() \
 				and _mountain_effect_reaches(_retained_effect_anchor(dying), opp)
+		var immune = await _peter_ignore_effect(opp,opponents,"zhuangsha",valid)
+		if immune == CHOICE_INVALID: return CHOICE_INVALID
+		if immune == 1:
+			excluded += 1
+			continue
 		var r = await _do_ping_dian_once(dying, opp, valid)
 		if r == RPS_INVALID or not valid.call():
 			return CHOICE_INVALID
 		if r == RPS_WIN:
 			wins += 1
-	if wins >= ceili(opponents.size() / 2.0):
+	var count = opponents.size() - excluded
+	if count == 0: return 0
+	if wins >= ceili(count / 2.0):
 		dying.hp = 1
-		_public_result("%s 【装傻】拼点胜 %d/%d，回复至 1 点体力！（%d/%d）" % [dying.player_name, wins, opponents.size(), dying.hp, dying.max_hp])
+		_public_result("%s 【装傻】拼点胜 %d/%d，回复至 1 点体力！（%d/%d）" % [dying.player_name, wins, count, dying.hp, dying.max_hp])
 	else:
-		_update_debug("%s 【装傻】拼点胜 %d/%d，未能回复…" % [dying.player_name, wins, opponents.size()])
+		_update_debug("%s 【装傻】拼点胜 %d/%d，未能回复…" % [dying.player_name, wins, count])
 	_sync_all_ui()
 	return 0
 
@@ -8599,6 +8613,9 @@ func _activate_jushan(p: Player) -> int:
 					if not frame_valid.call(): result = CHOICE_INVALID; break
 					var target: Player = targets[index]
 					if not target.is_alive() or _is_kneeling(target): continue
+					var immune = await _peter_ignore_effect(target,targets,"jushan",frame_valid,key != "heal")
+					if immune == CHOICE_INVALID: result = CHOICE_INVALID; break
+					if immune == 1: continue
 					if key == "heal": target.heal(1)
 					else:
 						target.hp -= 1 # Loss, not damage: no source, damage weapon or Sacrifice.
@@ -8797,6 +8814,15 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	if not target_valid.call(valid[0]):
 		return
 	_public_result("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
+	# I05-P-Q13: immunity removes this recipient before its mandatory fee,
+	# RPS and denominator; retain the original declaration for every offer.
+	var declared: Array[Player] = valid.duplicate()
+	var participants: Array[Player] = []
+	for t in declared:
+		var immune = await _peter_ignore_effect(t,declared,"zhuangbi",func(): return target_valid.call(t))
+		if immune == CHOICE_INVALID: return
+		if immune != 1: participants.append(t)
+	valid = participants
 	for t in valid:
 		if not await _select_hand_discard(t, 1, true, func():
 			return target_valid.call(t)):
@@ -9283,13 +9309,13 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 		return
 	var revision = turn_manager.get_context_revision()
 	var selection = _play_skill_selection_generation
-	var valid = func():
+	var valid = func(check_unused: bool = true):
 		return _gay_execution_owner == owner and _gay_execution_generation == owner \
 			and selection == _play_skill_selection_generation \
 			and _can_use_play_skill(p) and revision == turn_manager.get_context_revision() \
 			and p.general_name == "比尔·盖伊" and _has_character_body(target) and target != p \
 			and target.is_alive() and target.gender == p.gender and target.hp < target.max_hp \
-			and _gay_target_valid(p, target) and not _gay_used
+			and _gay_target_valid(p, target) and (not check_unused or not _gay_used)
 	if not valid.call():
 		return
 	var max_x = mini(p.max_hp, target.max_hp)
@@ -9318,11 +9344,17 @@ func _execute_gay_pending(p: Player, target: Player, owner: int) -> void:
 	if not valid.call() or x > mini(p.max_hp, target.max_hp):
 		return
 	_gay_used = true
+	var audience: Array[Player] = [p,target]
+	var immune = await _peter_ignore_effect(target,audience,"gay",func(): return valid.call(false),false)
+	if immune == CHOICE_INVALID: return
 	var p_before = p.hp
 	var t_before = target.hp
 	p.heal(x)
-	target.heal(x)
-	_public_result("%s 发动【Gay】：弃置 %d 张手牌，与 %s 各回复 %d 点体力（%d/%d → %d/%d；%d/%d → %d/%d）" % [p.player_name, x, target.player_name, x, p_before, p.max_hp, p.hp, p.max_hp, t_before, target.max_hp, target.hp, target.max_hp])
+	if immune != 1: target.heal(x)
+	if immune == 1:
+		_public_result("%s 发动【Gay】：弃置 %d 张手牌，自身回复 %d 点体力；%s 免除此效果，体力不变" % [p.player_name,x,p.hp-p_before,target.player_name])
+	else:
+		_public_result("%s 发动【Gay】：弃置 %d 张手牌，与 %s 各回复 %d 点体力（%d/%d → %d/%d；%d/%d → %d/%d）" % [p.player_name, x, target.player_name, x, p_before, p.max_hp, p.hp, p.max_hp, t_before, target.max_hp, target.hp, target.max_hp])
 	_sync_all_ui()
 
 # X 选择弹窗（玩家0）：返回 1..max_x（取消返回 0）
@@ -9544,6 +9576,19 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 		pending.clear()
 		return
 	_lanzhonghou_used = true # 支付后立即记入当前阶段；后续暗置声明等待不能写进另一个阶段。
+	# I05-P-Q14: exchanging equipment is atomic for the two recipients.
+	# Immunity cancels the exchange, never the already-paid skill cost.
+	var audience: Array[Player] = [a,b]
+	var swap_valid = func():
+		return action_valid.call() and pending.all(func(entry):
+			return _equipment_resource_for_pick(entry.a,entry.slot_a)==entry.card_a \
+				and _equipment_resource_for_pick(entry.b,entry.slot_b)==entry.card_b)
+	for recipient in audience:
+		var immune = await _peter_ignore_effect(recipient,audience,"equipment_swap",swap_valid)
+		if immune == CHOICE_INVALID or immune == 1:
+			pending.clear()
+			_sync_all_ui()
+			return
 	# 统一执行交换
 	var swapped = 0
 	for entry in pending:
