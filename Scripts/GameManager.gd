@@ -1320,7 +1320,7 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			# not the delayed card's original source. A mountain's initial
 			# response admits both sides; character judgments use its region.
 			var region: Player = null if _is_mountain_body(p) else p
-			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, p, region)
+			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, p, region, _new_peter_trick_scope(null,[p]))
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
 		p.judgment_cards.erase(card)
@@ -3877,6 +3877,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.BARBARIAN_INVASION,roster)
+	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【%s】指定群体目标" % [p.player_name, card_name], p,
 		audience)
 	_sync_all_ui()
@@ -3915,7 +3916,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 			continue
 
 		# 无懈可击：效果即将对目标生效前，询问所有角色
-		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name], Callable(), p, target)
+		var nullified = await _ask_nullification_chain_result("%s的【%s】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, card_name, target.player_name], Callable(), p, target, peter_scope)
 		if nullified == NullificationOutcome.INVALIDATED:
 			_abandon_card_actions(actions)
 			return
@@ -4066,6 +4067,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.PEACH_GARDEN,roster)
+	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
 	turn_manager.use_card("peach_garden")
@@ -4103,7 +4105,7 @@ func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revi
 			_update_debug("%s 处于【下跪】状态，【桃园结义】对其无效" % target.player_name)
 			continue
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
+		var nullified = await _ask_nullification_chain_result("%s的【桃园结义】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target, peter_scope)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4139,6 +4141,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.HARVEST,roster)
+	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
 	turn_manager.use_card("harvest")
@@ -4179,7 +4182,7 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
+		var nullified = await _ask_nullification_chain_result("%s的【五谷丰登】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target, peter_scope)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4222,6 +4225,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.DISARM,roster)
+	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, audience)
 	turn_manager.use_card("disarm")
 	_sync_all_ui()
@@ -4251,7 +4255,7 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 			continue
 
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target)
+		var nullified = await _ask_nullification_chain_result("%s的【卸甲归田】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, target.player_name], Callable(), p, target, peter_scope)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4512,7 +4516,7 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 		return
 	second_confirmed[0] = true
 	_history_event("target", "%s 指定 %s 对 %s 出杀" % [user.player_name, first.player_name, second.player_name], user, [first, second])
-	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid, user, first)
+	var nullified = await _ask_nullification_chain_result("%s的【借刀杀人】即将对 %s 生效，是否无懈？" % [user.player_name, first.player_name], valid, user, first, _new_peter_trick_scope(user,[first,second]))
 	if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 		_abandon_card_actions(actions)
 		return
@@ -5957,6 +5961,7 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
+	var peter_scope = _new_peter_trick_scope(p,targets)
 	_history_event("targets", "%s 的【铁索连环】指定%d名目标" % [p.player_name, targets.size()], p, targets)
 	_sync_all_ui()
 
@@ -5976,7 +5981,7 @@ func _resolve_paid_iron_chain(p: Player, targets: Array[Player], actions: Array[
 		if immune == CHOICE_INVALID: _abandon_card_actions(actions); return
 		if immune == 1: continue
 		# 无懈可击：效果即将对目标生效前
-		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name], Callable(), p, t)
+		var nullified = await _ask_nullification_chain_result("%s的【铁索连环】即将对 %s 生效，是否打出一张【无懈可击】？" % [p.player_name, t.player_name], Callable(), p, t, peter_scope)
 		if nullified == NullificationOutcome.INVALIDATED or _game_over or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -6335,7 +6340,31 @@ enum NullificationOutcome { PASSED, NULLIFIED, INVALIDATED }
 func _ask_nullification_chain(desc: String) -> bool:
 	return await _ask_nullification_chain_result(desc) == NullificationOutcome.NULLIFIED
 
-func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), first_origin: Player = null, first_region: Player = null) -> NullificationOutcome:
+# Q12/Q19: one value scope per original card, shared by all target segments.
+# Q20: judgments pass source=null and protect only the current holder.
+func _new_peter_trick_scope(source: Player, targets: Array[Player]) -> Dictionary:
+	var protected: Array[Player] = targets.duplicate()
+	if source != null and not protected.has(source): protected.append(source)
+	return {"protected":protected,"asked":false,"excluded":[]}
+
+func _prepare_peter_nullification(trick: Dictionary, response_scope: Dictionary, allowed: Callable) -> int:
+	if trick.get("asked",false): return 0
+	trick.asked = true # Declining or timing out also consumes this one inquiry.
+	var owner: Player
+	for body in players:
+		if _peter_owner_allowed(body): owner = body; break
+	if owner == null or not _nullification_scope_allows(owner,response_scope): return 0
+	var candidates: Array[Player] = []
+	for body in _nullification_response_order(response_scope):
+		if not trick.protected.has(body) and _peter_selection_allowed(owner,body): candidates.append(body)
+	var choice = await _choose_peter_exclusions(owner,candidates,"【关你屁事】选择不能对本张牌使用无懈的角色","nullification",allowed)
+	if choice.invalidated: return CHOICE_INVALID
+	trick.excluded = choice.selected.duplicate()
+	if not trick.excluded.is_empty():
+		_history_event("skill","%s 发动【关你屁事】：所选角色不能对本张牌使用无懈" % owner.player_name,owner,trick.excluded)
+	return 0
+
+func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), first_origin: Player = null, first_region: Player = null, peter_scope: Dictionary = {}) -> NullificationOutcome:
 	var pending: bool = false        # 当前是否有一张生效中的无懈
 	var actions: Array[CardActionEvent] = []
 	var round_desc: String = desc
@@ -6345,7 +6374,16 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 	# target region. Terrain judgment initially admits both sides.
 	# Scope is local to this chain, never an input owner or display-name lookup.
 	var scope: Dictionary = {}
-	if first_origin != null: scope = {"origin":first_origin,"region":_retained_effect_anchor(first_region)}
+	if first_origin != null:
+		if peter_scope.is_empty():
+			var targets: Array[Player] = []
+			if first_region != null: targets.append(first_region)
+			peter_scope = _new_peter_trick_scope(first_origin,targets)
+		scope = {"origin":first_origin,"region":_retained_effect_anchor(first_region),"peter":peter_scope}
+		var valid = func(): return not _game_over and revision == turn_manager.get_context_revision() \
+			and generation == _dying_lifecycle_generation and (not allowed.is_valid() or allowed.call())
+		if await _prepare_peter_nullification(peter_scope,scope,valid) == CHOICE_INVALID:
+			return NullificationOutcome.INVALIDATED
 	while true:
 		var reply = await _ask_nullification_round_result(round_desc, allowed, scope)
 		if reply.get("card_action") is CardActionEvent:
@@ -6361,7 +6399,7 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 			_restore_input_owner()
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
 		pending = not pending
-		if not scope.is_empty(): scope = {"origin":reply.actor,"region":_retained_effect_anchor(reply.actor)}
+		if not scope.is_empty(): scope = {"origin":reply.actor,"region":_retained_effect_anchor(reply.actor),"peter":peter_scope}
 		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
 	return NullificationOutcome.INVALIDATED
 
@@ -6376,6 +6414,7 @@ func _ask_nullification_round(desc: String) -> String:
 func _nullification_scope_allows(p: Player, scope: Dictionary) -> bool:
 	if scope.is_empty(): return true
 	if not _has_character_body(p): return false
+	if scope.get("peter",{}).get("excluded",[]).has(p): return false
 	var anchor: Player = scope.region
 	if anchor == null or mountain_space.ids().is_empty(): return true
 	var destination = _retained_effect_anchor(p)

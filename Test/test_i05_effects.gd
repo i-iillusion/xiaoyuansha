@@ -9,5 +9,6 @@ func check(ok:bool,message:String):
 func run():
 	await load("res://Test/i05_peter_card_cases.gd").new().run(self)
 	await load("res://Test/i05_peter_skill_cases.gd").new().run(self)
+	await load("res://Test/i05_peter_counter_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)

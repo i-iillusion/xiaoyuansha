@@ -34,6 +34,7 @@ func run(t):
 		var actions: Array=[]
 		game.card_action_committed.connect(func(a): actions.append(a))
 		game._peter_exclusion_override=func(owner,candidates,kind,valid):
+			if kind=="nullification": return [] # Isolate the established damage-response cases.
 			asks.append(candidates)
 			t.check(owner==source and kind=="sacrifice" and valid.call() and not candidates.has(source),"I05 source owns current valid third-party Sacrifice selection: "+mode)
 			if candidates.has(victim): return [] # A transferred injury is a separate window.
@@ -102,6 +103,7 @@ func bridge_cases(t):
 		var target=bridge.snapshot(0).targets.get("1","")
 		t.check(target!="" and bridge.submit(0,target),"I05 actual paid Duel reaches before-damage exclusion window")
 		await helper.frames(t)
+		await helper.click(t,bridge,0,"取消") # Decline the new pre-counter list, then test the original Sacrifice UI.
 		var first=find.find(bridge.snapshot(0),"发动【关你屁事】")
 		t.check(first!="" and not bridge.submit(3,first),"I05 only damage source owns optional skill confirmation")
 		# Explicit already-spent budget boundary, not an accelerated game clock.
