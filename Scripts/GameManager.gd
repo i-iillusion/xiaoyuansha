@@ -308,6 +308,7 @@ var _is_sage_targeting: bool = false
 
 # 无懈可击响应测试钩子（正常游戏不设置）：返回 true = 玩家0打出无懈
 var _nullify_override: Callable = Callable()
+var _farming_nullification_override: Callable = Callable()
 
 # 舍己为人响应测试钩子（正常游戏不设置）：返回 true = 玩家0打出舍己为人
 var rule_scheduler = RuleScheduler.new()
@@ -6464,6 +6465,14 @@ func _nullification_response_order(scope: Dictionary) -> Array[Player]:
 		if _has_character_body(body) and not body.is_dead() and _nullification_scope_allows(body,scope): order.append(body)
 	return order
 
+func _farming_nullification_choices(p: Player) -> Array[String]:
+	var choices: Array[String] = []
+	if not _david_rules_enabled or not is_instance_valid(p) or not _has_character_body(p) \
+			or not p.is_alive() or _is_kneeling(p) or p.general_name != "大卫·法米尔": return choices
+	if p.farm_empty_fields > 0: choices.append("field_empty")
+	if p.farm_good_fields > 0: choices.append("field_good")
+	return choices
+
 func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(), scope: Dictionary = {}) -> Dictionary:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
@@ -6484,14 +6493,16 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			and (scope.is_empty() or p.is_alive() or (paid_response[0] and p.is_dead()))
 		if not responder_valid.call(): continue
 		var snapshot = HandSelection.new(p)
+		var field_snapshot = [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision]
 		var played = "skip"
 		if _is_human(p):
 			_set_input_player(p)
 			played = await _show_nullification_prompt(desc, p, responder_valid)
 		else:
-			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else []
+			var options: Array = [CardData.CardSubType.NULLIFICATION] if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) or not _farming_nullification_choices(p).is_empty() else []
 			if await _choose_ai_response(p, "nullification", options, {"description": desc}) == CardData.CardSubType.NULLIFICATION:
-				played = "card"
+				var fields = _farming_nullification_choices(p)
+				played = "card" if HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION) else (fields[0] if not fields.is_empty() else "skip")
 		if played == "invalidated" or not responder_valid.call():
 			return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
 		if played != "skip":
@@ -6510,7 +6521,23 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 				_sync_all_ui()
 				return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 			var action_card: CardBase
-			if yes_ah == "skill":
+			var virtual_use = yes_ah in ["skill", "field_empty", "field_good"]
+			if yes_ah in ["field_empty", "field_good"]:
+				if not responder_valid.call() or not _farming_nullification_choices(p).has(yes_ah) \
+						or field_snapshot != [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision]:
+					return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": ""}
+				var healed = 0
+				if yes_ah == "field_empty": p.farm_empty_fields -= 1
+				else:
+					p.farm_good_fields -= 1
+					var before = p.hp
+					p.heal(1) # Q4: before the next counter, even if this counter is later negated.
+					healed = p.hp - before
+				paid_response[0] = true
+				action_card = CardBase.create(CardData.CardSubType.NULLIFICATION)
+				_history_event("skill", "%s 发动【种田】：%s当无懈%s" % [p.player_name,
+					"空田" if yes_ah == "field_empty" else "好田", "，回复%d体力" % healed if yes_ah == "field_good" else ""], p)
+			elif yes_ah == "skill":
 				var paid = await _pay_yes_ah_cost_result(p, true)
 				if paid == 1: paid_response[0] = true
 				if paid == CHOICE_INVALID or not responder_valid.call():
@@ -6526,7 +6553,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 				deck.discard(used_card)
 				action_card = used_card
 				paid_response[0] = true
-			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
+			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -6540,13 +6567,24 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Callable()) -> String:
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
+	var field_choices = _farming_nullification_choices(p)
+	var field_snapshot = [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision]
+	var valid = func(): return (not allowed.is_valid() or allowed.call()) \
+		and (field_choices.is_empty() or (_farming_nullification_choices(p) == field_choices \
+			and [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision] == field_snapshot))
+	if not field_choices.is_empty() and _farming_nullification_override.is_valid():
+		var choices: Array[String] = field_choices.duplicate()
+		if has_hand: choices.append("card")
+		choices.append("skip")
+		var selected = await _farming_nullification_override.call(p, choices.duplicate(), valid)
+		return str(selected) if valid.call() and choices.has(selected) else "invalidated"
 	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
 	if _nullify_override.is_valid():
 		if not _nullify_override.call():
 			return "skip"
-		return "card" if has_hand else ("skill" if is_yes_ah else "skip")
+		return "card" if has_hand else (field_choices[0] if not field_choices.is_empty() else ("skill" if is_yes_ah else "skip"))
 
-	if not has_hand and not is_yes_ah:
+	if not has_hand and not is_yes_ah and field_choices.is_empty():
 		return "skip"
 
 	var overlay = ColorRect.new()
@@ -6564,7 +6602,7 @@ func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Cal
 
 	var label = Label.new()
 	label.text = desc
-	if not has_hand:
+	if not has_hand and is_yes_ah:
 		label.text += "\n（无可用的无懈或任意牌，可发动【是~啊~】流失 1 点体力视为打出）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
@@ -6578,10 +6616,19 @@ func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Cal
 	hbox.add_theme_constant_override("separation", 20)
 	vbox.add_child(hbox)
 
-	var nullify_btn = Button.new()
-	nullify_btn.text = "打出【无懈可击】" if has_hand else "发动【是~啊~】打出"
-	nullify_btn.custom_minimum_size = Vector2(180, 44)
-	hbox.add_child(nullify_btn)
+	var answer = ChoicePromptAnswer.new()
+	if has_hand or is_yes_ah:
+		var nullify_btn = Button.new()
+		nullify_btn.text = "打出【无懈可击】" if has_hand else "发动【是~啊~】打出"
+		nullify_btn.custom_minimum_size = Vector2(180, 44)
+		hbox.add_child(nullify_btn)
+		nullify_btn.pressed.connect(answer.submit.bind(1))
+	for field in field_choices:
+		var field_btn = Button.new()
+		field_btn.text = "空田当无懈（%d）" % p.farm_empty_fields if field == "field_empty" else "好田当无懈并回复1（%d）" % p.farm_good_fields
+		field_btn.custom_minimum_size = Vector2(220, 44)
+		hbox.add_child(field_btn)
+		field_btn.pressed.connect(answer.submit.bind(2 if field == "field_empty" else 3))
 
 	var skip_btn = Button.new()
 	skip_btn.text = "放弃" if has_hand else "取消"
@@ -6589,12 +6636,12 @@ func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Cal
 	skip_btn.modulate = Color(0.7, 0.7, 0.7)
 	hbox.add_child(skip_btn)
 
-	var answer = ChoicePromptAnswer.new()
-	nullify_btn.pressed.connect(answer.submit.bind(1))
 	skip_btn.pressed.connect(answer.submit.bind(0))
-	var result = await _wait_choice_prompt(overlay, answer, allowed)
+	var result = await _wait_choice_prompt(overlay, answer, valid)
 	if result == CHOICE_INVALID:
 		return "invalidated"
+	if result == 2: return "field_empty"
+	if result == 3: return "field_good"
 	return ("card" if has_hand else "skill") if result == 1 else "skip"
 
 # ---- 效果链回调 ----
