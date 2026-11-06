@@ -14,6 +14,7 @@ var _player: Player
 var _viewer: Player
 var _wine_stacks: int = 0
 var _mountain_skills_enabled: bool = false
+var _farming_skills_enabled: bool = false
 # 悬停效果描述浮层
 var _tooltip: PanelContainer
 var _tooltip_label: Label
@@ -30,7 +31,7 @@ var _tooltip_label: Label
 @onready var _close_btn: Button = $Panel/CloseBtn
 
 # 静态方法：创建一个新的详情弹窗
-static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false) -> PlayerDetailPopup:
+static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false, farming_skills_enabled: bool = false) -> PlayerDetailPopup:
 	var scene = load("res://Scenes/PlayerDetailPopup.tscn")
 	if scene == null:
 		# 代码兜底：直接实例化
@@ -39,6 +40,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 		popup._viewer = viewer
 		popup._wine_stacks = wine_stacks
 		popup._mountain_skills_enabled = mountain_skills_enabled
+		popup._farming_skills_enabled = farming_skills_enabled
 		parent.add_child(popup)
 		return popup
 
@@ -47,6 +49,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 	popup._viewer = viewer
 	popup._wine_stacks = wine_stacks
 	popup._mountain_skills_enabled = mountain_skills_enabled
+	popup._farming_skills_enabled = farming_skills_enabled
 	parent.add_child(popup)
 	return popup
 
@@ -121,6 +124,13 @@ func _populate():
 		_add_skill_btn("护山", "【护山】出牌阶段限一次，弃置一张手牌，使一座山恢复至体力上限（满血也可发动）")
 		_add_skill_btn("移山", "【移山】出牌阶段限一次，弃置一张手牌，将一座山移至另一个间隔")
 		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")
+
+	# Private David fixtures expose only the implemented upgrade, never publish a general.
+	if _farming_skills_enabled and _player.general_name == "大卫·法米尔":
+		if _viewer == _player:
+			_add_skill_btn("种田", "【种田】弃置两张手牌，将一块空田变为好田；每块好田使摸牌阶段多摸一张")
+		else:
+			_add_skill_label("【种田】每块好田使摸牌阶段多摸一张", Color(0.9, 0.9, 0.7))
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
 	_clear_container(_equip_container)
@@ -218,6 +228,11 @@ func _populate():
 	# 标记：贤者标记 + 判定区延时锦囊
 	_clear_container(_marks_container)
 	var has_marks := false
+	if _farming_skills_enabled and _player.general_name == "大卫·法米尔":
+		var fields = Label.new()
+		fields.text = "空田：%d  好田：%d" % [_player.farm_empty_fields, _player.farm_good_fields]
+		_marks_container.add_child(fields)
+		has_marks = true
 
 	# 贤者标记（贤者的加护的拼点标记/激活状态）
 	if _player.sage_tokens > 0 or _player.sage_activated:

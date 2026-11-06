@@ -34,6 +34,7 @@ var _pending_card_actions: Dictionary = {}
 # I05b stays private until both skills and native/LAN lifecycle pass acceptance.
 # Not a client setting or a substitute for GeneralData's metadata-only status.
 var _david_rules_enabled := false
+var _farming_upgrade_pending: Dictionary = {}
 var action_history := ActionHistory.new()
 var _history_hp: Dictionary = {}
 var _history_panel: ActionHistoryPanel
@@ -1425,6 +1426,10 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true) -> bool:
 	if p.general_name == "比尔·盖伊" and p.is_alive():
 		draw_count += 1
 		_public_result("%s 发动【英姿】：摸牌阶段多摸一张" % p.player_name)
+	if _david_rules_enabled and p.general_name == "大卫·法米尔" and p.is_alive():
+		draw_count += p.farm_good_fields
+		if p.farm_good_fields > 0:
+			_public_result("%s 的【种田】：好田使摸牌阶段多摸%d张" % [p.player_name, p.farm_good_fields])
 	if apply_supply and turn_manager.supply_shortage_active:
 		turn_manager.supply_shortage_active = false
 		draw_count -= 1
@@ -8458,6 +8463,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _farming_upgrade_pending.is_empty(): return true
 	if not _jim_mountain_skill_pending.is_empty(): return true
 	if _egg_heal_pending or _roar_pending or not _summon_dragon_pending.is_empty(): return true
 	if _gay_execution_owner != -1 or _campus_execution_owner != -1 or _lanzhonghou_execution_owner != -1:
@@ -8486,6 +8492,40 @@ func _can_use_play_skill(p: Player) -> bool:
 	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
 		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
+
+func _activate_farming_upgrade(p: Player) -> int:
+	if not _david_rules_enabled or not _can_use_play_skill(p) or not players.has(p) \
+			or p.general_name != "大卫·法米尔" or p.farm_empty_fields < 1 \
+			or p.hand_size() < 2 or _play_skill_execution_busy(): return 0
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var lease = {"owner": p}
+	_farming_upgrade_pending = lease
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var general = p.awakening_revision
+	var empty = p.farm_empty_fields
+	var good = p.farm_good_fields
+	var valid = func():
+		return _david_rules_enabled and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and is_same(_farming_upgrade_pending, lease) \
+			and _can_use_play_skill(p) and p.general_name == "大卫·法米尔" \
+			and p.awakening_revision == general and p.farm_empty_fields == empty and p.farm_good_fields == good
+	var paid = await _select_hand_discard_result(p, 2, false, valid)
+	var result = 0
+	if paid == HandDiscardOutcome.PAID:
+		if valid.call():
+			p.farm_empty_fields -= 1
+			p.farm_good_fields += 1
+			_history_event("skill", "%s 发动【种田】：两张手牌将1块空田升级为好田（空田%d，好田%d）" \
+				% [p.player_name, p.farm_empty_fields, p.farm_good_fields], p)
+			_sync_all_ui()
+			result = 1
+		else: result = CHOICE_INVALID
+	elif paid != HandDiscardOutcome.DECLINED:
+		result = CHOICE_INVALID
+	if is_same(_farming_upgrade_pending, lease): _farming_upgrade_pending = {}
+	return result
 
 func _activate_hushan(p: Player) -> int:
 	if not _mountain_rules_enabled or not players.has(p) or p.general_name != "吉姆·芒顿" \
@@ -11694,6 +11734,7 @@ func reset_game_over_state():
 	if yudaxi != null: yudaxi.reset()
 	_sage_save_pending.clear()
 	_rescue_choice_pending.clear()
+	_farming_upgrade_pending = {}
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()
@@ -12446,7 +12487,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player())
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled)
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)
@@ -12462,6 +12503,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "种田":
+		await _activate_farming_upgrade(owner_player)
+		return
 	if skill_key == "护山":
 		await _activate_hushan(owner_player)
 		return
