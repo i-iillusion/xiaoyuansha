@@ -1878,6 +1878,13 @@ func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bo
 			return not _has_delayed_card(p, sub)
 	return sub in TARGET_TRICKS
 
+func _ai_farming_upgrade_eligible(p: Player) -> bool:
+	# Conservative strategy: keep one good field, rather than converting every
+	# remaining hand. The shared skill entry still owns payment and legality.
+	return _david_rules_enabled and _can_use_play_skill(p) and players.has(p) \
+		and p.general_name == "大卫·法米尔" and p.farm_empty_fields > 0 \
+		and p.farm_good_fields == 0 and p.hand_size() >= 2 and not _play_skill_execution_busy()
+
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat: Variant = observation.actor
@@ -1891,6 +1898,8 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
 	var choices: Array = []
+	if _ai_farming_upgrade_eligible(p):
+		choices.append({"skill": "farming_upgrade", "sub": -1, "target": -1, "priority": 90})
 	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE,
 			CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]:
 		if not can_declare_basic(p, sub):
@@ -1965,6 +1974,9 @@ func _execute_ai_action(action: Dictionary):
 			or typeof(action.actor) != typeof(turn_manager.get_play_actor_key()) \
 			or action.actor != turn_manager.get_play_actor_key() or action.revision != turn_manager.get_context_revision() \
 			or p.hand != _ai_hand_snapshot.hand or p.determined_cards != _ai_hand_snapshot.determined:
+		return
+	if action.get("skill", "") == "farming_upgrade":
+		if _ai_farming_upgrade_eligible(p): await _activate_farming_upgrade(p)
 		return
 	var sub = int(action.sub)
 	if typeof(action.target) == TYPE_STRING or action.target >= 0:
