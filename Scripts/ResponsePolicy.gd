@@ -27,4 +27,7 @@ static func choose(view: Dictionary, kind: String, options: Array) -> int:
 		return -1
 	var allies = (own.identity in ["主公", "忠臣"] and other.identity in ["主公", "忠臣"]) \
 		or (own.identity == "反贼" and other.identity == "反贼")
-	return CardData.CardSubType.PEACH if allies and options.has(CardData.CardSubType.PEACH) else -1
+	if allies:
+		for cost in [CardData.CardSubType.PEACH, GameManager.RESCUE_FIELD_PEACH]:
+			if options.has(cost): return cost
+	return -1

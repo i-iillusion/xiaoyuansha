@@ -35,6 +35,8 @@ var _pending_card_actions: Dictionary = {}
 # Not a client setting or a substitute for GeneralData's metadata-only status.
 var _david_rules_enabled := false
 var _farming_upgrade_pending: Dictionary = {}
+var _farming_peach_pending: Dictionary = {}
+var _farming_peach_override: Callable = Callable()
 var action_history := ActionHistory.new()
 var _history_hp: Dictionary = {}
 var _history_panel: ActionHistoryPanel
@@ -346,6 +348,7 @@ var _medicine_choice_override: Callable = Callable()
 var _medicine_pending: Dictionary = {}
 var _medicine_serial := 0
 const RESCUE_EGG := 1000001 # Skill response, deliberately outside CardSubType.
+const RESCUE_FIELD_PEACH := 1000002 # Explicit field cost, still a Peach for rules.
 var _egg_heal_override: Callable = Callable()
 var _egg_heal_pending := false
 var _egg_rescue_turns: Dictionary = {}
@@ -1780,7 +1783,9 @@ func _choose_ai_response(p: Player, kind: String, options: Array, context: Dicti
 
 # 规则查询同时供普通出牌和AI使用；策略不会另造次数、距离或支付规则。
 func can_declare_basic(p: Player, sub: int) -> bool:
-	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card() or not _has_play_card(p, sub):
+	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card() \
+			or not (_has_play_card(p, sub) or (sub == CardData.CardSubType.PEACH \
+			and _pending_determined_card == null and _can_pay_farming_peach(p))):
 		return false
 	match sub:
 		CardData.CardSubType.PEACH:
@@ -3462,7 +3467,8 @@ func play_card(sub: CardData.CardSubType):
 	if not turn_manager.can_play_card():
 		_update_debug("当前不能出牌")
 		return
-	if p.hand_size() <= 0 and p.determined_cards.is_empty() and _pending_determined_card == null:
+	if p.hand_size() <= 0 and p.determined_cards.is_empty() and _pending_determined_card == null \
+			and not (sub == CardData.CardSubType.PEACH and can_declare_basic(p, sub)):
 		_update_debug("没有手牌了")
 		return
 	if _pending_determined_card != null and not _has_play_card(p, sub):
@@ -3533,6 +3539,13 @@ func play_card(sub: CardData.CardSubType):
 			if p.hp >= p.max_hp:
 				_update_debug("体力已满")
 				return
+			if _pending_determined_card == null and _can_pay_farming_peach(p):
+				var cost = await _choose_farming_peach_payment(p)
+				if cost == "field":
+					_pay_farming_peach(p, p, func(): return _can_use_play_skill(p) and can_declare_basic(p, sub))
+					_reset_play_countdown_if_p0()
+					return
+				if cost != "hand": return
 			var used_peach = _take_play_card(p, sub)
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
@@ -6563,7 +6576,7 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 			return {"outcome": NullificationOutcome.NULLIFIED, "actor_name": p.player_name, "actor": p, "card_action": action}
 	return {"outcome": NullificationOutcome.PASSED, "actor_name": ""}
 
-# 玩家0的无懈响应弹窗（锚点居中）：返回 "card"（打出无懈，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
+# 无懈资源窗口：card/skill兼容原路径，field_empty/field_good为种田资源；skip/invalidated分开。
 func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Callable()) -> String:
 	var has_hand = HandPayment.has_card(p, CardData.CardSubType.NULLIFICATION)
 	var is_yes_ah = p.general_name == "安普提·斯丢皮得"
@@ -6578,7 +6591,7 @@ func _show_nullification_prompt(desc: String, p: Player, allowed: Callable = Cal
 		choices.append("skip")
 		var selected = await _farming_nullification_override.call(p, choices.duplicate(), valid)
 		return str(selected) if valid.call() and choices.has(selected) else "invalidated"
-	# 测试钩子只决定意愿；无匹配牌时仅安普提可通过【是~啊~】打出。
+	# 旧意愿钩子优先手牌，再已有田，最后是啊；真人可在同一窗口明确选资源。
 	if _nullify_override.is_valid():
 		if not _nullify_override.call():
 			return "skip"
@@ -8510,6 +8523,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _farming_peach_pending.is_empty(): return true
 	if not _farming_upgrade_pending.is_empty(): return true
 	if not _jim_mountain_skill_pending.is_empty(): return true
 	if _egg_heal_pending or _roar_pending or not _summon_dragon_pending.is_empty(): return true
@@ -11782,6 +11796,7 @@ func reset_game_over_state():
 	_sage_save_pending.clear()
 	_rescue_choice_pending.clear()
 	_farming_upgrade_pending = {}
+	_farming_peach_pending = {}
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()
@@ -12086,6 +12101,52 @@ func _choose_peter_peach_restriction(context: DyingContext, allowed: Callable) -
 		_history_event("skill","%s 发动【关你屁事】：禁止第三方用桃救援 %s（本人可自救）" % [source.player_name,victim.player_name],source,[victim])
 	return 0
 
+func _can_pay_farming_peach(p: Player) -> bool:
+	# Self-rescue is allowed while DYING; never reuse Nullification's ACTIVE gate.
+	return _david_rules_enabled and is_instance_valid(p) and _has_character_body(p) \
+		and not p.is_dead() and not _is_kneeling(p) and p.general_name == "大卫·法米尔" and p.farm_good_fields > 0
+
+func _choose_farming_peach_payment(p: Player) -> String:
+	if _play_skill_execution_busy(): return "invalidated"
+	var lease = {"actor": p}
+	_farming_peach_pending = lease
+	var snapshot = HandSelection.new(p)
+	var fields = [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision]
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var valid = func(): return _can_use_play_skill(p) and _can_pay_farming_peach(p) \
+		and _pending_determined_card == null and is_same(_farming_peach_pending, lease) \
+		and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+		and fields == [p.farm_empty_fields, p.farm_good_fields, p.awakening_revision] \
+		and p.hand == snapshot.hand and p.determined_cards == snapshot.determined and p.hp < p.max_hp
+	var choices: Array[String] = ["field"]
+	if _has_play_card(p, CardData.CardSubType.PEACH): choices.push_front("hand")
+	var choice = "field"
+	if _farming_peach_override.is_valid():
+		choice = str(await _farming_peach_override.call(p, choices.duplicate(), valid))
+	elif choices.size() > 1:
+		if not _is_human(p): choice = "hand" # Conservative strategy, not a mandatory cost.
+		else:
+			_set_input_player(p)
+			var selected = await _show_choice_popup("选择【桃】的支付方式", ["使用手牌桃", "好田当桃"], valid)
+			choice = "hand" if selected == 0 else ("field" if selected == 1 else ("invalidated" if selected == CHOICE_INVALID else "skip"))
+	if not valid.call() or (choice != "skip" and not choices.has(choice)): choice = "invalidated"
+	if is_same(_farming_peach_pending, lease): _farming_peach_pending = {}
+	return choice
+
+func _pay_farming_peach(p: Player, recipient: Player, allowed: Callable) -> bool:
+	if not _can_pay_farming_peach(p) or not allowed.is_valid() or not allowed.call(): return false
+	p.farm_good_fields -= 1
+	p.farm_empty_fields += 1
+	var card = CardBase.create(CardData.CardSubType.PEACH)
+	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, false, true, [recipient])
+	var before = recipient.hp
+	_heal_with_staff(p, recipient)
+	_history_event("skill", "%s 发动【种田】：好田当桃，获得1空田，%s回复%d体力" % [p.player_name, recipient.player_name, recipient.hp - before], p, [recipient])
+	_complete_card_actions([action])
+	_sync_all_ui()
+	return true
+
 # 合法性与持牌情况是所有人共用的规则；是否愿意救援是另一个决策层。
 func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 	var options: Array[int] = []
@@ -12111,6 +12172,8 @@ func _rescue_options(rescuer: Player, dying: Player) -> Array[int]:
 			continue
 		if HandPayment.has_card(rescuer, sub):
 			options.append(sub)
+		if sub == CardData.CardSubType.PEACH and _can_pay_farming_peach(rescuer):
+			options.append(RESCUE_FIELD_PEACH)
 	if rescuer == dying and _egg_rescue_turns.get(dying) == rescuer and rescuer.general_name == "克里斯·西弗" \
 		and fire_dragon_state.can_heal(rescuer, rescuer, turn_manager.current_phase):
 		options.append(RESCUE_EGG)
@@ -12121,6 +12184,8 @@ func _use_rescue_card(rescuer: Player, dying: Player, sub: int) -> bool:
 	if not _rescue_options(rescuer, dying).has(sub):
 		return false
 	if sub == RESCUE_EGG: return _spend_egg_to_heal(dying)
+	if sub == RESCUE_FIELD_PEACH:
+		return _pay_farming_peach(rescuer, dying, func(): return _rescue_options(rescuer, dying).has(RESCUE_FIELD_PEACH))
 	var card = HandPayment.take_card(rescuer, sub)
 	if card == null:
 		return false
@@ -12178,13 +12243,15 @@ func _ask_rescue_card(rescuer: Player, dying: Player) -> int:
 	var context = _dying_contexts.get(dying)
 	var snapshot = HandSelection.new(rescuer)
 	var eggs = rescuer.fire_dragon_eggs
+	var fields = [rescuer.farm_empty_fields, rescuer.farm_good_fields, rescuer.awakening_revision]
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation \
 			and _has_character_body(rescuer) and _has_character_body(dying) and not rescuer.is_dead() and not dying.is_dead() \
 			and revision == turn_manager.get_context_revision() and _dying_contexts.get(dying) == context \
 			and _rescue_choice_pending.get(dying) == owner \
 			and rescuer.hand == snapshot.hand and rescuer.determined_cards == snapshot.determined \
-			and rescuer.fire_dragon_eggs == eggs
+			and rescuer.fire_dragon_eggs == eggs \
+			and (not options.has(RESCUE_FIELD_PEACH) or (fields == [rescuer.farm_empty_fields, rescuer.farm_good_fields, rescuer.awakening_revision] and _can_pay_farming_peach(rescuer)))
 	var selected = await _ask_rescue_card_pending(rescuer, dying, options, valid)
 	if not valid.call(): selected = CHOICE_INVALID
 	elif dying.is_alive(): selected = -1 # 合法的外部救回不误当死亡流程技术失效。
@@ -12250,7 +12317,7 @@ func _show_rescue_prompt(rescuer: Player, dying: Player, options: Array[int], al
 
 	for sub in options:
 		var button = Button.new()
-		button.text = "弃蛋回复2体力" if sub == RESCUE_EGG else "使用【%s】" % CardData.get_type_name(sub)
+		button.text = "弃蛋回复2体力" if sub == RESCUE_EGG else ("好田当桃（%d）" % rescuer.farm_good_fields if sub == RESCUE_FIELD_PEACH else "使用【%s】" % CardData.get_type_name(sub))
 		button.custom_minimum_size = Vector2(160, 44)
 		button.pressed.connect(answer.submit.bind(sub))
 		hbox.add_child(button)
@@ -12294,7 +12361,7 @@ func _on_play_btn_pressed():
 	if _game_over or turn_manager.current_phase != TurnManager.Phase.PLAY:
 		return
 	var p = _play_actor()
-	if p.hand_size() <= 0 and p.determined_cards.is_empty():
+	if p.hand_size() <= 0 and p.determined_cards.is_empty() and not can_declare_basic(p, CardData.CardSubType.PEACH):
 		_update_debug("没有手牌了")
 		return
 
@@ -12753,7 +12820,7 @@ func _sync_all_ui():
 	var my_turn = (_is_human(_play_actor()))
 	if my_turn and turn_manager.current_phase == TurnManager.Phase.PLAY:
 		var play_actor = _play_actor()
-		_play_btn.disabled = ((play_actor.hand_size() <= 0 and play_actor.determined_cards.is_empty()) or _is_kneeling(play_actor))
+		_play_btn.disabled = ((play_actor.hand_size() <= 0 and play_actor.determined_cards.is_empty() and not can_declare_basic(play_actor, CardData.CardSubType.PEACH)) or _is_kneeling(play_actor))
 	else:
 		_play_btn.disabled = true
 	_egg_heal_btn.visible = _play_btn.visible and _can_play_egg(_play_actor()) \
