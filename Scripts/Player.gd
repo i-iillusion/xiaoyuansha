@@ -42,13 +42,14 @@ var _game_start_state: Dictionary = {}
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
-	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions"]
+	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round"]
 # I05b-2a: general-card resources, restored by Sage; not physical cards.
 # Only successful hand-card USE/RESPONSE facts in the owner's turn count.
 var farm_empty_fields: int = 0
 var farm_good_fields: int = 0
 var farm_action_turn: int = -1
 var farm_hand_actions: int = 0
+var wrestle_round: int = -1
 # I04-Q9: Sage restores first-trigger eligibility. This is general-card state,
 # not a rewind of the round ledger or any already-existing mountain body.
 var jim_mountains_started := false

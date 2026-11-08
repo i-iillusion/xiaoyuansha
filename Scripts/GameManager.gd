@@ -41,6 +41,9 @@ var _farming_peach_override: Callable = Callable()
 # I05b-4b supplies the actual once-per-round reaction and full virtual card.
 var _card_loss_reaction_override: Callable = Callable()
 var _card_loss_pending: Dictionary = {}
+var _wrestling_rules_enabled := false # Private until all external callers/lifecycle pass.
+var _wrestling_choice_override: Callable = Callable()
+var _wrestling_resolving: Dictionary = {}
 var action_history := ActionHistory.new()
 var _history_hp: Dictionary = {}
 var _history_panel: ActionHistoryPanel
@@ -3916,7 +3919,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 		return
 	await _replace_paid_global(p, card_sub, actions, response_revision)
 
-func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = []):
+func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = [], quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.BARBARIAN_INVASION,roster)
@@ -3924,7 +3927,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 	_history_event("targets", "%s 的【%s】指定群体目标" % [p.player_name, card_name], p,
 		audience)
 	_sync_all_ui()
-	turn_manager.use_card("aoe")
+	turn_manager.use_card("aoe", quota_actor)
 	_reset_play_countdown_if_p0()
 
 	_update_debug("%s 使用了【%s】，所有人需出【%s】或受到 1 点伤害" % [p.player_name, card_name, required_name])
@@ -4106,14 +4109,14 @@ func _play_peach_garden():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.PEACH_GARDEN, actions, revision)
 
-func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+func _resolve_paid_peach_garden(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = [], quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.PEACH_GARDEN,roster)
 	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【桃园结义】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
-	turn_manager.use_card("peach_garden")
+	turn_manager.use_card("peach_garden", quota_actor)
 	_reset_play_countdown_if_p0()
 
 	_update_debug("%s 使用了【桃园结义】，所有角色回复 1 点体力" % p.player_name)
@@ -4180,14 +4183,14 @@ func _play_harvest():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.HARVEST, actions, revision)
 
-func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = [], quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.HARVEST,roster)
 	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【五谷丰登】指定群体目标" % p.player_name, p, audience)
 	_sync_all_ui()
-	turn_manager.use_card("harvest")
+	turn_manager.use_card("harvest", quota_actor)
 	_reset_play_countdown_if_p0()
 
 	_update_debug("%s 使用了【五谷丰登】！" % p.player_name)
@@ -4264,13 +4267,13 @@ func _play_disarm():
 		return
 	await _replace_paid_global(p, CardData.CardSubType.DISARM, actions, revision)
 
-func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = []):
+func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: int, roster: Array[Player] = [], quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.DISARM,roster)
 	var peter_scope = _new_peter_trick_scope(p,audience)
 	_history_event("targets", "%s 的【卸甲归田】指定群体目标" % p.player_name, p, audience)
-	turn_manager.use_card("disarm")
+	turn_manager.use_card("disarm", quota_actor)
 	_sync_all_ui()
 	_reset_play_countdown_if_p0()
 
@@ -4342,21 +4345,21 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 # is_snatch = true → 顺手牵羊（获取），false → 过河拆桥（弃置）
 # 固定单体接决斗/铁索/拆顺/借刀；群体分类另由声明范围判断。
 # 原实体/成立事件由调用者持有；此处只选择本次效果，不再付手牌。
-func _prep_single_duel_legal(attacker: Player, target: Player) -> bool:
-	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2) \
+func _prep_single_duel_legal(attacker: Player, target: Player, quota_actor: Variant = -1) -> bool:
+	return turn_manager.can_use("duel", 3 if attacker.general_name == "杰基·斯特朗" else 2, quota_actor) \
 		and get_trick_targets(attacker, CardData.CardSubType.DUEL).has(target)
 
-func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int) -> Array:
+func _prep_fixed_candidates(attacker: Player, target: Player, current_sub: int, quota_actor: Variant = -1) -> Array:
 	var candidates: Array = []
-	if current_sub != CardData.CardSubType.DUEL and _prep_single_duel_legal(attacker, target):
+	if current_sub != CardData.CardSubType.DUEL and _prep_single_duel_legal(attacker, target, quota_actor):
 		candidates.append(CardData.CardSubType.DUEL)
 	if current_sub != CardData.CardSubType.IRON_CHAIN and get_trick_targets(attacker, CardData.CardSubType.IRON_CHAIN).has(target):
 		candidates.append(CardData.CardSubType.IRON_CHAIN)
-	if turn_manager.can_use("steal"):
+	if turn_manager.can_use("steal", -1, quota_actor):
 		for sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
 			if sub != current_sub and get_trick_targets(attacker, sub).has(target):
 				candidates.append(sub)
-	if current_sub != CardData.CardSubType.BORROWED_SWORD and turn_manager.can_use("borrowed_sword") \
+	if current_sub != CardData.CardSubType.BORROWED_SWORD and turn_manager.can_use("borrowed_sword", -1, quota_actor) \
 			and get_trick_targets(attacker, CardData.CardSubType.BORROWED_SWORD).has(target):
 		candidates.append(CardData.CardSubType.BORROWED_SWORD)
 	return candidates
@@ -4380,20 +4383,20 @@ func _prep_group_scope(p: Player, sub: int, roster: Array[Player] = []) -> Array
 		scope.append(target)
 	return scope
 
-func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int, initial_multi: bool = false, roster: Array[Player] = []) -> Array:
+func _prep_effect_candidates(attacker: Player, target: Player, current_sub: int, initial_multi: bool = false, roster: Array[Player] = [], quota_actor: Variant = -1) -> Array:
 	var candidates: Array = []
 	if current_sub in GLOBAL_TRICKS:
 		if current_sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS] \
 				and _prep_other_single(attacker, roster) != null:
-			candidates = _prep_fixed_candidates(attacker, _prep_other_single(attacker, roster), current_sub)
+			candidates = _prep_fixed_candidates(attacker, _prep_other_single(attacker, roster), current_sub, quota_actor)
 	elif not initial_multi and target != null:
-		candidates = _prep_fixed_candidates(attacker, target, current_sub)
+		candidates = _prep_fixed_candidates(attacker, target, current_sub, quota_actor)
 	for sub in GLOBAL_TRICKS:
 		var category = "aoe"
 		if sub == CardData.CardSubType.PEACH_GARDEN: category = "peach_garden"
 		elif sub == CardData.CardSubType.HARVEST: category = "harvest"
 		elif sub == CardData.CardSubType.DISARM: category = "disarm"
-		if sub != current_sub and turn_manager.can_use(category): candidates.append(sub)
+		if sub != current_sub and turn_manager.can_use(category, -1, quota_actor): candidates.append(sub)
 	return candidates
 
 # UNIT-18: a dragon's AOE designating both players cannot shrink to a single
@@ -4537,7 +4540,7 @@ func _show_borrowed_extra_targets(second: Player, candidates: Array, allowed: Ca
 # 已支付借刀效果；Q20第二目标确认后，原使用者最终死亡不截断结算。
 # Q19/Q21：方天保留固定目标，追加选择超时按当前勾选集合出杀。
 # 原版及预习替换共用；原牌实体和事件不改写。
-func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable()):
+func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[CardActionEvent], allowed: Callable = Callable(), quota_actor: Variant = -1):
 	_history_event("target", "%s 对 %s 使用【借刀杀人】" % [user.player_name, first.player_name], user, [first])
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
@@ -4552,10 +4555,10 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 			and (user.is_alive() or (second_confirmed[0] and user.is_dead())) and first.is_alive() \
 			and not _is_kneeling(user) and not _is_kneeling(first) and weapon != null \
 			and _equipment_resource_for_pick(first, "weapon") == weapon and (not allowed.is_valid() or allowed.call())
-	if not valid.call() or not turn_manager.can_use("borrowed_sword"):
+	if not valid.call() or not turn_manager.can_use("borrowed_sword", -1, quota_actor):
 		_abandon_card_actions(actions)
 		return
-	turn_manager.use_card("borrowed_sword")
+	turn_manager.use_card("borrowed_sword", quota_actor)
 	var second = await _choose_borrowed_second_target(user, first, valid)
 	if not second is Player or not valid.call():
 		_abandon_card_actions(actions)
@@ -4663,7 +4666,7 @@ func _replace_paid_global(p: Player, sub: int, actions: Array[CardActionEvent], 
 	await _resolve_prep_effect(p, [] if target == null else [target], effect_sub, actions, replacements, valid, revision, "", roster)
 
 # 共用已付费派发；中间类型不执行效果，也不计次数。
-func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions: Array[CardActionEvent], replacements: Array, allowed: Callable, revision: int, zone: String = "", roster: Array[Player] = []):
+func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions: Array[CardActionEvent], replacements: Array, allowed: Callable, revision: int, zone: String = "", roster: Array[Player] = [], extra_duel: bool = false, quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
 	if sub == CHOICE_INVALID or not allowed.call():
 		_abandon_card_actions(actions)
@@ -4671,19 +4674,19 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 	_history_event("effect", "%s 的本次效果为【%s】" % [p.player_name, CardData.get_type_name(sub)], p, original_targets, {"effective": sub})
 	match sub:
 		CardData.CardSubType.BARBARIAN_INVASION:
-			await _resolve_paid_aoe(p, CardData.CardSubType.STRIKE, "南蛮入侵", "杀", actions, revision, roster)
+			await _resolve_paid_aoe(p, CardData.CardSubType.STRIKE, "南蛮入侵", "杀", actions, revision, roster, quota_actor)
 			return
 		CardData.CardSubType.VOLLEY_OF_ARROWS:
-			await _resolve_paid_aoe(p, CardData.CardSubType.DODGE, "万箭齐发", "闪", actions, revision, roster)
+			await _resolve_paid_aoe(p, CardData.CardSubType.DODGE, "万箭齐发", "闪", actions, revision, roster, quota_actor)
 			return
 		CardData.CardSubType.PEACH_GARDEN:
-			await _resolve_paid_peach_garden(p, actions, revision, roster)
+			await _resolve_paid_peach_garden(p, actions, revision, roster, quota_actor)
 			return
 		CardData.CardSubType.HARVEST:
-			await _resolve_paid_harvest(p, actions, revision, roster)
+			await _resolve_paid_harvest(p, actions, revision, roster, quota_actor)
 			return
 		CardData.CardSubType.DISARM:
-			await _resolve_paid_disarm(p, actions, revision, roster)
+			await _resolve_paid_disarm(p, actions, revision, roster, quota_actor)
 			return
 	var target: Player = original_targets[0] if not original_targets.is_empty() else _prep_other_single(p, roster)
 	for replacement in replacements:
@@ -4706,16 +4709,17 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		var borrowed_valid = func():
 			return not _game_over and generation == _dying_lifecycle_generation \
 				and revision == turn_manager.get_context_revision() and _has_character_body(p) and _has_character_body(target)
-		await _resolve_paid_borrowed_sword(p, target, actions, borrowed_valid)
+		await _resolve_paid_borrowed_sword(p, target, actions, borrowed_valid, quota_actor)
 		return
 	if sub in [CardData.CardSubType.SNATCH, CardData.CardSubType.DISMANTLE]:
-		await _resolve_paid_steal(p, target, sub == CardData.CardSubType.SNATCH, zone, actions, fixed_valid, not replacements.is_empty())
+		await _resolve_paid_steal(p, target, sub == CardData.CardSubType.SNATCH, zone, actions, fixed_valid, not replacements.is_empty(), quota_actor)
 		return
 	if sub == CardData.CardSubType.DUEL:
 		_sync_all_ui()
-		turn_manager.use_card("duel")
+		var original_extra = extra_duel and replacements.is_empty()
+		if not original_extra: turn_manager.use_card("duel", quota_actor)
 		_reset_play_countdown_if_p0()
-		var result = await _play_duel(p, target)
+		var result = await _play_duel(p, target, original_extra)
 		if (result is int and result == CHOICE_INVALID) or _game_over \
 				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
@@ -4724,7 +4728,7 @@ func _resolve_prep_effect(p: Player, original_targets: Array, sub: int, actions:
 		return
 	_abandon_card_actions(actions)
 
-func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array, group_origin: bool = false, roster: Array[Player] = []) -> int:
+func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: int, allowed: Callable, replacements: Array, group_origin: bool = false, roster: Array[Player] = [], quota_actor: Variant = -1) -> int:
 	var generation = _dying_lifecycle_generation
 	roster.assign(_prep_group_roster(attacker))
 	if not allowed.call():
@@ -4749,7 +4753,7 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 				or _is_kneeling(leo) or leo.general_name != "里奥·普利威尔":
 			return current_sub
 		var current_target = _prep_other_single(attacker, roster) if current_sub in GLOBAL_TRICKS else target
-		var candidates = _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster)
+		var candidates = _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster, quota_actor)
 		if candidates.is_empty(): return current_sub
 		var selected: int = -1
 		if _prep_replace_override.is_valid():
@@ -4767,7 +4771,7 @@ func _maybe_prep_fixed_effect(attacker: Player, target: Player, original_sub: in
 		if selected == CHOICE_INVALID or not valid.call():
 			return CHOICE_INVALID
 		# 每次确认均复查；拒绝/超时保留当前牌效果及本次未用标记。
-		if not candidates.has(selected) or not _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster).has(selected):
+		if not candidates.has(selected) or not _prep_effect_candidates(attacker, current_target, current_sub, group_origin and replacements.is_empty(), roster, quota_actor).has(selected):
 			return current_sub
 		leo.prep_tokens -= 1
 		_history_event("replacement", "%s 发动【预习】：%s 的【%s】视为【%s】使用" % [leo.player_name, attacker.player_name,
@@ -4830,7 +4834,7 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 func _before_external_card_loss(source: Player, reason: String, losses: Array[Dictionary], allowed: Callable = Callable()) -> int:
 	# Incomplete/private reaction must not alter existing legacy cleanup paths,
 	# including a hidden placeholder that has no physical card to protect.
-	if not _david_rules_enabled or not _card_loss_reaction_override.is_valid() or losses.is_empty() \
+	if not _david_rules_enabled or (not _card_loss_reaction_override.is_valid() and not _wrestling_rules_enabled) or losses.is_empty() \
 			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm"]:
 		return CardLossTransaction.Outcome.ALLOW
 	var tx = CardLossTransaction.new(source, reason, losses)
@@ -4857,18 +4861,77 @@ func _before_external_card_loss(source: Player, reason: String, losses: Array[Di
 	for owner in owners:
 		_card_loss_pending[owner.get_instance_id()] = tx
 	var result = CardLossTransaction.Outcome.ALLOW
+	var responder: Player = null
+	var input_before = _input_seat
+	var diagnostic = _card_loss_reaction_override.is_valid()
 	for owner in owners:
-		var reply = await _card_loss_reaction_override.call(owner, tx, valid)
+		var reply = await _card_loss_reaction_override.call(owner, tx, valid) if diagnostic else await _choose_wrestling(owner, tx, valid)
 		if not valid.call() or reply not in [CardLossTransaction.Outcome.ALLOW, CardLossTransaction.Outcome.PREVENTED]:
 			result = CardLossTransaction.Outcome.INVALIDATED
 			break
 		if reply == CardLossTransaction.Outcome.PREVENTED:
+			responder = owner
 			result = reply
 			break
 	for owner in owners:
 		if _card_loss_pending.get(owner.get_instance_id()) == tx: _card_loss_pending.erase(owner.get_instance_id())
 	tx.close()
+	# Confirmation commits prevention before the counter can change cards/life.
+	# Never rerun the old-card snapshot after an authorized Duel response.
+	if result == CardLossTransaction.Outcome.PREVENTED and not diagnostic:
+		responder.wrestle_round = turn_manager.rounds.round_id
+		_history_event("skill", "%s 发动【我要跟你摔角】：防止本次失牌效果" % responder.player_name, responder)
+		var lease = RefCounted.new()
+		_wrestling_resolving[lease.get_instance_id()] = lease
+		await _resolve_wrestling_counter(responder, source)
+		_wrestling_resolving.erase(lease.get_instance_id())
+		if generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CardLossTransaction.Outcome.INVALIDATED
+	if generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision(): _input_seat = input_before
 	return result
+
+func _wrestling_ready(owner: Player) -> bool:
+	return _david_rules_enabled and _wrestling_rules_enabled and _has_character_body(owner) \
+		and owner.is_alive() and owner.general_name == "大卫·法米尔" and not _is_kneeling(owner) \
+		and turn_manager.rounds != null and turn_manager.rounds.round_id > 0 \
+		and owner.wrestle_round != turn_manager.rounds.round_id
+
+func _choose_wrestling(owner: Player, tx: CardLossTransaction, allowed: Callable) -> int:
+	if not _wrestling_ready(owner): return CardLossTransaction.Outcome.ALLOW
+	var round_id = turn_manager.rounds.round_id
+	var valid = func(): return allowed.call() and _wrestling_ready(owner) and turn_manager.rounds.round_id == round_id
+	var reply: int
+	if _wrestling_choice_override.is_valid(): reply = await _wrestling_choice_override.call(owner, valid)
+	elif not _is_human(owner): reply = 1
+	else:
+		_set_input_player(owner)
+		var detail = "并对效果来源使用额外决斗。" if _wrestling_duel_legal(owner, tx.source) else "此次没有合法的反击决斗目标。"
+		var chosen = await _show_choice_popup("【我要跟你摔角】本轮是否防止此次失牌？" + detail, ["发动摔角"], valid)
+		reply = CHOICE_INVALID if chosen == CHOICE_INVALID else (1 if chosen == 0 else 0)
+	if not valid.call() or reply not in [-1, 0, 1]: return CardLossTransaction.Outcome.INVALIDATED
+	return CardLossTransaction.Outcome.PREVENTED if reply == 1 else CardLossTransaction.Outcome.ALLOW
+
+func _wrestling_duel_legal(owner: Player, source: Player) -> bool:
+	return is_instance_valid(source) and source != owner and _has_character_body(source) and source.is_alive() \
+		and owner.is_alive() and not _is_kneeling(source) and not _is_kneeling(owner) \
+		and _can_target_body(owner, source) and _mountain_allows_single_declaration(owner, source) \
+		and source.get_armor() != CardData.CardSubType.ZHANQI and not _awake_blocks(source, 2)
+
+func _resolve_wrestling_counter(owner: Player, source: Player):
+	# Q6/Q10/Q11: prevention remains committed even without a legal Duel target.
+	if not _wrestling_duel_legal(owner, source): return
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var general_revision = owner.awakening_revision
+	var valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+		and revision == turn_manager.get_context_revision() and owner.awakening_revision == general_revision \
+		and _has_character_body(owner) and _has_character_body(source) and owner.is_alive() and source.is_alive()
+	var card = CardBase.create(CardData.CardSubType.DUEL)
+	var actions: Array[CardActionEvent] = [_record_card_action(owner, card, CardActionEvent.Kind.USE, false, true, [source])]
+	var replacements: Array = []
+	var roster: Array[Player] = []
+	var quota_actor = ActorIdentity.key_for(players, unit_registry, owner)
+	var sub = await _maybe_prep_fixed_effect(owner, source, card.sub_type, valid, replacements, false, roster, quota_actor)
+	await _resolve_prep_effect(owner, [source], sub, actions, replacements, valid, revision, "", roster, true, quota_actor)
 
 func _hand_loss_atoms(target: Player, count: int) -> Array[Dictionary]:
 	var selection = HandSelection.new(target)
@@ -4887,13 +4950,13 @@ func _equipment_loss_atoms(target: Player, slots: Array[String]) -> Array[Dictio
 
 # 已支付的拆/顺效果入口：不再取手牌、不重发使用事实。
 # 原入口仍在支付前选区域；替换后按PREP-12强制选原目标的一张牌。
-func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable, forced_pick: bool = false):
+func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable, forced_pick: bool = false, quota_actor: Variant = -1):
 	var sub = CardData.CardSubType.SNATCH if is_snatch else CardData.CardSubType.DISMANTLE
 	var card_name = "顺手牵羊" if is_snatch else "过河拆桥"
 	if not valid.call():
 		_abandon_card_actions(actions)
 		return
-	turn_manager.use_card("steal")
+	turn_manager.use_card("steal", quota_actor)
 	_reset_play_countdown_if_p0()
 	_update_debug("%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name])
 	_history_event("target", "%s 对 %s 使用【%s】" % [attacker.player_name, target.player_name, card_name], attacker, [target])
@@ -4932,20 +4995,18 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 			_complete_card_actions(actions)
 		_sync_all_ui()
 		return
+	var outcome
 	match zone:
-		"hand":
-			if await _steal_hand(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
-				_abandon_card_actions(actions)
-				return
-		"equip":
-			if await _steal_equip(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
-				_abandon_card_actions(actions)
-				_sync_all_ui()
-				return
-		"judgment":
-			if await _steal_judgment(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
-				_abandon_card_actions(actions)
-				return
+		"hand": outcome = await _steal_hand(attacker, target, is_snatch, card_name, valid)
+		"equip": outcome = await _steal_equip(attacker, target, is_snatch, card_name, valid)
+		"judgment": outcome = await _steal_judgment(attacker, target, is_snatch, card_name, valid)
+	if outcome is int and outcome == CHOICE_INVALID:
+		_abandon_card_actions(actions)
+		return
+	if outcome is int and outcome == CardLossTransaction.Outcome.PREVENTED:
+		_complete_card_actions(actions)
+		_sync_all_ui()
+		return
 
 	if not valid.call():
 		_abandon_card_actions(actions)
@@ -5040,7 +5101,7 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 		return
 	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", _hand_loss_atoms(target, 1), allowed)
 	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
-	if boundary == CardLossTransaction.Outcome.PREVENTED: return
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return CardLossTransaction.Outcome.PREVENTED
 	var taken: CardBase = target.take_hand_cards(1)[0]
 	if is_snatch:
 		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
@@ -5094,7 +5155,7 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	var loss_slots: Array[String] = [slot]
 	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", _equipment_loss_atoms(target, loss_slots), valid)
 	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
-	if boundary == CardLossTransaction.Outcome.PREVENTED: return
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return CardLossTransaction.Outcome.PREVENTED
 	# 持久状态由原牌在卸下/装备时保存恢复；入手不授予佩戴效果。
 	var equipment_card = target.remove_equipment(slot)
 	if equipment_card == null:
@@ -5280,7 +5341,7 @@ func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_nam
 	var atoms: Array[Dictionary] = [{"owner": target, "zone": "judgment", "index": target.judgment_cards.size() - 1, "card": target.judgment_cards.back()}]
 	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", atoms, allowed)
 	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
-	if boundary == CardLossTransaction.Outcome.PREVENTED: return
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return CardLossTransaction.Outcome.PREVENTED
 	var card = target.judgment_cards.pop_back()
 	if is_snatch:
 		attacker.determined_cards.append(card)
@@ -6164,10 +6225,10 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 			return CHOICE_INVALID
 	_sync_all_ui()
 
-func _play_duel(attacker: Player, target: Player):
+func _play_duel(attacker: Player, target: Player, ignore_distance: bool = false):
 	var response_revision = turn_manager.get_context_revision()
 	# 【决斗】距离限制 2（含马修正，兜底防直调）；【霸王】（杰基·斯特朗）你的决斗无距离限制
-	if attacker.general_name != "杰基·斯特朗" and attacker.attack_distance_to(target) > 2:
+	if not ignore_distance and attacker.general_name != "杰基·斯特朗" and attacker.attack_distance_to(target) > 2:
 		_update_debug("%s 距离 %s 为 %d，超出决斗距离 2，无法发起【决斗】！" % [attacker.player_name, target.player_name, attacker.attack_distance_to(target)])
 		return
 	# 【战旗】：你不能成为【决斗】的目标（目标选择已拒绝，这里兜底防直调）
@@ -8625,6 +8686,7 @@ var _play_skill_selection_generation: int = 0
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
 	if not _farming_peach_pending.is_empty(): return true
+	if not _card_loss_pending.is_empty() or not _wrestling_resolving.is_empty(): return true
 	if not _farming_upgrade_pending.is_empty(): return true
 	if not _jim_mountain_skill_pending.is_empty(): return true
 	if _egg_heal_pending or _roar_pending or not _summon_dragon_pending.is_empty(): return true
@@ -10873,6 +10935,8 @@ func _try_mule_transfer(p: Player, mule_sub: CardData.CardSubType, is_minus: boo
 		return CHOICE_INVALID
 	var replace_slot := ""
 	if target.mount_count() == Player.MOUNT_SLOTS.size():
+		# I05-D-Q13: forced minus-mule reception/replacement cannot be prevented
+		# by Wrestle. Keep the transferor's mandatory selection; no loss reaction.
 		var originals: Dictionary = {}
 		for slot in Player.MOUNT_SLOTS:
 			originals[slot] = _equipment_resource_for_pick(target, slot)
@@ -11911,6 +11975,7 @@ func reset_game_over_state():
 	_farming_upgrade_pending = {}
 	_farming_peach_pending = {}
 	_card_loss_pending.clear()
+	_wrestling_resolving.clear()
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()

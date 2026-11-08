@@ -357,8 +357,8 @@ func _get_turn_count(key: String, seat: Variant = -1) -> int:
 		seat = get_play_actor_key()
 	return int(_turn_card_counts.get(seat, {}).get(key, 0))
 
-func _set_turn_count(key: String, value: int):
-	var seat = get_play_actor_key()
+func _set_turn_count(key: String, value: int, seat: Variant = -1):
+	if typeof(seat) == TYPE_INT and seat < 0: seat = get_play_actor_key()
 	if not _turn_card_counts.has(seat):
 		_turn_card_counts[seat] = {}
 	_turn_card_counts[seat][key] = value
@@ -407,29 +407,16 @@ func strikes_used() -> int:
 
 # 查询是否还能使用（key: duel / aoe / steal / peach_garden / harvest）
 # limit 可选：指定上限（默认 -1 = 用内置上限；【霸王】杰基·斯特朗的决斗上限为 3）
-func can_use(card_key: String, limit: int = -1) -> bool:
-	match card_key:
-		"duel": return duel_count_this_turn < (2 if limit < 0 else limit)
-		"aoe": return aoe_count_this_turn < 2
-		"steal": return steal_count_this_turn < 2
-		"peach_garden": return peach_garden_count_this_turn < 1
-		"harvest": return harvest_count_this_turn < 1
-		"disarm": return disarm_count_this_turn < 1
-		"borrowed_sword": return borrowed_sword_count_this_turn < 2
-	return true
+func can_use(card_key: String, limit: int = -1, seat: Variant = -1) -> bool:
+	var limits = {"duel": 2 if limit < 0 else limit, "aoe": 2, "steal": 2,
+		"peach_garden": 1, "harvest": 1, "disarm": 1, "borrowed_sword": 2}
+	return not limits.has(card_key) or _get_turn_count(card_key, seat) < int(limits[card_key])
 
-# 记录当前出牌操作者的一次使用（回合开始重置）
-func use_card(card_key: String):
-	match card_key:
-		"wine": wine_count_this_turn += 1
-		"duel": duel_count_this_turn += 1
-		"aoe": aoe_count_this_turn += 1
-		"steal": steal_count_this_turn += 1
-		"peach_garden": peach_garden_count_this_turn += 1
-		"harvest": harvest_count_this_turn += 1
-		"disarm": disarm_count_this_turn += 1
-		"borrowed_sword": borrowed_sword_count_this_turn += 1
-		"indulgence", "supply_shortage": _set_turn_count(card_key, _get_turn_count(card_key) + 1)
+# Explicit actor is needed for an established reaction card outside that actor's
+# play phase. It does not change the active turn/phase or its actual PLAY actor.
+func use_card(card_key: String, seat: Variant = -1):
+	if card_key in ["wine", "duel", "aoe", "steal", "peach_garden", "harvest", "disarm", "borrowed_sword", "indulgence", "supply_shortage"]:
+		_set_turn_count(card_key, _get_turn_count(card_key, seat) + 1, seat)
 
 # ---- 响应链 ----
 
