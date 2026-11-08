@@ -31,9 +31,8 @@ signal unit_removed(id: String, reason: int)
 signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
-# I05b stays private until both skills and native/LAN lifecycle pass acceptance.
-# Not a client setting or a substitute for GeneralData's metadata-only status.
-var _david_rules_enabled := false
+# Server-owned capabilities; callers cannot enable them through a client option.
+var _david_rules_enabled := true
 var _farming_upgrade_pending: Dictionary = {}
 var _farming_peach_pending: Dictionary = {}
 var _farming_peach_override: Callable = Callable()
@@ -41,7 +40,7 @@ var _farming_peach_override: Callable = Callable()
 # I05b-4b supplies the actual once-per-round reaction and full virtual card.
 var _card_loss_reaction_override: Callable = Callable()
 var _card_loss_pending: Dictionary = {}
-var _wrestling_rules_enabled := false # Private until all external callers/lifecycle pass.
+var _wrestling_rules_enabled := true # Server capability; clients cannot configure it.
 var _wrestling_choice_override: Callable = Callable()
 var _wrestling_resolving: Dictionary = {}
 var action_history := ActionHistory.new()
@@ -953,8 +952,10 @@ func _update_player_panel(panel: Control, player: Player):
 		judgment_indicator.text = "⚖×%d" % player.judgment_cards.size()
 
 	var prep_indicator: Label = panel.get_meta("prep_indicator")
-	prep_indicator.visible = player.general_name in ["里奥·普利威尔", "克里斯·西弗"]
-	prep_indicator.text = "火龙蛋:%d" % player.fire_dragon_eggs if player.general_name == "克里斯·西弗" else "预习:%d" % player.prep_tokens
+	var farming_visible = _david_rules_enabled and player.general_name == "大卫·法米尔"
+	prep_indicator.visible = player.general_name in ["里奥·普利威尔", "克里斯·西弗"] or farming_visible
+	prep_indicator.size.x = 116 if farming_visible else 56
+	prep_indicator.text = "空田:%d 好田:%d" % [player.farm_empty_fields, player.farm_good_fields] if farming_visible else ("火龙蛋:%d" % player.fire_dragon_eggs if player.general_name == "克里斯·西弗" else "预习:%d" % player.prep_tokens)
 
 	panel.set_meta("player", player)
 

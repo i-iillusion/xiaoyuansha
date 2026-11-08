@@ -141,7 +141,7 @@ func filters_and_turns(t):
 
 func resets_and_gate(t):
 	var unopened = GameManager.new()
-	t.check(not unopened._david_rules_enabled, "I05b production constructor keeps David capability disabled")
+	t.check(unopened._david_rules_enabled and unopened._wrestling_rules_enabled, "I05b accepted public constructor enables both David server capabilities")
 	unopened.free()
 	var game = fixture(t)
 	var p = game.players[0]
@@ -149,7 +149,7 @@ func resets_and_gate(t):
 	for i in 2:
 		var event = game._record_card_action(p, CardBase.create(CardData.CardSubType.DODGE), CardActionEvent.Kind.RESPONSE)
 		game._complete_card_actions([event])
-	t.check(p.farm_hand_actions == 0 and p.farm_empty_fields == 0, "I05b private gate leaves metadata-only David inactive by default")
+	t.check(p.farm_hand_actions == 0 and p.farm_empty_fields == 0, "I05b explicit disabled server capability leaves farming inactive")
 	game._david_rules_enabled = true
 	p.farm_empty_fields = 3
 	p.farm_good_fields = 2
@@ -165,5 +165,5 @@ func resets_and_gate(t):
 		var event = game._record_card_action(p, CardBase.create(CardData.CardSubType.DODGE), CardActionEvent.Kind.RESPONSE)
 		game._complete_card_actions([event])
 	t.check(p.farm_empty_fields == 1 and p.farm_hand_actions == 2, "I05b restored general can start a fresh legal farming pair")
-	t.check(not GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 11 and GeneralData.get_implementation_status(DAVID) == "metadata_only" and LanSession.PROTOCOL == "campus-lan-14", "I05b partial work never opens David or changes public LAN protocol/pool")
+	t.check(GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 12 and GeneralData.get_implementation_status(DAVID) == "prototype" and LanSession.PROTOCOL == "campus-lan-15", "I05b fully accepted public David appears once with new LAN protocol/pool")
 	await dispose(t, game)

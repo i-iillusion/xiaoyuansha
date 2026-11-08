@@ -157,7 +157,7 @@ func network_setup(t):
 	var supplement=GeneralData.draw_unique_random_generals(LanSession.GENERALS.size()+1)
 	t.check(supplement.filter(func(name): return GeneralData.get_implementation_status(name)=="metadata_only").size()==1 and supplement.all(func(name): return supplement.count(name)==1),"H02d helper still supplements a pool shortage with exactly one unique metadata general")
 	var display=session.bridge.snapshot(0).duplicate(true)
-	display.players[0].general="大卫·法米尔"
+	display.players[0].general="卢卡斯·托克"
 	room._state_changed(display)
 	t.check(room._board.get_child_count()==10 and "技能尚未实装" in room._board.get_child(0).tooltip_text,"H02d explicit metadata display fixture retains actual LAN fallback rendering")
 	t.check(session.lobby.mode == GameModes.FREE_FOR_ALL and session.latest.mode == session.mode, "H02d lobby and game carry explicit same mode")

@@ -202,6 +202,7 @@ func _state_changed(state: Dictionary) -> void:
 		if int(player.prep) > 0: text += "\n预习标记：%d" % player.prep
 		if int(player.wine) > 0: text += "\n酒：%d" % player.wine
 		if player.general == "克里斯·西弗": text += "\n火龙蛋：%d" % int(player.get("eggs", 0))
+		if player.general == "大卫·法米尔": text += "\n空田：%d  好田：%d" % [int(player.get("empty_fields", 0)), int(player.get("good_fields", 0))]
 		var token: String = state.targets.get(str(player.seat), "")
 		var button = _button(board, text, func(): _send(token))
 		button.set_meta("seat", int(player.seat))

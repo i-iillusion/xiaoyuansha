@@ -124,7 +124,7 @@ func _refresh_commands() -> void:
 	shape.append(labels)
 	shape.append(UnitObservation.capture(game.unit_registry, game.players[input_owner()] if input_owner() >= 0 else null))
 	for p in game.players:
-		shape.append([p.hp, p.hand_size(), p.kneeling, p.kneel_used, p.is_dead()])
+		shape.append([p.hp, p.hand_size(), p.kneeling, p.kneel_used, p.is_dead(), p.farm_empty_fields, p.farm_good_fields, p.wrestle_round])
 	var signature = var_to_str(shape)
 	if signature == _signature: return
 	_signature = signature
@@ -191,6 +191,8 @@ func snapshot(seat: int, after_log: int = 0) -> Dictionary:
 		row["prep"] = subject.prep_tokens
 		row["wine"] = subject.wine_stacks
 		row["eggs"] = subject.fire_dragon_eggs
+		row["empty_fields"] = subject.farm_empty_fields
+		row["good_fields"] = subject.farm_good_fields
 	return state
 
 func submit(seat: int, token: String) -> bool:

@@ -113,6 +113,8 @@ func _populate():
 				_add_skill_btn("Gay", sk)
 			elif _mountain_skills_enabled and (sk.begins_with("【护山】") or sk.begins_with("【移山】") or sk.begins_with("【聚山】")):
 				_add_skill_btn(sk.substr(1, 2), sk)
+			elif _farming_skills_enabled and _viewer == _player and sk.begins_with("【种田】"):
+				_add_skill_btn("种田", sk)
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
@@ -124,13 +126,6 @@ func _populate():
 		_add_skill_btn("护山", "【护山】出牌阶段限一次，弃置一张手牌，使一座山恢复至体力上限（满血也可发动）")
 		_add_skill_btn("移山", "【移山】出牌阶段限一次，弃置一张手牌，将一座山移至另一个间隔")
 		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")
-
-	# Private David fixtures expose only the implemented upgrade, never publish a general.
-	if _farming_skills_enabled and _player.general_name == "大卫·法米尔":
-		if _viewer == _player:
-			_add_skill_btn("种田", "【种田】弃置两张手牌，将一块空田变为好田；每块好田使摸牌阶段多摸一张")
-		else:
-			_add_skill_label("【种田】每块好田使摸牌阶段多摸一张", Color(0.9, 0.9, 0.7))
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
 	_clear_container(_equip_container)
