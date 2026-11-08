@@ -1,4 +1,4 @@
-﻿extends RefCounted
+extends RefCounted
 const External = preload("res://Test/i05_david_external_loss_cases.gd")
 const Farming = preload("res://Test/i05_david_farming_cases.gd")
 const Core = preload("res://Test/i05_david_wrestling_core_cases.gd")
@@ -22,8 +22,10 @@ func run(t):
 	await lord_penalty(t)
 	await denominator(t)
 	await counter_resources(t)
+	await medicine_source_death(t)
 	for kind in ["zhuangbi", "campus", "medicine"]:
 		for mode in ["accept", "cancel", "timeout", "restore"]: await bridge_case(t, kind, mode)
+	await bridge_case(t, "medicine", "source_death")
 	GameManager.selected_players = saved[0]; GameManager.selected_mode = saved[1]
 	GameManager.selected_general = saved[2]; GameManager.random_general = saved[3]; GameManager.random_identity = saved[4]
 
@@ -145,6 +147,7 @@ func bridge_case(t, kind, mode):
 	game._sacrifice_actor_override = func(_p, _t, _a): return false
 	game._hand_discard_override = func(snapshot, count, _m): return snapshot.defaults(count)
 	setup_skill(game, kind)
+	if mode == "source_death": game.players[0].hp = 1
 	var original = resource(game.players[1], true)
 	var done: Array = []
 	var act = func(): await execute(game, kind); done.append(true)
@@ -152,13 +155,15 @@ func bridge_case(t, kind, mode):
 	for i in 3: await t.process_frame
 	var helper = Core.new(); var token = helper.find(bridge, 1, "发动摔角")
 	t.check(not token.is_empty() and bridge.input_owner() == 1 and not bridge.submit(0, token), "I05 skills actual remote Wrestle rejects wrong controller")
-	if mode == "accept": t.check(bridge.submit(1, token), "I05 skills real Bridge confirms")
+	if mode in ["accept", "source_death"]: t.check(bridge.submit(1, token), "I05 skills real Bridge confirms")
 	elif mode == "cancel": t.check(bridge.submit(1, helper.find(bridge, 1, "取消")), "I05 skills real Bridge declines")
 	elif mode == "timeout": game._countdown_on_timeout.call()
 	else: game.players[1].restore_game_start_state()
 	for i in 5: await t.process_frame
-	t.check(done.size() == 1 and game.players[1].determined_cards.has(original) == (mode in ["accept", "restore"]), "I05 skills Bridge cancel/timeout/reset preserve correct original")
-	t.check(game.players[1].wrestle_round == (game.turn_manager.rounds.round_id if mode == "accept" else -1) and not bridge.submit(1, token), "I05 skills confirmed quota only, old remote token rejected")
+	t.check(done.size() == 1 and game.players[1].determined_cards.has(original) == (mode in ["accept", "source_death", "restore"]), "I05 skills Bridge cancel/timeout/reset preserve correct original")
+	t.check(game.players[1].wrestle_round == (game.turn_manager.rounds.round_id if mode in ["accept", "source_death"] else -1) and not bridge.submit(1, token), "I05 skills confirmed quota only, old remote token rejected")
+	if mode == "source_death":
+		t.check(game.players[0].is_dead() and not game._game_over and game.players[0].hand_size() == 0 and game.players[2].hand_size() == 1, "I05 Q22 remote confirmed counter finalizes Chris, later recipient keeps original and no normal draw")
 	t.check(game._card_loss_pending.is_empty() and game._medicine_pending.is_empty() and game._campus_execution_owner == -1 and game._zhuangbi_execution_owner == -1, "I05 skills original and response leases fully released")
 	game._game_over = true; bridge.queue_free()
 	for i in 4: await t.process_frame
@@ -207,6 +212,7 @@ func counter_resources(t):
 	t.check(owner.hand_size() == 0 and game.deck._discard.count(original) == 1 and source.hand_size() == 0, "I05 Q17 protected original may be legitimately used as counter Duel response; never restored or discarded twice")
 	t.check(game.players[2].hp == 3 and source.hp == 3 and owner.wrestle_round == game.turn_manager.rounds.round_id, "I05 Q17 changed counter resources do not revoke committed prevention or remaining opponent")
 	await Farming.new().dispose(t, game)
+
 	game = fixture(t); setup_skill(game, "medicine")
 	source = game.players[0]; owner = game.players[1]
 	resource(owner, false)
@@ -217,3 +223,21 @@ func counter_resources(t):
 	t.check(completed and other.hand_size() == 1 and source.hand_size() == 1 and owner.hand_size() == 2, "I05 Q19 counter Harvest changes later hand legitimately; original medicine still takes one current card without normal draw")
 	t.check(leo.prep_tokens == 0 and game._medicine_pending.is_empty() and game._card_loss_pending.is_empty(), "I05 Q19 completed counter replacement releases original parent")
 	await Farming.new().dispose(t, game)
+
+func medicine_source_death(t):
+	for count in [1, 2]:
+		for concrete in [false, true]:
+			var game = fixture(t); setup_skill(game, "medicine")
+			var source = game.players[0]; var owner = game.players[1]; var other = game.players[2]
+			source.hp = 1; source.fire_dragon_eggs = 0
+			var protected = resource(owner, concrete)
+			other.hand.clear()
+			var untouched = resource(other, concrete)
+			game._medicine_choice_override = func(_p, _options): return [owner] if count == 1 else [owner, other]
+			var completed = await game._draw_phase_cards(source)
+			t.check(completed and source.is_dead() and not game._game_over, "I05 Q22 source final death ends committed medicine normally, not technical invalidation")
+			t.check(source.hand_size() == 0 and owner.hand_size() == 1 and other.hand_size() == 1, "I05 Q22 no later theft or replacement ordinary draw after final source death")
+			if concrete:
+				t.check(owner.determined_cards.has(protected) and other.determined_cards.has(untouched) and game.deck._discard.count(protected) == 0 and game.deck._discard.count(untouched) == 0, "I05 Q22 original concrete resources stay with both surviving recipients")
+			t.check(owner.wrestle_round == game.turn_manager.rounds.round_id and game._medicine_pending.is_empty() and game._card_loss_pending.is_empty() and game._wrestling_resolving.is_empty(), "I05 Q22 prevention remains committed and all parent/counter leases close")
+			await Farming.new().dispose(t, game)

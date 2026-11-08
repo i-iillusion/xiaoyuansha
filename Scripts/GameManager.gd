@@ -1531,6 +1531,9 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 		if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
 		if boundary == CardLossTransaction.Outcome.PREVENTED:
 			_sync_all_ui()
+			# I05-D-Q22: a finalized source death ends theft normally. Later
+			# recipients keep their cards; this is not a stale choice or a new draw.
+			if p.is_dead(): return 1
 			continue # I05-D-Q19: the other recipient still resolves; draw stays replaced.
 		# Existing hand-transfer policy; arbitrary stays null, concrete keeps ID.
 		var card: CardBase = target.take_hand_cards(1)[0]
