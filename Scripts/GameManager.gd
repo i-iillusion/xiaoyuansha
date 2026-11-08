@@ -3248,7 +3248,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 		return CHOICE_INVALID
 	return chain.damage.final_damage().committed
 
-func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool) -> bool:
+func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool, invalid_out: Array = []) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
 	if not ignore_restrictions and target.get_armor() == CardData.CardSubType.TENGJIA:
 		_update_debug("%s 的【藤甲】：不能成为【杀】的目标！" % target.player_name)
@@ -3313,13 +3313,13 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 		if activate == CHOICE_INVALID or not choice_valid.call():
 			return false
 		if activate == 1:
-			var resolved = await _resolve_chixiong(p, target, choice_valid)
+			var resolved = await _resolve_chixiong(p, target, choice_valid, invalid_out)
 			if not hit_valid.call():
 				return false
 			if p.is_dead():
 				return true # TIME-04：目标选择期间来源死亡，不吞掉剩余无源伤害。
-			if not resolved or not choice_valid.call():
-				return false
+			if not resolved:
+				return false # Resolver owns pre-confirmation checks; committed reaction may remove the weapon.
 
 	return true
 
@@ -4585,6 +4585,15 @@ func _resolve_paid_borrowed_sword(user: Player, first: Player, actions: Array[Ca
 			_complete_card_actions(actions)
 			_sync_all_ui()
 			return
+		var loss_slots: Array[String] = ["weapon"]
+		var boundary = await _before_external_card_loss(user, "borrowed_weapon", _equipment_loss_atoms(first, loss_slots), valid)
+		if boundary == CardLossTransaction.Outcome.INVALIDATED:
+			_abandon_card_actions(actions)
+			return
+		if boundary == CardLossTransaction.Outcome.PREVENTED:
+			_complete_card_actions(actions)
+			_sync_all_ui()
+			return
 		var taken = first.remove_equipment("weapon")
 		if taken != weapon:
 			_abandon_card_actions(actions)
@@ -4835,7 +4844,7 @@ func _before_external_card_loss(source: Player, reason: String, losses: Array[Di
 	# Incomplete/private reaction must not alter existing legacy cleanup paths,
 	# including a hidden placeholder that has no physical card to protect.
 	if not _david_rules_enabled or (not _card_loss_reaction_override.is_valid() and not _wrestling_rules_enabled) or losses.is_empty() \
-			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm"]:
+			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm", "borrowed_weapon", "chixiong", "gou_lian"]:
 		return CardLossTransaction.Outcome.ALLOW
 	var tx = CardLossTransaction.new(source, reason, losses)
 	var revision = turn_manager.get_context_revision()
@@ -5731,7 +5740,7 @@ func _ask_chixiong_activate(target_name: String, allowed: Callable = Callable())
 
 # 结算雌雄双股剑：目标选择「弃置一张手牌」或「令使用者摸一张牌」
 # 目标没有手牌时只能选择令使用者摸一张牌（原版规则）
-func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()) -> bool:
+func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable(), invalid_out: Array = []) -> bool:
 	if _game_over or p == null or target == null or not p.is_alive() or not target.is_alive():
 		return false
 	var revision = turn_manager.get_context_revision()
@@ -5764,7 +5773,13 @@ func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()
 	if choice == 1:
 		# 已选择弃牌分支；烈火盾不替代雌雄失牌，快照失效重新选择。
 		while valid.call() and target.hand_size() > 0:
-			var outcome = await _select_hand_discard_result(target, 1, true, valid)
+			var outcome = await _select_hand_discard_result(target, 1, true, valid, p)
+			if outcome == HandDiscardOutcome.EFFECT_PREVENTED:
+				_sync_all_ui()
+				return true # No fallback draw; the chosen weapon effect was prevented.
+			if outcome == HandDiscardOutcome.REACTION_INVALIDATED:
+				invalid_out.append(true)
+				return false
 			if not valid.call():
 				return false
 			if outcome == HandDiscardOutcome.PAID:
@@ -7077,7 +7092,10 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			chain.continuation_invalid = true
 			return true
 		if immune == 1: return true
-		return not await _prepare_strike_target(source, subject, chain.ignore_target_restrictions)
+		var invalid: Array = []
+		var prepared = await _prepare_strike_target(source, subject, chain.ignore_target_restrictions, invalid)
+		if not invalid.is_empty(): chain.continuation_invalid = true
+		return not prepared
 
 	if event_name == "before_deal_damage":
 		if record.source_modifiers_applied:
@@ -7629,6 +7647,12 @@ func _try_gou_lian_claw(source: Player, victim: Player) -> int:
 	if not valid.call() or not originals.has(slot) or originals[slot] == null \
 			or _equipment_resource_for_pick(victim, slot) != originals[slot]:
 		return CHOICE_INVALID
+	var loss_slots: Array[String] = [slot]
+	var boundary = await _before_external_card_loss(source, "gou_lian", _equipment_loss_atoms(victim, loss_slots), valid)
+	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+	if boundary == CardLossTransaction.Outcome.PREVENTED:
+		_sync_all_ui()
+		return 0 # Original damage already committed; no mount gain.
 	var sub = victim.equipment[slot]
 	var card = victim.remove_equipment(slot)
 	if card == null:
@@ -11771,6 +11795,8 @@ enum HandDiscardOutcome {
 	ACTION_INVALIDATED,
 	INSUFFICIENT_CARDS,
 	GAME_ENDED,
+	EFFECT_PREVENTED,
+	REACTION_INVALIDATED,
 }
 
 # 兼容尚未迁移的调用者；不能用false推断玩家主动拒绝。
@@ -11778,7 +11804,7 @@ func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Calla
 	var outcome = await _select_hand_discard_result(p, count, mandatory, allowed)
 	return outcome == HandDiscardOutcome.PAID
 
-func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed: Callable = Callable()) -> HandDiscardOutcome:
+func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed: Callable = Callable(), external_source: Player = null) -> HandDiscardOutcome:
 	if p == null or count <= 0:
 		return HandDiscardOutcome.ACTION_INVALIDATED
 	var revision = turn_manager.get_context_revision()
@@ -11831,6 +11857,20 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 			return HandDiscardOutcome.INSUFFICIENT_CARDS
 		if not mandatory and indices.is_empty():
 			return HandDiscardOutcome.DECLINED
+		# Only an explicit external-effect caller can offer a reaction. Costs,
+		# discards and cleanup never provide this source parameter.
+		if external_source != null and p.hand == snapshot.hand and p.determined_cards == snapshot.determined and indices.size() == count:
+			var atoms: Array[Dictionary] = []
+			var seen: Array[int] = []
+			for index in indices:
+				if index < 0 or index >= snapshot.cards.size() or seen.has(index): break
+				seen.append(index)
+				atoms.append({"owner": p, "zone": "hand" if index < snapshot.hand.size() else "determined",
+					"index": index if index < snapshot.hand.size() else index - snapshot.hand.size(), "card": snapshot.cards[index]})
+			if atoms.size() == count:
+				var boundary = await _before_external_card_loss(external_source, "chixiong", atoms, allowed)
+				if boundary == CardLossTransaction.Outcome.INVALIDATED: return HandDiscardOutcome.REACTION_INVALIDATED
+				if boundary == CardLossTransaction.Outcome.PREVENTED: return HandDiscardOutcome.EFFECT_PREVENTED
 		var paid = snapshot.take(indices, count)
 		if paid.size() == count:
 			for card in paid:
