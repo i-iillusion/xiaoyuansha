@@ -1517,13 +1517,21 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 		checked.append(target)
 	_history_event("skill", "%s 发动【偷药品】，放弃本阶段摸牌" % p.player_name, p, checked)
 	for target in checked:
-		if not valid.call() or not _medicine_candidates(p).has(target): return CHOICE_INVALID
+		if not valid.call(): return CHOICE_INVALID
+		if not _medicine_candidates(p).has(target): continue
+		# Prior completed reactions can legitimately change a later recipient's hand.
+		var current_hand = HandSelection.new(target)
 		var recipient_valid = func():
 			return valid.call() and _medicine_candidates(p).has(target) \
-				and target.hand == snapshots[target].hand and target.determined_cards == snapshots[target].determined
+				and target.hand == current_hand.hand and target.determined_cards == current_hand.determined
 		var immune = await _peter_ignore_effect(target,checked,"medicine",recipient_valid)
 		if immune == CHOICE_INVALID: return CHOICE_INVALID
 		if immune == 1: continue
+		var boundary = await _before_external_card_loss(p, "medicine", _hand_loss_atoms(target, 1), recipient_valid)
+		if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+		if boundary == CardLossTransaction.Outcome.PREVENTED:
+			_sync_all_ui()
+			continue # I05-D-Q19: the other recipient still resolves; draw stays replaced.
 		# Existing hand-transfer policy; arbitrary stays null, concrete keeps ID.
 		var card: CardBase = target.take_hand_cards(1)[0]
 		p.hand.append(card)
@@ -4844,7 +4852,7 @@ func _before_external_card_loss(source: Player, reason: String, losses: Array[Di
 	# Incomplete/private reaction must not alter existing legacy cleanup paths,
 	# including a hidden placeholder that has no physical card to protect.
 	if not _david_rules_enabled or (not _card_loss_reaction_override.is_valid() and not _wrestling_rules_enabled) or losses.is_empty() \
-			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm", "borrowed_weapon", "chixiong", "gou_lian"]:
+			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm", "borrowed_weapon", "chixiong", "gou_lian", "zhuangbi", "campus", "medicine"]:
 		return CardLossTransaction.Outcome.ALLOW
 	var tx = CardLossTransaction.new(source, reason, losses)
 	var revision = turn_manager.get_context_revision()
@@ -9169,13 +9177,17 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 		var immune = await _peter_ignore_effect(t,declared,"zhuangbi",func(): return target_valid.call(t))
 		if immune == CHOICE_INVALID: return
 		if immune != 1: participants.append(t)
-	valid = participants
-	for t in valid:
-		if not await _select_hand_discard(t, 1, true, func():
-			return target_valid.call(t)):
+	# I05-D-Q17: only the protected recipient exits; retain the source fee.
+	valid = []
+	for t in participants:
+		var payment = await _select_hand_discard_result(t, 1, true, func():
+			return target_valid.call(t), p, "zhuangbi")
+		if payment == HandDiscardOutcome.EFFECT_PREVENTED:
+			_sync_all_ui()
+			continue
+		if payment != HandDiscardOutcome.PAID or not target_valid.call(t):
 			return
-		if not target_valid.call(t):
-			return
+		valid.append(t)
 	_update_debug("各目标弃置一张手牌，依次与 %s 拼点！" % p.player_name)
 	_sync_all_ui()
 
@@ -9362,9 +9374,12 @@ func _execute_campus_pending(p: Player, target: Player, owner: int) -> void:
 		return
 	if not valid.call():
 		return
-	if not await _select_hand_discard(target, 1, true, valid):
+	# I05-D-Q18: prevention ends this original RPS, not its paid cost.
+	var payment = await _select_hand_discard_result(target, 1, true, valid, p, "campus")
+	if payment == HandDiscardOutcome.EFFECT_PREVENTED:
+		_sync_all_ui()
 		return
-	if not valid.call():
+	if payment != HandDiscardOutcome.PAID or not valid.call():
 		return
 	_public_result("%s 发动【校园霸主】！你与 %s 各弃置一张手牌，进行拼点！" % [p.player_name, target.player_name])
 	_sync_all_ui()
@@ -11804,7 +11819,7 @@ func _select_hand_discard(p: Player, count: int, mandatory: bool, allowed: Calla
 	var outcome = await _select_hand_discard_result(p, count, mandatory, allowed)
 	return outcome == HandDiscardOutcome.PAID
 
-func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed: Callable = Callable(), external_source: Player = null) -> HandDiscardOutcome:
+func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed: Callable = Callable(), external_source: Player = null, external_reason: String = "chixiong") -> HandDiscardOutcome:
 	if p == null or count <= 0:
 		return HandDiscardOutcome.ACTION_INVALIDATED
 	var revision = turn_manager.get_context_revision()
@@ -11868,7 +11883,7 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 				atoms.append({"owner": p, "zone": "hand" if index < snapshot.hand.size() else "determined",
 					"index": index if index < snapshot.hand.size() else index - snapshot.hand.size(), "card": snapshot.cards[index]})
 			if atoms.size() == count:
-				var boundary = await _before_external_card_loss(external_source, "chixiong", atoms, allowed)
+				var boundary = await _before_external_card_loss(external_source, external_reason, atoms, allowed)
 				if boundary == CardLossTransaction.Outcome.INVALIDATED: return HandDiscardOutcome.REACTION_INVALIDATED
 				if boundary == CardLossTransaction.Outcome.PREVENTED: return HandDiscardOutcome.EFFECT_PREVENTED
 		var paid = snapshot.take(indices, count)
