@@ -37,6 +37,10 @@ var _david_rules_enabled := false
 var _farming_upgrade_pending: Dictionary = {}
 var _farming_peach_pending: Dictionary = {}
 var _farming_peach_override: Callable = Callable()
+# I05b-4a: pre-loss boundary; no skill is authorized by the diagnostic hook.
+# I05b-4b supplies the actual once-per-round reaction and full virtual card.
+var _card_loss_reaction_override: Callable = Callable()
+var _card_loss_pending: Dictionary = {}
 var action_history := ActionHistory.new()
 var _history_hp: Dictionary = {}
 var _history_panel: ActionHistoryPanel
@@ -4310,6 +4314,9 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 			_update_debug("%s 没有装备，跳过" % target.player_name)
 			continue
 
+		var boundary = await _before_external_card_loss(p, "disarm", _equipment_loss_atoms(target, slots), current)
+		if boundary == CardLossTransaction.Outcome.INVALIDATED: _abandon_card_actions(actions); return
+		if boundary == CardLossTransaction.Outcome.PREVENTED: continue # Q9: no compensation, other recipients continue.
 		var removed_count = 0
 		for slot in slots:
 			var offered_card = _equipment_resource_for_pick(target, slot)
@@ -4818,6 +4825,66 @@ func _play_steal_card(attacker: Player, target: Player, is_snatch: bool):
 	var effect_sub = await _maybe_prep_fixed_effect(attacker, target, sub, valid, replacements, false, roster)
 	await _resolve_prep_effect(attacker, [target], effect_sub, actions, replacements, valid, revision, zone, roster)
 
+# One local effect, before any actual card leaves its zone. Costs/death/Sage
+# never enter here. The caller supplies the real effect source, not a swap peer.
+func _before_external_card_loss(source: Player, reason: String, losses: Array[Dictionary], allowed: Callable = Callable()) -> int:
+	# Incomplete/private reaction must not alter existing legacy cleanup paths,
+	# including a hidden placeholder that has no physical card to protect.
+	if not _david_rules_enabled or not _card_loss_reaction_override.is_valid() or losses.is_empty() \
+			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm"]:
+		return CardLossTransaction.Outcome.ALLOW
+	var tx = CardLossTransaction.new(source, reason, losses)
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var registry = unit_registry.generation()
+	var space = terrain_markers()
+	var source_revision = source.awakening_revision if source != null else -1
+	var source_life = source.life_state if source != null else -1
+	var source_general = source.general_name if source != null else ""
+	var valid = func(): return not _game_over and revision == turn_manager.get_context_revision() \
+		and generation == _dying_lifecycle_generation and registry == unit_registry.generation() and space == terrain_markers() \
+		and tx.valid() and (not allowed.is_valid() or allowed.call()) \
+		and (source == null or (_has_character_body(source) and source.awakening_revision == source_revision and source.life_state == source_life and source.general_name == source_general))
+	if not valid.call(): return CardLossTransaction.Outcome.INVALIDATED
+	var owners: Array[Player] = []
+	for atom in losses:
+		var owner: Player = atom.owner
+		if owner != source and owner.is_alive() and owner.general_name == "大卫·法米尔" and not owners.has(owner): owners.append(owner)
+	for owner in owners:
+		if _card_loss_pending.has(owner.get_instance_id()):
+			tx.close()
+			return CardLossTransaction.Outcome.INVALIDATED
+	for owner in owners:
+		_card_loss_pending[owner.get_instance_id()] = tx
+	var result = CardLossTransaction.Outcome.ALLOW
+	for owner in owners:
+		var reply = await _card_loss_reaction_override.call(owner, tx, valid)
+		if not valid.call() or reply not in [CardLossTransaction.Outcome.ALLOW, CardLossTransaction.Outcome.PREVENTED]:
+			result = CardLossTransaction.Outcome.INVALIDATED
+			break
+		if reply == CardLossTransaction.Outcome.PREVENTED:
+			result = reply
+			break
+	for owner in owners:
+		if _card_loss_pending.get(owner.get_instance_id()) == tx: _card_loss_pending.erase(owner.get_instance_id())
+	tx.close()
+	return result
+
+func _hand_loss_atoms(target: Player, count: int) -> Array[Dictionary]:
+	var selection = HandSelection.new(target)
+	var atoms: Array[Dictionary] = []
+	for i in selection.defaults(count):
+		atoms.append({"owner": target, "zone": "hand" if i < selection.hand.size() else "determined",
+			"index": i if i < selection.hand.size() else i - selection.hand.size(), "card": selection.cards[i]})
+	return atoms
+
+func _equipment_loss_atoms(target: Player, slots: Array[String]) -> Array[Dictionary]:
+	var atoms: Array[Dictionary] = []
+	for slot in slots:
+		var card = _equipment_resource_for_pick(target, slot)
+		if card != null: atoms.append({"owner": target, "zone": "equip", "slot": slot, "card": card})
+	return atoms
+
 # 已支付的拆/顺效果入口：不再取手牌、不重发使用事实。
 # 原入口仍在支付前选区域；替换后按PREP-12强制选原目标的一张牌。
 func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone: String, actions: Array[CardActionEvent], valid: Callable, forced_pick: bool = false):
@@ -4867,14 +4934,18 @@ func _resolve_paid_steal(attacker: Player, target: Player, is_snatch: bool, zone
 		return
 	match zone:
 		"hand":
-			await _steal_hand(attacker, target, is_snatch, card_name)
+			if await _steal_hand(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
+				_abandon_card_actions(actions)
+				return
 		"equip":
 			if await _steal_equip(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
 				_abandon_card_actions(actions)
 				_sync_all_ui()
 				return
 		"judgment":
-			await _steal_judgment(attacker, target, is_snatch, card_name)
+			if await _steal_judgment(attacker, target, is_snatch, card_name, valid) == CHOICE_INVALID:
+				_abandon_card_actions(actions)
+				return
 
 	if not valid.call():
 		_abandon_card_actions(actions)
@@ -4923,6 +4994,19 @@ func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: boo
 	if selected == -1: selected = ai_driver.rng.randi_range(0, choices.size() - 1)
 	if selected < 0 or selected >= choices.size(): return CHOICE_INVALID
 	var choice: Dictionary = choices[selected]
+	var atoms: Array[Dictionary] = []
+	match choice.zone:
+		"hand":
+			var i = int(choice.index)
+			atoms.append({"owner": target, "zone": "hand" if i < hand_snapshot.hand.size() else "determined",
+				"index": i if i < hand_snapshot.hand.size() else i - hand_snapshot.hand.size(), "card": hand_snapshot.cards[i]})
+		"equip":
+			var loss_slots: Array[String] = [str(choice.slot)]
+			atoms = _equipment_loss_atoms(target, loss_slots)
+		"judgment": atoms.append({"owner": target, "zone": "judgment", "index": int(choice.index), "card": judgments[choice.index]})
+	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", atoms, valid)
+	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return 0
 	var taken: CardBase
 	match choice.zone:
 		"hand":
@@ -4947,13 +5031,16 @@ func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: boo
 	return 0
 
 # 手牌：目标 -1；顺手牵羊时自己 +1
-func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: String):
+func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: String, allowed: Callable = Callable()):
 	if target.hand_size() <= 0:
 		_update_debug("目标没有手牌")
 		return
 	# 不从空牌区生成任意牌；盾仅在拆/顺成为目标的公共入口询问。
 	if target.is_dead() or target.hand_size() == 0:
 		return
+	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", _hand_loss_atoms(target, 1), allowed)
+	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return
 	var taken: CardBase = target.take_hand_cards(1)[0]
 	if is_snatch:
 		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
@@ -5004,6 +5091,10 @@ func _steal_equip(attacker: Player, target: Player, is_snatch: bool, card_name: 
 	if _game_over or target.is_dead() or target.equipment.get(slot, -1) != sub \
 			or (selected_card != null and _equipment_resource_for_pick(target, slot) != selected_card):
 		return CHOICE_INVALID
+	var loss_slots: Array[String] = [slot]
+	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", _equipment_loss_atoms(target, loss_slots), valid)
+	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return
 	# 持久状态由原牌在卸下/装备时保存恢复；入手不授予佩戴效果。
 	var equipment_card = target.remove_equipment(slot)
 	if equipment_card == null:
@@ -5180,12 +5271,16 @@ func _declare_exchanged_hidden_equipment(original_holder: Player, recipient: Pla
 		_public_result("%s 声明交换离区的暗置装备为【%s】" % [original_holder.player_name, card.card_name])
 
 # 判定牌：目标失去；顺手牵羊时放入自己「已确定的牌」
-func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String):
+func _steal_judgment(attacker: Player, target: Player, is_snatch: bool, card_name: String, allowed: Callable = Callable()):
 	if target.judgment_cards.is_empty():
 		_update_debug("目标没有判定牌")
 		return
 	if target.is_dead() or target.judgment_cards.is_empty():
 		return
+	var atoms: Array[Dictionary] = [{"owner": target, "zone": "judgment", "index": target.judgment_cards.size() - 1, "card": target.judgment_cards.back()}]
+	var boundary = await _before_external_card_loss(attacker, "snatch" if is_snatch else "dismantle", atoms, allowed)
+	if boundary == CardLossTransaction.Outcome.INVALIDATED: return CHOICE_INVALID
+	if boundary == CardLossTransaction.Outcome.PREVENTED: return
 	var card = target.judgment_cards.pop_back()
 	if is_snatch:
 		attacker.determined_cards.append(card)
@@ -6958,6 +7053,12 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					chain.is_cancelled = true
 					return true
 				var discard_count = mini(2, actual.hand_size())
+				if chosen == 1 and discard_count > 0:
+					var boundary = await _before_external_card_loss(subject, "ice_sword", _hand_loss_atoms(actual, discard_count), choice_valid)
+					if boundary == CardLossTransaction.Outcome.INVALIDATED:
+						chain.continuation_invalid = true
+						return true
+					if boundary == CardLossTransaction.Outcome.PREVENTED: return true
 				if chosen == 1 and discard_count > 0 and _discard_hand_cards(actual, discard_count):
 					_public_result("%s 发动【寒冰剑】：防止本次伤害，弃置 %s %d张手牌" % [subject.player_name, actual.player_name, discard_count])
 					_sync_all_ui()
@@ -9749,6 +9850,18 @@ func _run_lanzhonghou_pending(a: Player, b: Player, owner: int) -> void:
 			pending.clear()
 			_sync_all_ui()
 			return
+	# Q12: one skill, all original pairs. Ask before the first real move.
+	var losses: Array[Dictionary] = []
+	for entry in pending:
+		var loss_slots_a: Array[String] = [entry.slot_a]
+		var loss_slots_b: Array[String] = [entry.slot_b]
+		losses.append_array(_equipment_loss_atoms(entry.a, loss_slots_a))
+		losses.append_array(_equipment_loss_atoms(entry.b, loss_slots_b))
+	var boundary = await _before_external_card_loss(p, "equipment_swap", losses, swap_valid)
+	if boundary != CardLossTransaction.Outcome.ALLOW:
+		pending.clear()
+		_sync_all_ui()
+		return
 	# 统一执行交换
 	var swapped = 0
 	for entry in pending:
@@ -11797,6 +11910,7 @@ func reset_game_over_state():
 	_rescue_choice_pending.clear()
 	_farming_upgrade_pending = {}
 	_farming_peach_pending = {}
+	_card_loss_pending.clear()
 	if not turn_manager._standalone_play_frame.is_empty():
 		turn_manager.cancel_standalone_play(turn_manager._standalone_play_frame)
 		_halt_countdown()
