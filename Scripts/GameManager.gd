@@ -32,6 +32,13 @@ signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
 # Server-owned capabilities; callers cannot enable them through a client option.
+# I05c-2 remains private until all Sunny skills and natural ENet gates pass.
+var _paipian_rules_enabled := false
+var _is_paipian_targeting := false
+var _paipian_targets: Array[Player] = []
+var _paipian_selection_actor: Player
+var _paipian_selection_general := -1
+var _paipian_pending: Dictionary = {}
 var _david_rules_enabled := true
 var _farming_upgrade_pending: Dictionary = {}
 var _farming_peach_pending: Dictionary = {}
@@ -2077,6 +2084,7 @@ func _do_discard(pid: int):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
+	_clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -2114,6 +2122,7 @@ func _do_end(pid: int):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
+	_clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -2684,6 +2693,9 @@ func _on_cancel_target_pressed():
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
 	_yes_ah_active = false
 	_clear_pending_determined_card()
+	if _is_paipian_targeting:
+		_exit_paipian_mode()
+		return
 	if _is_zhuangbi_targeting:
 		_exit_zhuangbi_mode()
 		_update_debug("取消【装逼】")
@@ -2816,6 +2828,9 @@ func _on_multi_target_click(target: Player):
 # 方天画戟：确认出牌
 func _on_confirm_multi_target():
 	if _game_over: return
+	if _is_paipian_targeting:
+		await _on_confirm_paipian()
+		return
 	if _is_zhuangbi_targeting:
 		await _on_confirm_zhuangbi()
 		return
@@ -8733,6 +8748,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _paipian_pending.is_empty(): return true
 	if not _farming_peach_pending.is_empty(): return true
 	if not _card_loss_pending.is_empty() or not _wrestling_resolving.is_empty(): return true
 	if not _farming_upgrade_pending.is_empty(): return true
@@ -8751,6 +8767,7 @@ func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
 func _begin_play_skill_selection():
 	_play_skill_selection_generation += 1
 	_play_skill_target_revision = turn_manager.get_context_revision()
+	_clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -9013,6 +9030,7 @@ func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
 	_play_skill_selection_generation += 1
+	_clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -9596,6 +9614,108 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 # ============================
 
 # 详情弹窗技能按钮 → 【Gay】发动入口
+# I05c-2: one voluntary hand-card fee, exactly two other legal characters.
+# Shares existing avatar selection and HandDiscardPrompt cancellation semantics.
+func _paipian_target_valid(actor: Player, target: Player) -> bool:
+	return _paid_skill_target_allowed(actor, target)
+
+func _clear_paipian_selection():
+	_is_paipian_targeting = false
+	_paipian_targets.clear()
+	_paipian_selection_actor = null
+	_paipian_selection_general = -1
+
+func _exit_paipian_mode():
+	_clear_paipian_selection()
+	_cancel_target_btn.visible = false
+	_confirm_target_btn.visible = false
+	_restore_play_skill_buttons()
+
+func _paipian_selection_current() -> bool:
+	if _play_skill_target_is_current() and _paipian_rules_enabled and _paipian_selection_actor == _local_player() \
+			and _local_player().general_name == "桑尼·斯派" and _local_player().awakening_revision == _paipian_selection_general:
+		return true
+	_exit_paipian_mode()
+	return false
+
+func _on_paipian_skill_clicked(p: Player):
+	if not _paipian_rules_enabled or not _can_use_play_skill(p) or p.general_name != "桑尼·斯派" \
+			or p != _local_player() or not _is_human(p) or p.hand_size() < 1 or _play_skill_execution_busy(): return
+	if _character_targets(p).filter(func(target): return _paipian_target_valid(p, target)).size() < 2: return
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	_begin_play_skill_selection()
+	_is_paipian_targeting = true
+	_paipian_selection_actor = p
+	_paipian_selection_general = p.awakening_revision
+	_play_btn.visible = false
+	_end_play_btn.visible = false
+	_cancel_target_btn.visible = true
+	_confirm_target_btn.visible = true
+	_refresh_paipian_confirm()
+	_update_debug("【拍片】：选择两名其他角色，然后弃置1张手牌，令他们各回复1体力")
+
+func _refresh_paipian_confirm():
+	_confirm_target_btn.text = "确认拍片（%d/2 名目标）" % _paipian_targets.size()
+	_confirm_target_btn.disabled = _paipian_targets.size() != 2
+
+func _on_paipian_target_click(target: Player):
+	if not _is_paipian_targeting or not _paipian_selection_current(): return
+	if not _paipian_target_valid(_local_player(), target): return
+	if _paipian_targets.has(target): _paipian_targets.erase(target)
+	elif _paipian_targets.size() < 2: _paipian_targets.append(target)
+	_refresh_paipian_confirm()
+	_update_debug("【拍片】已选择：%s（%d/2 名目标）" % ["、".join(_paipian_targets.map(func(body): return body.player_name)),_paipian_targets.size()])
+
+func _on_confirm_paipian():
+	if not _is_paipian_targeting or not _paipian_selection_current() or _paipian_targets.size() != 2: return
+	var actor = _local_player()
+	var targets: Array[Player] = _paipian_targets.duplicate()
+	var selection = _play_skill_selection_generation
+	_exit_paipian_mode()
+	await _execute_paipian(actor, targets)
+	if selection == _play_skill_selection_generation:
+		_restore_play_skill_buttons()
+		_sync_all_ui()
+
+func _execute_paipian(p: Player, targets: Array[Player]) -> int:
+	if not _paipian_rules_enabled or not _can_use_play_skill(p) or p.general_name != "桑尼·斯派" \
+			or p.hand_size() < 1 or _play_skill_execution_busy() or targets.size() != 2 \
+			or targets[0] == targets[1] or not targets.all(func(target): return _paipian_target_valid(p,target)): return 0
+	# Freeze the original recipients; caller-owned arrays cannot replace them while paying.
+	var audience: Array[Player] = targets.duplicate()
+	var lease = {"owner":p}
+	_paipian_pending = lease
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var general = p.awakening_revision
+	var registry_generation = unit_registry.generation()
+	var space = terrain_markers()
+	var valid = func(): return _paipian_rules_enabled and is_same(_paipian_pending,lease) \
+		and not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+		and _can_use_play_skill(p) and p.general_name == "桑尼·斯派" and general == p.awakening_revision \
+		and registry_generation == unit_registry.generation() and space == terrain_markers() \
+		and audience.all(func(target): return _paipian_target_valid(p,target))
+	var paid = await _select_hand_discard_result(p,1,false,valid)
+	var result = 0
+	if paid == HandDiscardOutcome.PAID:
+		if not valid.call(): result = CHOICE_INVALID
+		else:
+			result = 1
+			_history_event("skill","%s 发动【拍片】：弃置1张手牌，令两名角色各回复1体力" % p.player_name,p,audience)
+			for target in audience:
+				var immune = await _peter_ignore_effect(target,audience,"paipian",valid,false)
+				if immune == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID; break
+				if immune != 1:
+					var before = target.hp
+					target.heal(1)
+					_history_event("heal","%s 因【拍片】回复%d体力" % [target.player_name,target.hp-before],p,[target])
+			_sync_all_ui()
+	elif paid != HandDiscardOutcome.DECLINED: result = CHOICE_INVALID
+	if is_same(_paipian_pending,lease): _paipian_pending = {}
+	_restore_input_owner()
+	return result
+
 func _gay_target_valid(actor: Player, target: Player) -> bool:
 	return target != null and _has_character_body(target) and target != actor and target.is_alive() \
 		and target.gender == actor.gender and target.hp < target.max_hp and not _is_kneeling(target) \
@@ -11949,6 +12069,7 @@ func _finish_game(winner_identity: String, reason: String):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
+	_clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -12060,6 +12181,8 @@ func reset_game_over_state():
 	_zhuangbi_execution_owner = -1
 	_campus_execution_generation += 1
 	_campus_execution_owner = -1
+	_paipian_pending = {}
+	_clear_paipian_selection()
 	_gay_execution_generation += 1
 	_gay_execution_owner = -1
 	_lanzhonghou_execution_generation += 1
@@ -12594,6 +12717,7 @@ func end_play_phase():
 		_iron_chain_targets.clear()
 		_is_multi_targeting = false
 		_multi_targets.clear()
+		_clear_paipian_selection()
 		_is_zhuangbi_targeting = false
 		_zhuangbi_targets.clear()
 		_is_campus_targeting = false
@@ -12673,6 +12797,10 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 		# 方天画戟多目标模式：点击头像 toggle 目标
 		if _is_multi_targeting:
 			_on_multi_target_click(player)
+			return
+
+		if _is_paipian_targeting:
+			_on_paipian_target_click(player)
 			return
 
 		# 【装逼】目标选择：点击头像 toggle
@@ -12851,7 +12979,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled)
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled, _paipian_rules_enabled)
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)
@@ -12867,6 +12995,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "拍片":
+		_on_paipian_skill_clicked(owner_player)
+		return
 	if skill_key == "种田":
 		await _activate_farming_upgrade(owner_player)
 		return
