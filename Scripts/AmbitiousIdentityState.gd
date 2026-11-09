@@ -38,6 +38,18 @@ func candidate() -> Player:
 		or not _original_lord.is_dead() or _ambitious.is_dead(): return null
 	return _ambitious
 
+# I05c-3a: retain the trusted opening and succession history, while keeping
+# live role holders synchronized. Reinitializing would lose declaration state.
+# Skill/UI authorization and limited-use/immunity commitment are separate.
+func exchange_non_lord_identities(first: Player, second: Player) -> bool:
+	if not valid() or not _players.has(first) or not _players.has(second): return false
+	if not first.exchange_non_lord_identity(second): return false
+	_roles[first] = first.identity
+	_roles[second] = second.identity
+	if _ambitious == first: _ambitious = second
+	elif _ambitious == second: _ambitious = first
+	return true
+
 func declare() -> bool:
 	var successor := candidate()
 	if successor == null: return false

@@ -42,7 +42,9 @@ var _game_start_state: Dictionary = {}
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
-	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round"]
+	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used"]
+# I05c-3a: limited-skill state belongs to the general, identities do not.
+var spy_used := false
 # I05b-2a: general-card resources, restored by Sage; not physical cards.
 # Only successful hand-card USE/RESPONSE facts in the owner's turn count.
 var farm_empty_fields: int = 0
@@ -217,6 +219,18 @@ func is_dead() -> bool:
 # Future lord skills must combine this with their own general/skill conditions.
 func has_lord_skill_authority() -> bool:
 	return identity == "主公" and not is_dead()
+
+# Atomic role-value primitive only. The skill caller supplies mode, target,
+# immunity and limited-use authorization; no signal exposes a half swap.
+# Public identity observations and limited-use commitment remain caller-owned.
+func exchange_non_lord_identity(other: Player) -> bool:
+	var roles = ["忠臣", "反贼", "内奸", "奸雄"]
+	if not is_instance_valid(other) or other == self or not is_alive() or not other.is_alive() \
+			or identity not in roles or other.identity not in roles: return false
+	var previous = identity
+	identity = other.identity
+	other.identity = previous
+	return true
 
 func mark_dead():
 	life_state = LifeState.DEAD
