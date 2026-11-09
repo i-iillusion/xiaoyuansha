@@ -16,6 +16,7 @@ var _wine_stacks: int = 0
 var _mountain_skills_enabled: bool = false
 var _farming_skills_enabled: bool = false
 var _filming_skills_enabled: bool = false
+var _spy_skills_enabled: bool = false
 # 悬停效果描述浮层
 var _tooltip: PanelContainer
 var _tooltip_label: Label
@@ -32,7 +33,7 @@ var _tooltip_label: Label
 @onready var _close_btn: Button = $Panel/CloseBtn
 
 # 静态方法：创建一个新的详情弹窗
-static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false, farming_skills_enabled: bool = false, filming_skills_enabled: bool = false) -> PlayerDetailPopup:
+static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false, farming_skills_enabled: bool = false, filming_skills_enabled: bool = false, spy_skills_enabled: bool = false) -> PlayerDetailPopup:
 	var scene = load("res://Scenes/PlayerDetailPopup.tscn")
 	if scene == null:
 		# 代码兜底：直接实例化
@@ -43,6 +44,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 		popup._mountain_skills_enabled = mountain_skills_enabled
 		popup._farming_skills_enabled = farming_skills_enabled
 		popup._filming_skills_enabled = filming_skills_enabled
+		popup._spy_skills_enabled = spy_skills_enabled
 		parent.add_child(popup)
 		return popup
 
@@ -53,6 +55,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 	popup._mountain_skills_enabled = mountain_skills_enabled
 	popup._farming_skills_enabled = farming_skills_enabled
 	popup._filming_skills_enabled = filming_skills_enabled
+	popup._spy_skills_enabled = spy_skills_enabled
 	parent.add_child(popup)
 	return popup
 
@@ -126,6 +129,10 @@ func _populate():
 
 	if _filming_skills_enabled and _viewer == _player and _player.general_name == "桑尼·斯派":
 		_add_skill_btn("拍片", "【拍片】出牌阶段，弃置一张手牌，令除自己以外的两名角色各回复1体力")
+
+	if _spy_skills_enabled and _viewer == _player and _player.general_name == "桑尼·斯派":
+		_add_skill_btn("间谍", "【间谍】限定技，交换两名非主公角色的身份" + ("（已使用）" if _player.spy_used else ""))
+		_skills_container.get_child(_skills_container.get_child_count()-1).disabled = _player.spy_used
 
 	# Private metadata fixtures retain the same three actions before publication.
 	if skills.is_empty() and _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":

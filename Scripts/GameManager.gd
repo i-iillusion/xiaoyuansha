@@ -33,6 +33,11 @@ var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
 # Server-owned capabilities; callers cannot enable them through a client option.
 # I05c-2 remains private until all Sunny skills and natural ENet gates pass.
+var _spy_rules_enabled := false
+var _is_spy_targeting := false
+var _spy_targets: Array[Player] = []
+var _spy_selection_actor: Player
+var _spy_selection_general := -1
 var _paipian_rules_enabled := false
 var _is_paipian_targeting := false
 var _paipian_targets: Array[Player] = []
@@ -2084,7 +2089,7 @@ func _do_discard(pid: int):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -2122,7 +2127,7 @@ func _do_end(pid: int):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -2693,6 +2698,9 @@ func _on_cancel_target_pressed():
 	# 【是~啊~】：取消目标选择则本张锦囊视为未发动（未流失体力、不消耗手牌）
 	_yes_ah_active = false
 	_clear_pending_determined_card()
+	if _is_spy_targeting:
+		_exit_spy_mode()
+		return
 	if _is_paipian_targeting:
 		_exit_paipian_mode()
 		return
@@ -2828,6 +2836,9 @@ func _on_multi_target_click(target: Player):
 # 方天画戟：确认出牌
 func _on_confirm_multi_target():
 	if _game_over: return
+	if _is_spy_targeting:
+		_on_confirm_spy()
+		return
 	if _is_paipian_targeting:
 		await _on_confirm_paipian()
 		return
@@ -8767,7 +8778,7 @@ func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
 func _begin_play_skill_selection():
 	_play_skill_selection_generation += 1
 	_play_skill_target_revision = turn_manager.get_context_revision()
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -9030,7 +9041,7 @@ func _play_skill_target_is_current() -> bool:
 	if _can_use_play_skill(_local_player()) and _play_skill_target_revision == turn_manager.get_context_revision():
 		return true
 	_play_skill_selection_generation += 1
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -9616,6 +9627,87 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 # 详情弹窗技能按钮 → 【Gay】发动入口
 # I05c-2: one voluntary hand-card fee, exactly two other legal characters.
 # Shares existing avatar selection and HandDiscardPrompt cancellation semantics.
+# I05c-3b / Q1 and Q7: public lord excluded, Peter has no immunity here.
+func _spy_target_valid(actor: Player, target: Player) -> bool:
+	return is_instance_valid(target) and players.has(target) and target.is_alive() \
+		and target.identity in ["忠臣","反贼","内奸","奸雄"] and not _is_kneeling(target) \
+		and _can_target_body(actor,target) and _mountain_effect_reaches(_retained_effect_anchor(actor),target)
+
+func _spy_eligible(p: Player) -> bool:
+	return _spy_rules_enabled and game_mode in [MODE_CLASSIC_IDENTITY,MODE_AMBITIOUS_IDENTITY] \
+		and _can_use_play_skill(p) and players.has(p) and p.general_name == "桑尼·斯派" and not p.spy_used
+
+func _clear_spy_selection():
+	_is_spy_targeting=false
+	_spy_targets.clear()
+	_spy_selection_actor=null
+	_spy_selection_general=-1
+
+func _exit_spy_mode():
+	_clear_spy_selection()
+	_cancel_target_btn.visible=false
+	_confirm_target_btn.visible=false
+	_restore_play_skill_buttons()
+
+func _spy_selection_current() -> bool:
+	if _play_skill_target_is_current() and _spy_eligible(_local_player()) \
+			and _spy_selection_actor == _local_player() and _local_player().awakening_revision == _spy_selection_general:
+		return true
+	_exit_spy_mode()
+	return false
+
+func _on_spy_skill_clicked(p: Player):
+	if not _spy_eligible(p) or p != _local_player() or not _is_human(p) or _play_skill_execution_busy(): return
+	if players.filter(func(target): return _spy_target_valid(p,target)).size()<2: return
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible=false
+	_begin_play_skill_selection()
+	_is_spy_targeting=true
+	_spy_selection_actor=p
+	_spy_selection_general=p.awakening_revision
+	_play_btn.visible=false
+	_end_play_btn.visible=false
+	_cancel_target_btn.visible=true
+	_confirm_target_btn.visible=true
+	_refresh_spy_confirm()
+	_update_debug("【间谍】：选择两名非主公，确认后消耗限定次数并交换身份（可包含非主公的自己）")
+
+func _refresh_spy_confirm():
+	_confirm_target_btn.text="确认间谍（%d/2 名目标）" % _spy_targets.size()
+	_confirm_target_btn.disabled=_spy_targets.size()!=2
+
+func _on_spy_target_click(target: Player):
+	if not _is_spy_targeting or not _spy_selection_current() or not _spy_target_valid(_local_player(),target): return
+	if _spy_targets.has(target): _spy_targets.erase(target)
+	elif _spy_targets.size()<2: _spy_targets.append(target)
+	_refresh_spy_confirm()
+	_update_debug("【间谍】已选择：%s（%d/2 名目标）" % ["、".join(_spy_targets.map(func(body): return body.player_name)),_spy_targets.size()])
+
+func _on_confirm_spy():
+	if not _is_spy_targeting or not _spy_selection_current() or _spy_targets.size()!=2: return
+	var actor=_local_player()
+	var recipients: Array[Player]=_spy_targets.duplicate()
+	_exit_spy_mode()
+	_execute_spy(actor,recipients)
+
+func _execute_spy(p: Player, recipients: Array[Player]) -> int:
+	if not _spy_eligible(p) or _play_skill_execution_busy() or recipients.size()!=2 or recipients[0]==recipients[1] \
+			or not recipients.all(func(target): return _spy_target_valid(p,target)): return 0
+	var first=recipients[0]
+	var second=recipients[1]
+	# No await, hp signal or UI update between two identities, cached ownership,
+	# and limited-use commitment. Q7 intentionally bypasses Peter's normal hook.
+	var exchanged: bool
+	if game_mode==MODE_AMBITIOUS_IDENTITY:
+		if _ambitious_state==null or not _ambitious_state.valid(): return CHOICE_INVALID
+		exchanged=_ambitious_state.exchange_non_lord_identities(first,second)
+	else: exchanged=first.exchange_non_lord_identity(second)
+	if not exchanged: return CHOICE_INVALID
+	p.spy_used=true
+	_history_event("skill","%s 发动【间谍】：交换 %s 与 %s 的身份" % [p.player_name,first.player_name,second.player_name],p,recipients)
+	_sync_all_ui()
+	return 1
+
 func _paipian_target_valid(actor: Player, target: Player) -> bool:
 	return _paid_skill_target_allowed(actor, target)
 
@@ -12069,7 +12161,7 @@ func _finish_game(winner_identity: String, reason: String):
 	_is_multi_targeting = false
 	_multi_targets.clear()
 	_is_sage_targeting = false
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_is_zhuangbi_targeting = false
 	_zhuangbi_targets.clear()
 	_is_campus_targeting = false
@@ -12182,7 +12274,7 @@ func reset_game_over_state():
 	_campus_execution_generation += 1
 	_campus_execution_owner = -1
 	_paipian_pending = {}
-	_clear_paipian_selection()
+	_clear_spy_selection(); _clear_paipian_selection()
 	_gay_execution_generation += 1
 	_gay_execution_owner = -1
 	_lanzhonghou_execution_generation += 1
@@ -12318,7 +12410,7 @@ func _do_sage_save(p: Player):
 # The declaration size is not the number still affected/alive. Q4 excludes
 # Borrowed Sword itself, but its later Fangtian Strike has its own audience.
 func _peter_ignore_effect(target: Player, audience: Array[Player], effect: String, allowed: Callable, harmful: bool = true) -> int:
-	if not _peter_owner_allowed(target) or _is_kneeling(target) or audience.size()<2 or not audience.has(target) or effect=="borrowed_sword": return 0
+	if not _peter_owner_allowed(target) or _is_kneeling(target) or audience.size()<2 or not audience.has(target) or effect in ["borrowed_sword","spy"]: return 0
 	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var general_revision = target.awakening_revision
@@ -12717,7 +12809,7 @@ func end_play_phase():
 		_iron_chain_targets.clear()
 		_is_multi_targeting = false
 		_multi_targets.clear()
-		_clear_paipian_selection()
+		_clear_spy_selection(); _clear_paipian_selection()
 		_is_zhuangbi_targeting = false
 		_zhuangbi_targets.clear()
 		_is_campus_targeting = false
@@ -12799,6 +12891,9 @@ func _on_player_panel_click(event: InputEvent, panel: Control):
 			_on_multi_target_click(player)
 			return
 
+		if _is_spy_targeting:
+			_on_spy_target_click(player)
+			return
 		if _is_paipian_targeting:
 			_on_paipian_target_click(player)
 			return
@@ -12979,7 +13074,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled, _paipian_rules_enabled)
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled, _paipian_rules_enabled, _spy_rules_enabled)
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)
@@ -12995,6 +13090,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "间谍":
+		_on_spy_skill_clicked(owner_player)
+		return
 	if skill_key == "拍片":
 		_on_paipian_skill_clicked(owner_player)
 		return

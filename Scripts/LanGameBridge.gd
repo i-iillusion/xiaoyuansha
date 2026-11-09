@@ -67,7 +67,7 @@ func _walk(node: Node, buttons: Array, labels: Array) -> void:
 	for child in node.get_children(): _walk(child, buttons, labels)
 
 func _targeting() -> bool:
-	return game._is_paipian_targeting or game._is_targeting or game._is_multi_targeting or game._is_iron_chain_targeting \
+	return game._is_spy_targeting or game._is_paipian_targeting or game._is_targeting or game._is_multi_targeting or game._is_iron_chain_targeting \
 		or game._is_zhuangbi_targeting or game._is_campus_targeting or game._is_gay_targeting \
 		or game._is_shensu_targeting or game._is_lanzhonghou_targeting or game._is_meiyong_targeting \
 		or game._is_sage_targeting
@@ -80,6 +80,8 @@ func acting_unit() -> String:
 func _declaration_target_allowed(target: Player) -> bool:
 	if game._selecting_strike_targets(): return game._get_strike_targets(game._play_actor()).has(target)
 	if game._is_mountain_body(target): return false
+	if game._is_spy_targeting:
+		return game._spy_target_valid(game._play_actor(),target)
 	if game._is_paipian_targeting:
 		return game._paipian_target_valid(game._play_actor(), target)
 	if game._is_gay_targeting:
