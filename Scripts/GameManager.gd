@@ -31,6 +31,10 @@ signal unit_removed(id: String, reason: int)
 signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
+# I05c-4a receipt capture only; Corruption activation is not implemented here.
+var _extra_draw_receipts_enabled := false
+var _draw_batch_serial := 0
+var _draw_batches: Array[ExtraDrawBatch] = []
 # Server-owned capabilities; callers cannot enable them through a client option.
 # I05c-2 remains private until all Sunny skills and natural ENet gates pass.
 var _spy_rules_enabled := false
@@ -1046,7 +1050,7 @@ func start_game():
 		assert(ambitious_ready, "Invalid ambitious opening")
 		if not ambitious_ready: return
 	for p in players:
-		_draw_blank_cards(p, 4)
+		_draw_blank_cards(p, 4, ExtraDrawBatch.Context.INITIAL_DEAL)
 
 	_update_player_panel(_self_info_panel, _local_player())
 
@@ -1465,7 +1469,7 @@ func _draw_phase_cards(p: Player, apply_supply: bool = true) -> bool:
 		p.shensu_penalty = 0
 		draw_count = maxi(draw_count - owed, 0)
 		_update_debug("%s 的【神速】摸牌减益结算：少摸 %d 张（实际摸 %d 张）" % [p.player_name, owed, draw_count])
-	_draw_blank_cards(p, draw_count)
+	_draw_blank_cards(p, draw_count, ExtraDrawBatch.Context.DRAW_PHASE)
 	_update_debug("%s 摸了 %d 张牌（手牌 %d 张）" % [p.player_name, draw_count, p.hand_size()])
 	return true
 
@@ -2149,10 +2153,22 @@ func _on_turn_ended(pid: int):
 #  手牌管理
 # ============================
 
-func _draw_blank_cards(p: Player, count: int):
+func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA) -> ExtraDrawBatch:
+	var first=p.hand.size()
 	for i in count:
 		p.hand.append(null)
+	var receipt: ExtraDrawBatch
+	if _extra_draw_receipts_enabled and count>0:
+		_draw_batch_serial+=1
+		var lifecycle=_dying_lifecycle_generation
+		var game_ref=weakref(self)
+		var current=func():
+			var game=game_ref.get_ref()
+			return is_instance_valid(game) and not game._game_over and game._dying_lifecycle_generation==lifecycle
+		receipt=ExtraDrawBatch.new(p,first,count,context,_draw_batch_serial,yudaxi.is_active(),lifecycle,current)
+		_draw_batches.append(receipt)
 	if count > 0: _history_event("draw", "%s 摸%d张牌" % [p.player_name, count], p, [], {"count": count})
+	return receipt
 
 # ============================
 #  可攻击目标查询
@@ -12149,6 +12165,8 @@ func _finish_game(winner_identity: String, reason: String):
 	if _game_over:
 		return
 	_game_over = true
+	for batch in _draw_batches: batch.close()
+	_draw_batches.clear()
 	_halt_countdown()
 	_card_target_generation += 1
 	_play_skill_selection_generation += 1
@@ -12239,6 +12257,9 @@ func _return_to_main_menu(button: Button):
 
 # 测试用：重置游戏结束状态（新一轮/新用例前调用），并解除阵亡管线重复处理记录
 func reset_game_over_state():
+	for batch in _draw_batches: batch.close()
+	_draw_batches.clear()
+	_draw_batch_serial=0
 	_reset_unit_registry()
 	if _history_panel != null: _history_panel.z_index = 50
 	# Local restart identity needs uniqueness, not a new crypto provider per
