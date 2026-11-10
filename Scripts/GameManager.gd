@@ -2155,7 +2155,7 @@ func _on_turn_ended(pid: int):
 #  手牌管理
 # ============================
 
-func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA) -> ExtraDrawBatch:
+func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA, corruption_exempt: bool = false) -> ExtraDrawBatch:
 	var first=p.hand.size()
 	for i in count:
 		p.append_hand_card_silent(null)
@@ -2168,14 +2168,20 @@ func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = 
 			var game=game_ref.get_ref()
 			return is_instance_valid(game) and not game._game_over and game._dying_lifecycle_generation==lifecycle
 		receipt=ExtraDrawBatch.new(p,first,count,context,_draw_batch_serial,yudaxi.is_active(),lifecycle,current)
+		receipt.corruption_exempt=corruption_exempt
 		_draw_batches.append(receipt)
 	if count > 0: _history_event("draw", "%s 摸%d张牌" % [p.player_name, count], p, [], {"count": count})
 	return receipt
 
+# Q11 excludes this success reward from Corruption, not from extra-draw facts.
+# No asynchronous reaction is inserted, so the rule's draw callback stays sync.
+func _draw_yudaxi_reward(p: Player, count: int) -> ExtraDrawBatch:
+	return _draw_blank_cards(p,count,ExtraDrawBatch.Context.EXTRA,true)
+
 # Q10 supersedes the deferred Sage plan: complete this reaction before the
 # dying/rule parent continues. Other draw parents are migrated separately.
 func _resolve_corruption_batch(batch: ExtraDrawBatch) -> int:
-	if not _corruption_rules_enabled or batch==null or not batch.is_extra() or batch.reaction_started or not batch.valid(): return 0
+	if not _corruption_rules_enabled or batch==null or not batch.is_extra() or batch.corruption_exempt or batch.reaction_started or not batch.valid(): return 0
 	batch.reaction_started=true
 	var actor: Player
 	for p in players:
@@ -11951,7 +11957,7 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 		# 锁定规则先于普通检查点；成功后仍保留三个牌区及身份状态。
 		if victim.general_name == "里奥·普利威尔":
 			await yudaxi.resolve(victim, _yudaxi_targets, _settle_yudaxi_target,
-				_draw_blank_cards, func(): return not valid.call(), _on_yudaxi_limit)
+				_draw_yudaxi_reward, func(): return not valid.call(), _on_yudaxi_limit)
 			if not valid.call(): return _invalidate_dying_context(victim, context)
 		if not _game_over and victim.is_dying() and not yudaxi.is_active():
 			if not await rule_scheduler.checkpoint(context, "before_death"):

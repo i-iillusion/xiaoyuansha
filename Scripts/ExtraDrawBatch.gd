@@ -14,6 +14,7 @@ var during_yudaxi: bool
 var lifecycle: int
 var closed := false
 var reaction_started := false
+var corruption_exempt := false # Q11: only the originating Yudaxi success reward.
 var _card_ids: Array[int] = []
 var _tracking_epoch: int
 var _general_revision: int

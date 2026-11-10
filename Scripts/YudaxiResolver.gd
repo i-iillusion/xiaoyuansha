@@ -62,5 +62,6 @@ func resolve(owner: Player, targets_for: Callable, settle_dying: Callable,
 		if _step(stop, on_limit) and deaths > 0 and not owner.is_dead():
 			owner.hp = deaths # 回复至 X，不叠加旧负体力，也不按普通回复封顶。
 			draw_cards.call(owner, deaths)
+			if generation != _generation: return # A synchronous draw observer can also reset the rule.
 	results.append({"owner": owner, "deaths": deaths, "aborted": aborted})
 	_owners.pop_back()
