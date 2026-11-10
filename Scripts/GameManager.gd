@@ -12094,8 +12094,10 @@ func _handle_death(victim: Player, killer: Player):
 	# ---- 阶段4 击杀奖惩（仅身份局；乱斗明确没有击杀奖励）----
 	if game_mode in [MODE_CLASSIC_IDENTITY, MODE_AMBITIOUS_IDENTITY] and not _game_over and killer != null and killer.is_alive():
 		if victim.identity == "反贼" or (game_mode == MODE_AMBITIOUS_IDENTITY and victim.identity == "奸雄"):
-			_draw_blank_cards(killer, 3)
+			var batch = _draw_blank_cards(killer, 3)
 			_update_debug("奖惩：%s 击杀【%s】%s，摸 3 张牌！（%d 张）" % [killer.player_name, victim.identity, victim.player_name, killer.hand_size()])
+			if await _resolve_corruption_batch(batch) == CHOICE_INVALID or death_generation != _dying_lifecycle_generation: return CHOICE_INVALID
+			if _game_over: return 0
 		elif victim.identity == "忠臣" and killer.identity == "主公":
 			_discard_all_cards(killer, false)
 			_update_debug("奖惩：主公 %s 误杀忠臣 %s，弃置所有手牌和装备！（%d 张手牌）" % [killer.player_name, victim.player_name, killer.hand_size()])
