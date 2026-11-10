@@ -5,6 +5,7 @@ const StageDraw=preload("res://Test/i05_sunny_corruption_stage_draw_cases.gd")
 const DeathDraw=preload("res://Test/i05_sunny_corruption_death_draw_cases.gd")
 const YudaxiReward=preload("res://Test/i05_sunny_yudaxi_reward_exemption_cases.gd")
 const PaymentAwakening=preload("res://Test/i05_sunny_payment_awakening_cases.gd")
+const SharedPayment=preload("res://Test/i05_sunny_shared_payment_cases.gd")
 var checks:=0
 var failures:=0
 func _initialize(): run.call_deferred()
@@ -26,5 +27,6 @@ func run():
 	await DeathDraw.new().run(self)
 	await YudaxiReward.new().run(self)
 	await PaymentAwakening.new().run(self)
+	await SharedPayment.new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)

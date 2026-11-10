@@ -7035,10 +7035,12 @@ signal _plus_mule_target_result(target: Player)
 
 # 在一次杀使用/打出已经成立后登记；多目标只调用一次，效果链不重复登记。
 func _record_strike_played(p: Player) -> int:
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
 	var first := turn_manager.record_strike_played(ActorIdentity.key_for(players, unit_registry, p))
+	if await _await_hand_awakening(p) == CHOICE_INVALID or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CHOICE_INVALID
 	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
-		var generation = _dying_lifecycle_generation
-		var revision = turn_manager.get_context_revision()
 		var batch = _draw_blank_cards(p, 1)
 		_public_result("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
 		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
@@ -8166,6 +8168,10 @@ func _consume_trick(p: Player, sub: CardData.CardSubType, completion_actions: Ar
 	var scope: Array[Player] = _prep_group_scope(p, sub) if sub in GLOBAL_TRICKS else targets
 	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, scope)
 	completion_actions.append(action)
+	if await _await_hand_awakening(p) == CHOICE_INVALID:
+		_abandon_card_actions(completion_actions)
+		completion_actions.clear()
+		return false
 	return true
 
 # ============================
