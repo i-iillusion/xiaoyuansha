@@ -1561,7 +1561,7 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 		# Finish forced awakening before processing the next target/phase.
 		if target.general_name == "史蒂芬·彼特先斯" and target.hand_size() == 0 and not target.awoken:
 			target.awoken = true
-			await _do_awaken(target)
+			if await _do_awaken(target) == CHOICE_INVALID: return CHOICE_INVALID
 		if not valid.call(): return CHOICE_INVALID
 	return 1
 
@@ -2238,7 +2238,7 @@ func _take_corruption_cards(actor: Player, batch: ExtraDrawBatch, amount: int, v
 	# Finish any forced awakening after the atomic move, before notifying parents.
 	if target.general_name=="史蒂芬·彼特先斯" and target.hand_size()==0 and not target.awoken:
 		target.awoken=true
-		await _do_awaken(target)
+		if await _do_awaken(target)==CHOICE_INVALID: return CHOICE_INVALID
 	if _game_over or generation!=_dying_lifecycle_generation or revision!=turn_manager.get_context_revision(): return CHOICE_INVALID
 	target.hand_updated.emit()
 	actor.hand_updated.emit()
@@ -8747,31 +8747,44 @@ func _awaken_choice_pending(p: Player, revision: int) -> bool:
 		and p.general_name == "史蒂芬·彼特先斯" and p.awoken and p.awake_choice == 0 \
 		and p.awakening_revision == revision
 
-func _do_awaken(p: Player, expected_revision: int = -1, expected_lifecycle: int = -1):
+func _do_awaken(p: Player, expected_revision: int = -1, expected_lifecycle: int = -1) -> int:
 	if not is_instance_valid(p):
-		return
+		return CHOICE_INVALID
 	var lifecycle = _dying_lifecycle_generation
-	if expected_lifecycle >= 0 and expected_lifecycle != lifecycle: return
+	if expected_lifecycle >= 0 and expected_lifecycle != lifecycle: return CHOICE_INVALID
 	var generation = p.awakening_revision
 	if expected_revision >= 0 and expected_revision != generation:
-		return
+		return CHOICE_INVALID
 	var lease = {"revision": generation, "lifecycle": lifecycle}
-	if not _awaken_choice_pending(p, generation) or _awaken_in_progress.get(p, {}) == lease:
-		return
+	if not _awaken_choice_pending(p, generation): return 0
+	if _awaken_in_progress.get(p, {}) == lease:
+		# Explicit reaction parents join the same running awakening, never
+		# bypass its draw/RPS/mandatory choice or apply its effects twice.
+		if _corruption_rules_enabled:
+			while _awaken_in_progress.get(p, {}) == lease:
+				if _game_over or lifecycle != _dying_lifecycle_generation or not is_instance_valid(p) or p.awakening_revision != generation: return CHOICE_INVALID
+				await get_tree().process_frame
+			return 0 if not _game_over and lifecycle==_dying_lifecycle_generation and is_instance_valid(p) and p.awakening_revision==generation and p.awake_choice in [1,2,3] else CHOICE_INVALID
+		return 0
 	_awaken_in_progress[p] = lease
+	var reaction = 0
 	if not p.awaken_effects_applied:
 		# 先记已结算，摸牌及UI信号不能重入扣上限/摸牌。
 		p.awaken_effects_applied = true
 		p.max_hp -= 1
 		p.hp = mini(p.hp, p.max_hp)
 		_update_debug("%s 觉醒！失去 1 点体力上限（上限 %d，体力 %d/%d），摸两张牌" % [p.player_name, p.max_hp, p.hp, p.max_hp])
-		_draw_blank_cards(p, 2)
-	await _resolve_awaken_choice(p, generation)
+		var batch = _draw_blank_cards(p, 2)
+		reaction = await _resolve_corruption_batch(batch)
+	if reaction != CHOICE_INVALID and lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p,generation):
+		await _resolve_awaken_choice(p, generation)
 	if _awaken_in_progress.get(p, {}) == lease:
 		_awaken_in_progress.erase(p)
 	# 人类必选窗口被销毁或阶段过期时，重新显示待选择项；不重做已结算效果。
 	if lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p, generation) and _is_human(p):
 		call_deferred("_do_awaken", p, generation, lifecycle)
+	return 0 if reaction != CHOICE_INVALID and lifecycle == _dying_lifecycle_generation and is_instance_valid(p) \
+		and p.awakening_revision==generation and p.awake_choice in [1,2,3] else CHOICE_INVALID
 
 func _resolve_awaken_choice(p: Player, generation: int):
 	var revision = turn_manager.get_context_revision()
@@ -9350,7 +9363,7 @@ func _execute_zhuangbi_pending(targets: Array[Player], owner: int) -> void:
 	# 必须先完成强制觉醒的三选一，再继续其他目标支付或拼点。
 	if p.hand_size() == 0 and not p.awoken:
 		p.awoken = true
-		await _do_awaken(p)
+		if await _do_awaken(p) == CHOICE_INVALID: return
 	if not target_valid.call(valid[0]):
 		return
 	_public_result("%s 发动【装逼】！弃置一张手牌（剩余 %d 张）" % [p.player_name, p.hand_size()])
@@ -10697,7 +10710,8 @@ func _maybe_meiyong_pending(p: Player, owner: int) -> int:
 	var chosen_target: Player = chosen.target
 	var chosen_option: int = chosen.option
 	if not _meiyong_target_valid(p, chosen_target, chosen_option): return CHOICE_INVALID
-	_draw_blank_cards(p, 1)
+	var batch = _draw_blank_cards(p, 1)
+	if await _resolve_corruption_batch(batch) == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	match chosen_option:
 		0:
 			turn_manager.granted_judge_target_idx = chosen_target.seat_index
