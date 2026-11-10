@@ -45,6 +45,8 @@ func valid() -> bool:
 			"hand", "determined", "judgment":
 				var cards: Array = p.hand if atom.zone == "hand" else (p.determined_cards if atom.zone == "determined" else p.judgment_cards)
 				if atom.index < 0 or atom.index >= cards.size() or cards[atom.index] != atom.card: return false
+				if atom.has("draw_id") and (atom.zone!="hand" or not atom.has("draw_epoch") \
+						or p.draw_hand_index(int(atom.draw_id),int(atom.draw_epoch))!=atom.index): return false
 			"equip":
 				var card = p.get_hidden_equipment_card(atom.slot) if p.equipment.get(atom.slot, -1) == CardData.CardSubType.HIDDEN_EQUIPMENT else p.get_equipment_card(atom.slot)
 				if atom.card == null or card != atom.card: return false

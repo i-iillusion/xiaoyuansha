@@ -72,11 +72,23 @@ static func has_card(p: Player, sub: CardData.CardSubType) -> bool:
 
 static func take_card(p: Player, sub: CardData.CardSubType) -> CardBase:
 	var selected := _find_player_card(p, sub, false)
-	return null if selected.is_empty() else _take_at(selected.cards, selected.index, sub)
+	return _take_player_selection(p,selected,sub)
 
 static func has_response(p: Player, expected: CardData.CardSubType) -> bool:
 	return not _find_player_card(p, expected, true).is_empty()
 
 static func take_player_response(p: Player, expected: CardData.CardSubType) -> CardBase:
 	var selected := _find_player_card(p, expected, true)
-	return null if selected.is_empty() else _take_at(selected.cards, selected.index, expected)
+	return _take_player_selection(p,selected,expected)
+
+# Player-owned paths must preserve arbitrary-card identities for deferred draws.
+# Raw-array take/take_response above remain available for isolated array users.
+static func _take_player_selection(p: Player, selected: Dictionary, blank_sub: CardData.CardSubType) -> CardBase:
+	if selected.is_empty(): return null
+	var cards: Array[CardBase]=selected.cards
+	var index: int=selected.index
+	var original=cards[index]
+	var result=CardBase.create(blank_sub) if original==null else original
+	if is_same(cards,p.hand): p.take_hand_card_at(index)
+	else: cards.remove_at(index)
+	return result

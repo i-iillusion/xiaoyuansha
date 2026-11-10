@@ -267,14 +267,73 @@ func hand_limit() -> int:
 		return 0
 	return hp + bonus
 
-func add_to_hand(card: CardBase):
+# Server-only identity for physical arbitrary hand positions. Not general-card
+# state, public information, or an additional card/rule. Enabled lazily by a
+# draw receipt; ordinary games pay only the cheap disabled guard below.
+var _draw_hand_tracking_enabled := false
+var _draw_hand_tracking_epoch := 0
+var _draw_hand_next_id := 0
+var _draw_hand_ids: Array[int] = []
+var _draw_hand_snapshot: Array[CardBase] = []
+
+func _ensure_draw_hand_tracking():
+	if _draw_hand_tracking_enabled and hand==_draw_hand_snapshot: return
+	_draw_hand_tracking_enabled=true
+	_draw_hand_tracking_epoch+=1
+	_draw_hand_ids.clear()
+	for card in hand:
+		_draw_hand_next_id+=1
+		_draw_hand_ids.append(_draw_hand_next_id)
+	_draw_hand_snapshot=hand.duplicate()
+
+func draw_hand_epoch() -> int:
+	_ensure_draw_hand_tracking()
+	return _draw_hand_tracking_epoch
+
+func draw_hand_ids(first: int, amount: int) -> Array[int]:
+	_ensure_draw_hand_tracking()
+	var result: Array[int]=[]
+	if first<0 or amount<=0 or first+amount>hand.size(): return result
+	result.assign(_draw_hand_ids.slice(first,first+amount))
+	return result
+
+func draw_hand_index(id: int, epoch: int) -> int:
+	_ensure_draw_hand_tracking()
+	return _draw_hand_ids.find(id) if epoch==_draw_hand_tracking_epoch else -1
+
+func append_hand_card_silent(card: CardBase):
+	if _draw_hand_tracking_enabled: _ensure_draw_hand_tracking()
 	hand.append(card)
+	if _draw_hand_tracking_enabled:
+		_draw_hand_next_id+=1
+		_draw_hand_ids.append(_draw_hand_next_id)
+		_draw_hand_snapshot=hand.duplicate()
+
+func take_hand_card_at(index: int) -> CardBase:
+	if index<0 or index>=hand.size(): return null
+	if _draw_hand_tracking_enabled: _ensure_draw_hand_tracking()
+	var card=hand[index]
+	hand.remove_at(index)
+	if _draw_hand_tracking_enabled:
+		_draw_hand_ids.remove_at(index)
+		_draw_hand_snapshot=hand.duplicate()
+	return card
+
+func clear_hand_silent():
+	if _draw_hand_tracking_enabled: _ensure_draw_hand_tracking()
+	hand.clear()
+	if _draw_hand_tracking_enabled:
+		_draw_hand_ids.clear()
+		_draw_hand_snapshot.clear()
+
+func add_to_hand(card: CardBase):
+	append_hand_card_silent(card)
 	hand_updated.emit()
 
 func remove_from_hand(card: CardBase) -> bool:
 	var idx = hand.find(card)
 	if idx >= 0:
-		hand.remove_at(idx)
+		take_hand_card_at(idx)
 		hand_updated.emit()
 		return true
 	if card != null and determined_cards.has(card):
@@ -294,7 +353,7 @@ func take_hand_cards(count: int) -> Array[CardBase]:
 	if count <= 0 or count > hand_size():
 		return taken
 	for i in count:
-		taken.append(hand.pop_back() if not hand.is_empty() else determined_cards.pop_back())
+		taken.append(take_hand_card_at(hand.size()-1) if not hand.is_empty() else determined_cards.pop_back())
 	return taken
 
 # ---- 牌区域查询（过河拆桥/顺手牵羊用）----

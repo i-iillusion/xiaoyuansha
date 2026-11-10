@@ -37,7 +37,7 @@ func take(indices: Array[int], count: int) -> Array[CardBase]:
 	seen.reverse()
 	for i in seen:
 		if i < hand.size():
-			owner.hand.remove_at(i)
+			owner.take_hand_card_at(i)
 		else:
 			owner.determined_cards.remove_at(i - hand.size())
 	return result

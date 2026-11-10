@@ -1,7 +1,7 @@
 # I05c-4a: one physical draw receipt, not skill authorization or scheduling.
 # The caller decides whether/when Corruption may act, including Q9 priority.
-# A failed snapshot is a safety failure, not permission to cancel a committed
-# effect: authorized intervening moves must be reconciled by the caller.
+# Player-owned hand mutations retain per-position ids across legal intervening
+# payments/appends. Unknown direct mutations invalidate the tracking epoch.
 class_name ExtraDrawBatch
 extends RefCounted
 
@@ -13,8 +13,8 @@ var count: int
 var during_yudaxi: bool
 var lifecycle: int
 var closed := false
-var _snapshot: HandSelection
-var _indices: Array[int] = []
+var _card_ids: Array[int] = []
+var _tracking_epoch: int
 var _general_revision: int
 var _allowed: Callable
 
@@ -31,32 +31,46 @@ func _init(p: Player, first: int, amount: int, kind: Context, number: int,
 		closed=true
 		return
 	_general_revision=p.awakening_revision
-	_snapshot=HandSelection.new(p)
-	for index in range(first,first+amount): _indices.append(index)
+	_card_ids=p.draw_hand_ids(first,amount)
+	_tracking_epoch=p.draw_hand_epoch()
 
 func is_extra() -> bool:
 	return context==Context.EXTRA
 
 func valid() -> bool:
-	return not closed and _snapshot!=null and is_instance_valid(owner) and owner.is_alive() \
-		and owner.awakening_revision==_general_revision and owner.hand==_snapshot.hand \
-		and owner.determined_cards==_snapshot.determined and (not _allowed.is_valid() or _allowed.call())
+	return _resource_current() and owner.is_alive() and not owner.unit_disappeared and remaining_count()>0
+
+func _resource_current() -> bool:
+	return not closed and is_instance_valid(owner) and owner.awakening_revision==_general_revision \
+		and (not _allowed.is_valid() or _allowed.call()) and owner.draw_hand_epoch()==_tracking_epoch
+
+func remaining_count() -> int:
+	return remaining_indices().size()
+
+func remaining_indices() -> Array[int]:
+	var result: Array[int]=[]
+	if not _resource_current(): return result
+	for id in _card_ids:
+		var index=owner.draw_hand_index(id,_tracking_epoch)
+		if index>=0: result.append(index)
+	return result
 
 func loss_atoms(amount: int) -> Array[Dictionary]:
 	var result: Array[Dictionary]=[]
-	if not valid() or amount<=0 or amount>count: return result
-	for index in _indices.slice(0,amount):
-		result.append({"owner":owner,"zone":"hand","index":index,"card":_snapshot.cards[index]})
+	if not valid() or amount<=0 or amount>remaining_count(): return result
+	for index in remaining_indices().slice(0,amount):
+		result.append({"owner":owner,"zone":"hand","index":index,"card":owner.hand[index],
+			"draw_id":owner.draw_hand_ids(index,1)[0],"draw_epoch":_tracking_epoch})
 	return result
 
 # The original arbitrary cards remain arbitrary. No declaration, discard,
 # destination or card-action fact is manufactured by claiming this receipt.
 func take(amount: int) -> Array[CardBase]:
 	var empty: Array[CardBase]=[]
-	if not valid() or amount<=0 or amount>count: return empty
+	if not valid() or amount<=0 or amount>remaining_count(): return empty
 	var selected: Array[int]=[]
-	selected.assign(_indices.slice(0,amount))
-	var result=_snapshot.take(selected,amount)
+	selected.assign(remaining_indices().slice(0,amount))
+	var result=HandSelection.new(owner).take(selected,amount)
 	if result.size()==amount: closed=true
 	return result
 

@@ -1554,7 +1554,7 @@ func _steal_medicine_pending(p: Player, lease: int) -> int:
 			continue # I05-D-Q19: the other recipient still resolves; draw stays replaced.
 		# Existing hand-transfer policy; arbitrary stays null, concrete keeps ID.
 		var card: CardBase = target.take_hand_cards(1)[0]
-		p.hand.append(card)
+		p.append_hand_card_silent(card)
 		_history_event("transfer", "%s 获得 %s 的1张手牌" % [p.player_name, target.player_name], p, [target], {"count": 1})
 		# Finish forced awakening before processing the next target/phase.
 		if target.general_name == "史蒂芬·彼特先斯" and target.hand_size() == 0 and not target.awoken:
@@ -2156,7 +2156,7 @@ func _on_turn_ended(pid: int):
 func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA) -> ExtraDrawBatch:
 	var first=p.hand.size()
 	for i in count:
-		p.hand.append(null)
+		p.append_hand_card_silent(null)
 	var receipt: ExtraDrawBatch
 	if _extra_draw_receipts_enabled and count>0:
 		_draw_batch_serial+=1
@@ -5149,7 +5149,7 @@ func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: boo
 			var cards = hand_snapshot.take([int(choice.index)], 1)
 			if cards.size() != 1: return CHOICE_INVALID
 			taken = cards[0]
-			if is_snatch: attacker.hand.append(taken)
+			if is_snatch: attacker.append_hand_card_silent(taken)
 		"equip":
 			taken = target.remove_equipment(choice.slot)
 			if taken == null: return CHOICE_INVALID
@@ -5180,7 +5180,7 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 	var taken: CardBase = target.take_hand_cards(1)[0]
 	if is_snatch:
 		# 任意牌仍为 null；具体牌保持同一资源、类型和来源元数据。
-		attacker.hand.append(taken)
+		attacker.append_hand_card_silent(taken)
 		_update_debug("%s 获得 %s 的 1 张手牌（自己手牌 %d 张）" % [attacker.player_name, target.player_name, attacker.hand_size()])
 	else:
 		if taken != null:
@@ -5273,7 +5273,8 @@ func _discard_exhausted_hidden_category(category: String) -> void:
 				var zone_card: CardBase = cards[i]
 				if zone_card != null and zone_card.sub_type == CardData.CardSubType.HIDDEN_EQUIPMENT \
 						and zone_card.hidden_category == category:
-					cards.remove_at(i)
+					if is_same(cards,p.hand): p.take_hand_card_at(i)
+					else: cards.remove_at(i)
 					if _pending_determined_card == zone_card:
 						_pending_determined_card = null
 					deck.discard(zone_card)
@@ -8102,7 +8103,7 @@ func _do_sao_hide(p: Player, replace: bool) -> void:
 	var source: CardBase = null
 	var blank_index = p.hand.find(null)
 	if blank_index >= 0:
-		p.hand.remove_at(blank_index)
+		p.take_hand_card_at(blank_index)
 		source = CardBase.create(CardData.CardSubType.HIDDEN_EQUIPMENT)
 	else:
 		var matching: Array[CardBase] = []
@@ -12020,7 +12021,8 @@ func _discard_all_cards(p: Player, include_judgment: bool, loss_effects: bool = 
 		for card in cards:
 			if card != null:
 				deck.discard(card)
-		cards.clear()
+		if is_same(cards,p.hand): p.clear_hand_silent()
+		else: cards.clear()
 	for slot in p.get_equip_slots():
 		var equipment_card = p.remove_equipment(slot, loss_effects)
 		# 暗置装备也有原牌资源；最终死亡/惩罚弃置时保持暗置，不凭空明置。
