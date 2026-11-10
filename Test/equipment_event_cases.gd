@@ -153,7 +153,7 @@ func run(host):
 			original_player.determined_cards.append(incoming)
 		else:
 			original_player.hand.append(null)
-		var ok = game._replace_play_equipment_if_current(original_player, "armor", CardData.CardSubType.LIANNU,
+		var ok = await game._replace_play_equipment_if_current(original_player, "armor", CardData.CardSubType.LIANNU,
 			CardData.CardSubType.RENWANG_DUN, old_armor, game.turn_manager.get_context_revision())
 		suite.check(not ok and events.is_empty() and original_player.get_equipment_card("armor") == old_armor
 			and original_player.hand_size() == 1 and game.deck._discard.is_empty(),

@@ -3122,6 +3122,9 @@ func _replace_play_equipment_if_current(p: Player, slot: String, sub: CardData.C
 		deck.discard(removed)
 	var action = _record_card_action(p, incoming, CardActionEvent.Kind.USE, true, false)
 	_claim_equipment_name(sub, incoming)
+	if await _await_hand_awakening(p) == CHOICE_INVALID:
+		_abandon_card_actions([action])
+		return false
 	_complete_card_actions([action])
 	return true
 
@@ -3323,6 +3326,9 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			if sub == CardData.CardSubType.INDULGENCE: turn_manager.use_card("indulgence")
 			elif sub == CardData.CardSubType.SUPPLY_SHORTAGE: turn_manager.use_card("supply_shortage")
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			_complete_card_actions([action])
 			_public_result("%s 对 %s 使用了【%s】，已置入其判定区（下回合判定）" % [p.player_name, target.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -3687,11 +3693,14 @@ func play_card(sub: CardData.CardSubType):
 				_update_debug("没有可用的【酒】或任意牌")
 				return
 			turn_manager.use_card("wine")
+			deck.discard(used_wine)
 			var action = _record_card_action(p, used_wine, CardActionEvent.Kind.USE, true, false, [p])
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			p.wine_stacks += 1
 			if p.get_weapon() == CardData.CardSubType.RAGING_AXE:
 				p.raging_wine_stacks += 1
-			deck.discard(used_wine)
 			_update_debug("%s 使用了【酒】（当前 %d 层，下一张【杀】伤害+%d）" % [p.player_name, p.wine_stacks, p.wine_stacks])
 			_complete_card_actions([action])
 			_sync_all_ui()
@@ -3712,9 +3721,12 @@ func play_card(sub: CardData.CardSubType):
 			if used_peach == null:
 				_update_debug("没有可用的【桃】或任意牌")
 				return
-			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false, [p])
-			var healed = _heal_with_staff(p)
 			deck.discard(used_peach)
+			var action = _record_card_action(p, used_peach, CardActionEvent.Kind.USE, true, false, [p])
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
+			var healed = _heal_with_staff(p)
 			_update_debug("%s 使用了【桃】，回复 %d 点体力（%d/%d）" % [p.player_name, healed, p.hp, p.max_hp])
 			_complete_card_actions([action])
 			_sync_all_ui()
@@ -3817,6 +3829,9 @@ func play_card(sub: CardData.CardSubType):
 			card.source_seat = p.seat_index
 			p.judgment_cards.append(card)
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			_complete_card_actions([action])
 			_public_result("%s 对自己使用了【闪电】，已置入判定区（下回合判定）" % p.player_name)
 			_sync_all_ui()
@@ -3878,8 +3893,8 @@ func play_card(sub: CardData.CardSubType):
 					if ok != 1:
 						_update_debug("替换武器确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换武器，手牌未消耗")
 						return
-				if not _replace_play_equipment_if_current(p, "weapon", sub, old_weapon, old_weapon_card, weapon_context):
-					_update_debug("武器替换已失效或所选牌不在手中，未替换")
+				if not await _replace_play_equipment_if_current(p, "weapon", sub, old_weapon, old_weapon_card, weapon_context):
+					_update_debug("武器替换或后续处理已失效")
 					return
 				_update_debug("%s 弃置了原武器【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_weapon), CardData.get_type_name(sub)])
 				_sync_all_ui()
@@ -3897,6 +3912,9 @@ func play_card(sub: CardData.CardSubType):
 				return
 			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			_complete_card_actions([action])
 			_public_result("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -3931,8 +3949,8 @@ func play_card(sub: CardData.CardSubType):
 					if ok != 1:
 						_update_debug("替换防具确认已失效，手牌未消耗" if ok == CHOICE_INVALID else "取消替换防具，手牌未消耗")
 						return
-				if not _replace_play_equipment_if_current(p, "armor", sub, old_armor, old_armor_card, armor_context):
-					_update_debug("防具替换已失效或所选牌不在手中，未替换")
+				if not await _replace_play_equipment_if_current(p, "armor", sub, old_armor, old_armor_card, armor_context):
+					_update_debug("防具替换或后续处理已失效")
 					return
 				_update_debug("%s 弃置了原防具【%s】，装备了【%s】" % [p.player_name, CardData.get_type_name(old_armor), CardData.get_type_name(sub)])
 				_sync_all_ui()
@@ -3950,6 +3968,9 @@ func play_card(sub: CardData.CardSubType):
 				return
 			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
 			_claim_equipment_name(sub, equipped_card)
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			_complete_card_actions([action])
 			_public_result("%s 装备了【%s】" % [p.player_name, CardData.get_type_name(sub)])
 			_sync_all_ui()
@@ -3971,6 +3992,9 @@ func play_card(sub: CardData.CardSubType):
 					_restore_equipment_payment(receipt, equipped_card)
 					return
 				var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
+				if await _await_hand_awakening(p) == CHOICE_INVALID:
+					_abandon_card_actions([action])
+					return
 				_complete_card_actions([action])
 				_public_result("%s 装备了【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 					p.player_name, CardData.get_type_name(sub), p.mount_plus, p.mount_minus, p.mount_count()
@@ -4037,6 +4061,9 @@ func play_card(sub: CardData.CardSubType):
 			if result.replaced_card != null:
 				deck.discard(result.replaced_card)
 			var action = _record_card_action(p, equipped_card, CardActionEvent.Kind.USE, true, false)
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				_abandon_card_actions([action])
+				return
 			_complete_card_actions([action])
 			_update_debug("%s 用【%s】顶掉了%s的【%s】（坐骑 +%d 匹 -%d 匹，共 %d/4）" % [
 				p.player_name, CardData.get_type_name(sub), Player.EQUIP_SLOT_NAMES[target_slot],
