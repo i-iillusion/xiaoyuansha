@@ -4193,6 +4193,11 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 		return BasicResponseOutcome.DECLINED
 	deck.discard(used_card)
 	var action = _record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE, true, false)
+	# Q12: a committed last-card response must finish awakening before Bagua.
+	if await _await_hand_awakening(p) == CHOICE_INVALID or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+		_abandon_card_actions([action])
+		return BasicResponseOutcome.INVALIDATED
 	if expected == CardData.CardSubType.STRIKE:
 		if await _record_strike_played(p) == CHOICE_INVALID or _game_over \
 				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
@@ -8725,6 +8730,33 @@ func _check_awaken_trigger():
 		_check_player_awaken(p)
 
 var _awaken_in_progress: Dictionary = {}
+
+# Resolve mandatory awakening caused by a committed hand payment before its
+# response/equipment parent advances. UI/deferred checks are only a fallback.
+func _await_hand_awakening(p: Player) -> int:
+	if not is_instance_valid(p) or p.general_name != "史蒂芬·彼特先斯": return 0
+	if _game_over or not _has_character_body(p) or not p.is_alive(): return CHOICE_INVALID
+	if not p.awoken:
+		if p.hand_size() > 0: return 0
+		p.awoken = true
+	elif p.awake_choice != 0:
+		return 0
+	var generation = p.awakening_revision
+	var lifecycle = _dying_lifecycle_generation
+	var context = turn_manager.get_context_revision()
+	var valid = func(): return not _game_over and lifecycle == _dying_lifecycle_generation \
+		and context == turn_manager.get_context_revision() and is_instance_valid(p) \
+		and _has_character_body(p) and p.is_alive() and p.general_name == "史蒂芬·彼特先斯" \
+		and generation == p.awakening_revision
+	if await _do_awaken(p, generation, lifecycle) == CHOICE_INVALID: return CHOICE_INVALID
+	# Public legacy callers of _do_awaken may return immediately for an active
+	# lease. A paid response must still join that lease, with either gate value.
+	var lease = {"revision": generation, "lifecycle": lifecycle}
+	while _awaken_in_progress.get(p, {}) == lease:
+		if not valid.call(): return CHOICE_INVALID
+		await get_tree().process_frame
+	return 0 if valid.call() and p.awake_choice in [1, 2, 3] else CHOICE_INVALID
+
 
 func _check_player_awaken(p: Player):
 	if _game_over or not _has_character_body(p) or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯":

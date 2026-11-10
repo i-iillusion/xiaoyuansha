@@ -40,6 +40,13 @@ func setup_skill(game, kind):
 	game._paixiong_override = func(): return false
 	source.general_name = "史蒂芬·彼特先斯" if kind == "zhuangbi" else "杰基·斯特朗" if kind == "campus" else "克里斯·西弗"
 	source.awoken = kind == "zhuangbi"
+	if kind == "zhuangbi":
+		# Already-awakened Stephen: real base 3, then max-1 and a completed
+		# immunity choice. Do not leave a half-entered human awakening pending.
+		source.awoken = false
+		source.max_hp = 3; source.hp = 3; source.capture_game_start_state()
+		source.max_hp = 2; source.hp = 2; source.awoken = true
+		source.awaken_effects_applied = true; source.awake_choice = 3
 	source.hand.assign([null, null] if kind != "medicine" else [])
 	game.players[2].hand.append(null)
 	game._zhuangbi_again_override = func(): return false
@@ -69,7 +76,7 @@ func zhuangbi(t, accept, concrete):
 	await execute(game, "zhuangbi")
 	t.check(asks == [owner] and source.hand_size() == 1 and other.hand_size() == 0, "I05 Q17 source fee stays paid and other target pays")
 	t.check(owner.hand_size() == (1 if accept else 0) and punches.has(owner) == not accept, "I05 Q17 only David exits fee and RPS on confirmed Wrestle")
-	t.check(other.hp == 3 and owner.hp == (3 if accept else 2) and source.hp == (3 if accept else 4), "I05 Q17 remaining opponent can succeed, counter hurts real source only")
+	t.check(other.hp == 3 and owner.hp == (3 if accept else 2) and source.hp == (1 if accept else 2), "I05 Q17 remaining opponent can succeed, counter hurts real awakened Stephen source only")
 	if concrete: t.check(game.deck._discard.count(original) == (0 if accept else 1), "I05 Q17 exact determined original preserved or discarded once")
 	t.check(owner.wrestle_round == (game.turn_manager.rounds.round_id if accept else -1) and game._zhuangbi_execution_owner == -1 and game._card_loss_pending.is_empty(), "I05 Q17 quota and original execution released")
 	await Farming.new().dispose(t, game)
@@ -210,7 +217,7 @@ func counter_resources(t):
 	game._duel_respond_override = func(): return true
 	await execute(game, "zhuangbi")
 	t.check(owner.hand_size() == 0 and game.deck._discard.count(original) == 1 and source.hand_size() == 0, "I05 Q17 protected original may be legitimately used as counter Duel response; never restored or discarded twice")
-	t.check(game.players[2].hp == 3 and source.hp == 3 and owner.wrestle_round == game.turn_manager.rounds.round_id, "I05 Q17 changed counter resources do not revoke committed prevention or remaining opponent")
+	t.check(game.players[2].hp == 3 and source.hp == 1 and source.max_hp == 2 and source.awake_choice == 3 and owner.wrestle_round == game.turn_manager.rounds.round_id, "I05 Q17 changed counter resources do not revoke committed prevention or remaining opponent; completed awakening does not repeat")
 	await Farming.new().dispose(t, game)
 
 	game = fixture(t); setup_skill(game, "medicine")
