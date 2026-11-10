@@ -4193,7 +4193,10 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 			_abandon_card_actions([action])
 			return BasicResponseOutcome.INVALIDATED
 	if expected == CardData.CardSubType.DODGE:
-		_try_bagua_draw(p)
+		if await _try_bagua_draw(p) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions([action])
+			return BasicResponseOutcome.INVALIDATED
 	_complete_card_actions([action])
 	_sync_all_ui()
 	return BasicResponseOutcome.PAID
@@ -7032,14 +7035,19 @@ func _record_strike_played(p: Player) -> int:
 	return 0
 
 # 【八卦阵】：你每使用或打出一张【闪】时，摸一张牌（锁定技；装备者判定）
-func _try_bagua_draw(p: Player):
+func _try_bagua_draw(p: Player) -> int:
 	if p == null or not p.is_alive():
-		return
+		return 0
 	if p.get_armor() != CardData.CardSubType.BAGUA_ZHEN:
-		return
-	_draw_blank_cards(p, 1)
+		return 0
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var batch = _draw_blank_cards(p, 1)
 	_public_result("%s 发动【八卦阵】：使用【闪】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
+	if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CHOICE_INVALID
 	_sync_all_ui()
+	return 0
 
 # C-L1：只在成为拆/顺目标时失去1体力，令该次牌对自己无效。
 # 返回true即本次牌已被防止；求救结果不恢复已被防止的牌效果。
@@ -7548,9 +7556,10 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 		return 0
 	if not kaiwen.is_alive() or not opponent.is_alive():
 		return 0
+	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and revision == turn_manager.get_context_revision() \
+		return not _game_over and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
 			and players.has(kaiwen) and _has_character_body(opponent) \
 			and kaiwen.is_alive() and opponent.is_alive() and kaiwen.general_name == "凯文·罗本"
 	for i in amount:
@@ -7572,7 +7581,8 @@ func _try_kaiwen_ping(victim: Player, source: Player, amount: int, is_receive: b
 		if r == RPS_INVALID or not valid.call():
 			return CHOICE_INVALID
 		if r == RPS_WIN:
-			_draw_blank_cards(kaiwen, 2)
+			var batch = _draw_blank_cards(kaiwen, 2)
+			if await _resolve_corruption_batch(batch) == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	_sync_all_ui()
 	return 0
 
