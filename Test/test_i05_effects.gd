@@ -21,5 +21,6 @@ func run():
 	await load("res://Test/i05_extra_draw_batch_cases.gd").new().run(self)
 	await load("res://Test/i05_deferred_draw_resource_cases.gd").new().run(self)
 	await load("res://Test/i05_sunny_corruption_sage_cases.gd").new().run(self)
+	await load("res://Test/i05_sunny_corruption_card_draw_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)

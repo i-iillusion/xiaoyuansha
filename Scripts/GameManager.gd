@@ -4386,8 +4386,12 @@ func _resolve_paid_harvest(p: Player, actions: Array[CardActionEvent], revision:
 			continue
 
 		var draw_count = mini(lost, 3)
-		_draw_blank_cards(target, draw_count)
+		var batch = _draw_blank_cards(target, draw_count)
 		_update_debug("%s 已损失 %d 点体力，摸 %d 张牌（手牌 %d 张）" % [target.player_name, lost, draw_count, target.hand_size()])
+		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions(actions)
+			return
 
 	_complete_card_actions(actions)
 	_sync_all_ui()
@@ -4473,7 +4477,11 @@ func _resolve_paid_disarm(p: Player, actions: Array[CardActionEvent], revision: 
 				deck.discard(removed_card)
 				removed_count += 1
 		if removed_count > 0:
-			_draw_blank_cards(target, removed_count)
+			var batch = _draw_blank_cards(target, removed_count)
+			if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+					or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+				_abandon_card_actions(actions)
+				return
 		_update_debug("%s 弃置 %d 件装备，摸 %d 张牌（手牌 %d 张）" % [target.player_name, removed_count, removed_count, target.hand_size()])
 
 	_complete_card_actions(actions)
@@ -5885,19 +5893,24 @@ func _ask_chixiong_activate(target_name: String, allowed: Callable = Callable())
 func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable(), invalid_out: Array = []) -> bool:
 	if _game_over or p == null or target == null or not p.is_alive() or not target.is_alive():
 		return false
+	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var valid = func():
-		return not _game_over and _has_character_body(p) and _has_character_body(target) and p.is_alive() and target.is_alive() \
+		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(p) and _has_character_body(target) and p.is_alive() and target.is_alive() \
 			and turn_manager.get_context_revision() == revision and (not allowed.is_valid() or allowed.call())
 	if not valid.call():
 		return false
 	_public_result("%s 发动【雌雄双股剑】，令 %s 选择：弃置一张手牌 / 令 %s 摸一张牌" % [p.player_name, target.player_name, p.player_name])
 
 	if target.hand_size() <= 0:
-		_draw_blank_cards(p, 1)
+		var batch = _draw_blank_cards(p, 1)
 		_update_debug("%s 没有手牌，只能选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
+		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			invalid_out.append(true)
+			return false
 		_sync_all_ui()
-		return valid.call()
+		return true # Draw committed; a nested reaction may remove the original sword.
 
 	var choice = 0
 	if _chixiong_target_override.is_valid():
@@ -5932,8 +5945,14 @@ func _resolve_chixiong(p: Player, target: Player, allowed: Callable = Callable()
 			if outcome == HandDiscardOutcome.INSUFFICIENT_CARDS:
 				break # 沿用已选弃牌期间手牌耗尽的处理，不改成摸牌分支。
 	else:
-		_draw_blank_cards(p, 1)
+		var batch = _draw_blank_cards(p, 1)
 		_update_debug("%s 选择令 %s 摸一张牌（手牌 %d 张）" % [target.player_name, p.player_name, p.hand_size()])
+		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			invalid_out.append(true)
+			return false
+		_sync_all_ui()
+		return true # Do not undo an already resolved draw using the pre-trigger weapon check.
 	_sync_all_ui()
 	return valid.call()
 
