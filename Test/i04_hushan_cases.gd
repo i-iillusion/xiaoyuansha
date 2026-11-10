@@ -84,7 +84,7 @@ func run(t):
 			if fault == "phase": manager.turn_manager.current_phase = TurnManager.Phase.DRAW
 			if fault == "reset": manager.reset_game_over_state()
 			if fault == "target": target.hp = 0; target.mark_dead(); manager._retire_final_unit(target)
-			if fault == "restore": manager._do_sage_save(snapshot.owner) # technical fault injection only
+			if fault == "restore": await manager._do_sage_save(snapshot.owner) # technical fault injection only
 			if fault == "reentry": nested.append(await manager._activate_hushan(snapshot.owner))
 			return snapshot.defaults(count)
 		var result = await game._activate_hushan(owner)

@@ -62,7 +62,7 @@ func run(host):
 	var stale_answer = game._choice_prompt_stack[0].answer
 	var old_revision = p.awakening_revision
 	p.hp = 0
-	game._do_sage_save(p)
+	await game._do_sage_save(p)
 	await frames()
 	suite.check(not p.awoken and not p.awaken_effects_applied and p.awake_choice == 0
 		and p.max_hp == 3 and p.hand_size() == 4 and p.awakening_revision > old_revision

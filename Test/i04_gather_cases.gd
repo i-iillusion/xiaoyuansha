@@ -89,7 +89,7 @@ func run(t):
 			if fault == "phase": manager.turn_manager.current_phase = TurnManager.Phase.DRAW
 			if fault == "space": manager.turn_manager.rounds.relocate_before(3,1)
 			if fault == "reset": manager.reset_game_over_state()
-			if fault == "restore": manager._do_sage_save(snapshot.owner) # technical invalidation only
+			if fault == "restore": await manager._do_sage_save(snapshot.owner) # technical invalidation only
 			return snapshot.defaults(count)
 		var result = await game._activate_jushan(owner)
 		t.check(result == (0 if fault in ["cancel","fee"] else (1 if fault == "reentry" else game.CHOICE_INVALID)) and game._jim_mountain_skill_pending.is_empty(), "I04 Gather distinguishes cancellation, invalidation and reentry: "+fault)

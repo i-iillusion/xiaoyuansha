@@ -60,7 +60,7 @@ func run(suite):
 			game.turn_manager.duel_count_this_turn = 2
 			game.turn_manager.granted_play_target_idx = 1
 			var discarded_before = game.deck.discard_count()
-			game._do_sage_save(actor)
+			await game._do_sage_save(actor)
 			var expected_hp = GeneralData.get_max_hp(general) + (0 if initially_lord else 1)
 			suite.check(actor.max_hp == expected_hp and actor.hp == expected_hp
 				and actor.is_alive(), "E01b：贤者恢复基础上限并保留当前身份加成：" + general)

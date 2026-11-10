@@ -80,7 +80,7 @@ func run(t):
 			if fault == "phase": manager.turn_manager.current_phase = TurnManager.Phase.DRAW
 			if fault == "space": manager.turn_manager.rounds.relocate_before(3,1)
 			if fault == "reset": manager.reset_game_over_state()
-			if fault == "restore": manager._do_sage_save(snapshot.owner) # invalidation injection only
+			if fault == "restore": await manager._do_sage_save(snapshot.owner) # invalidation injection only
 			return snapshot.defaults(count)
 		var result = await game._activate_yishan(owner)
 		var cancel = fault in ["cancel_target","cancel_gap","decline_fee"]

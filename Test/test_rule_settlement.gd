@@ -661,7 +661,7 @@ func _run():
 	c.sage_activated = true
 	c.determined_cards.append(CardBase.create(CardData.CardSubType.STRIKE))
 	c.judgment_cards.append(CardBase.create(CardData.CardSubType.LIGHTNING))
-	game._do_sage_save(c)
+	await game._do_sage_save(c)
 	check(c.hp == 3 and c.max_hp == 3 and c.is_alive(), "贤者恢复开局体力上限与满体力")
 	check(not c.awoken and c.awake_choice == 0 and not c.kneel_used, "贤者恢复觉醒、选项和限定技状态")
 	check(not c.facedown and not c.chained and not c.sage_activated, "贤者清除翻面、连环和装备状态")
@@ -672,7 +672,7 @@ func _run():
 	b.shensu_penalty = 3
 	b.shensu_used_this_turn = true
 	b.hp = 0
-	game._do_sage_save(b)
+	await game._do_sage_save(b)
 	check(b.shensu_penalty == 0 and not b.shensu_used_this_turn, "贤者同样恢复上游新增武将的神速状态")
 
 	reset_players()

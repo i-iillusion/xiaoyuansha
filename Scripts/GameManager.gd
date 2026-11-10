@@ -31,8 +31,10 @@ signal unit_removed(id: String, reason: int)
 signal unit_death_committed(id: String)
 var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
-# I05c-4a receipt capture only; Corruption activation is not implemented here.
+# Receipt capture stays synchronous; explicitly migrated parents await reactions.
 var _extra_draw_receipts_enabled := false
+var _corruption_rules_enabled := false # Private until all Sunny gates pass.
+var _corruption_choice_override: Callable = Callable()
 var _draw_batch_serial := 0
 var _draw_batches: Array[ExtraDrawBatch] = []
 # Server-owned capabilities; callers cannot enable them through a client option.
@@ -2158,7 +2160,7 @@ func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = 
 	for i in count:
 		p.append_hand_card_silent(null)
 	var receipt: ExtraDrawBatch
-	if _extra_draw_receipts_enabled and count>0:
+	if (_extra_draw_receipts_enabled or _corruption_rules_enabled) and count>0:
 		_draw_batch_serial+=1
 		var lifecycle=_dying_lifecycle_generation
 		var game_ref=weakref(self)
@@ -2169,6 +2171,79 @@ func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = 
 		_draw_batches.append(receipt)
 	if count > 0: _history_event("draw", "%s 摸%d张牌" % [p.player_name, count], p, [], {"count": count})
 	return receipt
+
+# Q10 supersedes the deferred Sage plan: complete this reaction before the
+# dying/rule parent continues. Other draw parents are migrated separately.
+func _resolve_corruption_batch(batch: ExtraDrawBatch) -> int:
+	if not _corruption_rules_enabled or batch==null or not batch.is_extra() or batch.reaction_started or not batch.valid(): return 0
+	batch.reaction_started=true
+	var actor: Player
+	for p in players:
+		if p.general_name=="桑尼·斯派" and p.is_alive() and not _is_kneeling(p) and _paid_skill_target_allowed(p,batch.owner):
+			actor=p
+			break # Non-placeholder generals cannot be duplicated.
+	if actor==null: return 0
+	var generation=_dying_lifecycle_generation
+	var revision=turn_manager.get_context_revision()
+	var general_revision=actor.awakening_revision
+	var registry=unit_registry.generation()
+	var space=terrain_markers()
+	var valid=func(): return _corruption_rules_enabled and not _game_over and generation==_dying_lifecycle_generation \
+		and revision==turn_manager.get_context_revision() and registry==unit_registry.generation() and space==terrain_markers() \
+		and actor.general_name=="桑尼·斯派" and actor.awakening_revision==general_revision and actor.is_alive() \
+		and not _is_kneeling(actor) and _paid_skill_target_allowed(actor,batch.owner) and batch.valid()
+	var input_before=_input_seat
+	var result=await _run_corruption_batch(actor,batch,valid)
+	if generation==_dying_lifecycle_generation and revision==turn_manager.get_context_revision(): _input_seat=input_before
+	return result
+
+func _corruption_choice(actor: Player, batch: ExtraDrawBatch, stage: String, valid: Callable) -> int:
+	if _corruption_choice_override.is_valid(): return await _corruption_choice_override.call(actor,batch,stage,valid)
+	if not _is_human(actor): return -1 if stage=="activate" else 0 # Strategy only; full AI is I05c-5.
+	_set_input_player(actor)
+	if stage=="activate":
+		return await _show_choice_popup("是否对%s本次额外摸的牌发动【贪污】？"%batch.owner.player_name,["发动"],valid)
+	return await _show_choice_popup("【贪污】拼点平局",["获得其中1张牌","继续拼点"],valid,false)
+
+func _run_corruption_batch(actor: Player, batch: ExtraDrawBatch, valid: Callable) -> int:
+	var choice=await _corruption_choice(actor,batch,"activate",valid)
+	if not valid.call() or choice not in [-1,0]: return CHOICE_INVALID
+	if choice==-1: return 0 # Q8: no activation on ordinary cancel/timeout.
+	_history_event("skill","%s 发动【贪污】"%actor.player_name,actor,[batch.owner])
+	while valid.call():
+		var result=await _do_ping_dian_once(actor,batch.owner,valid)
+		if result==RPS_INVALID or not valid.call(): return CHOICE_INVALID
+		if result==RPS_LOSE:
+			_flip_character(actor)
+			return 1
+		if result==RPS_WIN: return await _take_corruption_cards(actor,batch,batch.remaining_count(),valid)
+		choice=await _corruption_choice(actor,batch,"tie",valid)
+		if not valid.call() or choice not in [-1,0,1]: return CHOICE_INVALID
+		if choice!=1: return await _take_corruption_cards(actor,batch,1,valid) # Q6 timeout: take one.
+	return CHOICE_INVALID
+
+func _take_corruption_cards(actor: Player, batch: ExtraDrawBatch, amount: int, valid: Callable) -> int:
+	var target=batch.owner
+	var generation=_dying_lifecycle_generation
+	var revision=turn_manager.get_context_revision()
+	var boundary=await _before_external_card_loss(actor,"corruption",batch.loss_atoms(amount),valid)
+	if boundary==CardLossTransaction.Outcome.PREVENTED:
+		batch.close() # Prevention committed before its Duel; do not re-test the old hand.
+		return 1
+	if boundary==CardLossTransaction.Outcome.INVALIDATED or not valid.call(): return CHOICE_INVALID
+	var cards=batch.take(amount)
+	if cards.size()!=amount: return CHOICE_INVALID
+	for card in cards: actor.append_hand_card_silent(card)
+	_history_event("transfer","%s 通过【贪污】获得 %s 的%d张牌"%[actor.player_name,target.player_name,amount],actor,[target],{"count":amount})
+	# Finish any forced awakening after the atomic move, before notifying parents.
+	if target.general_name=="史蒂芬·彼特先斯" and target.hand_size()==0 and not target.awoken:
+		target.awoken=true
+		await _do_awaken(target)
+	if _game_over or generation!=_dying_lifecycle_generation or revision!=turn_manager.get_context_revision(): return CHOICE_INVALID
+	target.hand_updated.emit()
+	actor.hand_updated.emit()
+	_sync_all_ui()
+	return 1
 
 # ============================
 #  可攻击目标查询
@@ -4910,7 +4985,7 @@ func _before_external_card_loss(source: Player, reason: String, losses: Array[Di
 	# Incomplete/private reaction must not alter existing legacy cleanup paths,
 	# including a hidden placeholder that has no physical card to protect.
 	if not _david_rules_enabled or (not _card_loss_reaction_override.is_valid() and not _wrestling_rules_enabled) or losses.is_empty() \
-			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm", "borrowed_weapon", "chixiong", "gou_lian", "zhuangbi", "campus", "medicine"]:
+			or reason not in ["dismantle", "snatch", "ice_sword", "equipment_swap", "disarm", "borrowed_weapon", "chixiong", "gou_lian", "zhuangbi", "campus", "medicine", "corruption"]:
 		return CardLossTransaction.Outcome.ALLOW
 	var tx = CardLossTransaction.new(source, reason, losses)
 	var revision = turn_manager.get_context_revision()
@@ -11903,7 +11978,7 @@ func _check_dying(dying: Player) -> int:
 		var use_save = await _ask_sage_save(dying)
 		if use_save == CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 		if use_save == 1:
-			_do_sage_save(dying)
+			if await _do_sage_save(dying)==CHOICE_INVALID or not valid.call(): return CHOICE_INVALID
 	# 普通嵌套救援中，先前的死亡可能因仍有濒死者而未判胜。
 	# 救回后同样需要重查；未救回则由调用者确认死亡后重查。
 	if dying.is_alive():
@@ -12426,9 +12501,10 @@ func _do_sage_save(p: Player):
 	p.mount_minus = 0
 	p.hidden_equip_slot = ""
 	# 一次恢复完再发牌，避免中间的零手牌状态重触发觉醒。
-	_draw_blank_cards(p, 4)
+	var batch=_draw_blank_cards(p, 4)
 	_public_result("%s 发动【贤者的加护】：弃置所有牌，复原武将牌，摸四张牌！（%d/%d，手牌 %d 张）" % [p.player_name, p.hp, p.max_hp, p.hand_size()])
 	_sync_all_ui()
+	return await _resolve_corruption_batch(batch)
 
 # The declaration size is not the number still affected/alive. Q4 excludes
 # Borrowed Sword itself, but its later Fangtian Strike has its own audience.

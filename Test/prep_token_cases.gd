@@ -99,7 +99,7 @@ func run(suite):
 	actor.prep_tokens = 0
 	actor.capture_game_start_state()
 	actor.prep_tokens = 4
-	game._do_sage_save(actor)
+	await game._do_sage_save(actor)
 	suite.check(actor.prep_tokens == 0 and actor.hand == [null, null, null, null]
 		and game._self_info_panel.get_meta("prep_indicator").text == "预习:0",
 		"F01b：真实贤者复原恢复武将开局标记并同步显示，不计摸牌为用牌")

@@ -1,5 +1,5 @@
 # I05c-4a: one physical draw receipt, not skill authorization or scheduling.
-# The caller decides whether/when Corruption may act, including Q9 priority.
+# The caller decides whether/when Corruption may act under adopted rulings.
 # Player-owned hand mutations retain per-position ids across legal intervening
 # payments/appends. Unknown direct mutations invalidate the tracking epoch.
 class_name ExtraDrawBatch
@@ -13,6 +13,7 @@ var count: int
 var during_yudaxi: bool
 var lifecycle: int
 var closed := false
+var reaction_started := false
 var _card_ids: Array[int] = []
 var _tracking_epoch: int
 var _general_revision: int

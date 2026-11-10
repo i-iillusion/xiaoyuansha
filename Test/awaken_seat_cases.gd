@@ -30,7 +30,7 @@ func run(suite):
 			p.hand_updated.emit()
 			suite.check(p.max_hp == 2 and p.hand_size() == 2, "E01c：重复同步和信号不重复觉醒")
 			p.hp = 0
-			game._do_sage_save(p)
+			await game._do_sage_save(p)
 			suite.check(not p.awoken and p.awake_choice == 0 and p.max_hp == 3
 				and p.hand_size() == 4, "E01c：贤者恢复后不因中途空手误觉醒")
 			game._ai_response_override = func(_view, kind, _options): return 3 if kind == "awaken" else -1
