@@ -3216,6 +3216,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 	if _game_over: return
 	var p = _play_actor()
 	var action_revision = turn_manager.get_context_revision()
+	var action_generation = _dying_lifecycle_generation
 	if sub in TARGET_TRICKS and (not can_declare_trick(p, sub, _yes_ah_active) or not get_trick_targets(p, sub).has(target)):
 		return
 	# 选完目标开始执行：玩家0出牌阶段重置每步倒计时
@@ -3237,7 +3238,10 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			# 已在计数、酒和青龙效果前支付物理手牌，保留原实例。
 			deck.discard(card)
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, [target])
-			_record_strike_played(p)
+			if await _record_strike_played(p) == CHOICE_INVALID or _game_over \
+					or action_revision != turn_manager.get_context_revision() or action_generation != _dying_lifecycle_generation:
+				_abandon_card_actions([action])
+				return
 			_sync_all_ui()
 
 			var element = EffectChain.DamageType.PHYSICAL
@@ -3469,6 +3473,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	if _game_over: return
 	var action_revision = turn_manager.get_context_revision()
+	var action_generation = _dying_lifecycle_generation
 	if targets.is_empty():
 		return
 	# 方天画戟多目标：选完目标确认出牌后重置每步倒计时
@@ -3487,7 +3492,10 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	base_damage += _rage_bonus(p)
 	deck.discard(card)
 	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, true, false, targets)
-	_record_strike_played(p)
+	if await _record_strike_played(p) == CHOICE_INVALID or _game_over \
+			or action_revision != turn_manager.get_context_revision() or action_generation != _dying_lifecycle_generation:
+		_abandon_card_actions([action])
+		return
 	_sync_all_ui()
 
 	var element = EffectChain.DamageType.PHYSICAL
@@ -4180,7 +4188,10 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 	deck.discard(used_card)
 	var action = _record_card_action(p, used_card, CardActionEvent.Kind.RESPONSE, true, false)
 	if expected == CardData.CardSubType.STRIKE:
-		_record_strike_played(p)
+		if await _record_strike_played(p) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			_abandon_card_actions([action])
+			return BasicResponseOutcome.INVALIDATED
 	if expected == CardData.CardSubType.DODGE:
 		_try_bagua_draw(p)
 	_complete_card_actions([action])
@@ -4789,7 +4800,10 @@ func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, al
 	deck.discard(card)
 	var strike_action = _record_card_action(first, card, CardActionEvent.Kind.USE, true, false, seen)
 	var damage = 1 + first.consume_wine_bonus() + _rage_bonus(first)
-	_record_strike_played(first)
+	if await _record_strike_played(first) == CHOICE_INVALID or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+		_abandon_card_actions([strike_action])
+		return CHOICE_INVALID
 	var element = EffectChain.DamageType.PHYSICAL
 	if strike_sub == CardData.CardSubType.FIRE_STRIKE: element = EffectChain.DamageType.FIRE
 	elif strike_sub == CardData.CardSubType.THUNDER_STRIKE: element = EffectChain.DamageType.THUNDER
@@ -7006,11 +7020,16 @@ signal _minus_mule_target_result(target: Player)
 signal _plus_mule_target_result(target: Player)
 
 # 在一次杀使用/打出已经成立后登记；多目标只调用一次，效果链不重复登记。
-func _record_strike_played(p: Player):
+func _record_strike_played(p: Player) -> int:
 	var first := turn_manager.record_strike_played(ActorIdentity.key_for(players, unit_registry, p))
 	if first and p.is_alive() and p.get_weapon() == CardData.CardSubType.QINGLONG_BLADE:
-		_draw_blank_cards(p, 1)
+		var generation = _dying_lifecycle_generation
+		var revision = turn_manager.get_context_revision()
+		var batch = _draw_blank_cards(p, 1)
 		_public_result("%s 发动【青龙偃月刀】：本回合首次使用或打出【杀】，摸一张牌（手牌 %d 张）" % [p.player_name, p.hand_size()])
+		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or _game_over \
+				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CHOICE_INVALID
+	return 0
 
 # 【八卦阵】：你每使用或打出一张【闪】时，摸一张牌（锁定技；装备者判定）
 func _try_bagua_draw(p: Player):
@@ -9717,12 +9736,15 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var action = _record_card_action(p, card, CardActionEvent.Kind.USE, false, true)
-	_record_strike_played(p)
 	var base_damage = 1
 	# 【酒】：视为杀吃酒加成并消耗酒层数
 	if p.wine_stacks > 0:
 		base_damage += p.consume_wine_bonus()
 		_update_debug("%s 的【酒】加成：神速杀伤害 +%d" % [p.player_name, base_damage - 1])
+	if await _record_strike_played(p) == CHOICE_INVALID or _game_over \
+			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+		_abandon_card_actions([action])
+		return
 	var result = await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
 	if (result is int and result == CHOICE_INVALID) or _game_over or revision != turn_manager.get_context_revision() \
 			or generation != _dying_lifecycle_generation:
