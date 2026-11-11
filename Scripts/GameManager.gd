@@ -4133,10 +4133,8 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 		if target.get_armor() == CardData.CardSubType.RENWANG_DUN:
 			_update_debug("%s 的【仁王盾】使【%s】对你无效！" % [target.player_name, card_name])
 			continue
-		# 【觉醒】选择3：不能成为【南蛮入侵】和【万箭齐发】的目标（目标层面免疫，跳过结算）
-		if _awake_blocks(target, 3):
-			_update_debug("%s 的【觉醒】：不能成为【%s】的目标！" % [target.player_name, card_name])
-			continue
+		# Q13: awakening was checked when the whole audience was declared.
+		# A later immunity choice cannot remove an already-declared target.
 
 		# 【下跪】：下跪状态不会成为任何效果的目标 → 跳过响应与伤害
 		if _is_kneeling(target):
@@ -4579,6 +4577,9 @@ func _prep_group_scope(p: Player, sub: int, roster: Array[Player] = []) -> Array
 	var declared = _prep_group_roster(p) if roster.is_empty() else roster
 	for target in declared:
 		if target == p and sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS]: continue
+		# Q13: pre-existing immunity forbids designation; later immunity does
+		# not mutate the retained audience while earlier targets resolve.
+		if sub in [CardData.CardSubType.BARBARIAN_INVASION, CardData.CardSubType.VOLLEY_OF_ARROWS] and _awake_blocks(target, 3): continue
 		var id = unit_registry.id_for(target)
 		if not id.is_empty() and not fire_dragon_state.stealth_allows_target(id, p): continue
 		scope.append(target)
@@ -6954,6 +6955,8 @@ func _ask_nullification_round_result(desc: String, allowed: Callable = Callable(
 				action_card = used_card
 				paid_response[0] = true
 			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			if await _await_hand_awakening(p) == CHOICE_INVALID or not responder_valid.call():
+				return {"outcome": NullificationOutcome.INVALIDATED, "actor_name": "", "card_action": action}
 			_update_debug("%s 打出了【无懈可击】" % p.player_name)
 			_sync_all_ui()
 			# 【苕】任意玩家行动后询问是否明置
@@ -11900,13 +11903,19 @@ func _maybe_sacrifice_result(_source: Player, target: Player, amount: int, _elem
 				deck.discard(used_card)
 				action_card = used_card
 				paid_response[0] = true
-			_sync_all_ui()
 			if not responder_valid.call() or (not p.is_alive() and not (virtual_paid and p.is_dead())):
 				return {"invalidated": true, "player": null} # 已支付的费用不回滚。
 			var action = _record_card_action(p, action_card, CardActionEvent.Kind.USE, yes_ah != "skill", yes_ah == "skill")
+			# Commit the paid event before any UI fallback can start awakening.
+			if await _await_hand_awakening(p) == CHOICE_INVALID:
+				return {"invalidated": true, "player": null, "card_action": action}
+			_sync_all_ui()
 			if not responder_valid.call():
 				return {"invalidated": true, "player": null, "card_action": action}
+			_restore_input_owner()
 			return {"invalidated": false, "player": p, "card_action": action}
+	# Empty-hand humans skip without a prompt cleanup to restore input.
+	if valid.call(): _restore_input_owner()
 	return {"invalidated": false, "player": null}
 
 # 玩家0的【舍己为人】响应弹窗（锚点居中）：返回 "card"（打出，消耗手牌）/ "skill"（发动【是~啊~】打出，无手牌时）/ "skip"（放弃）
