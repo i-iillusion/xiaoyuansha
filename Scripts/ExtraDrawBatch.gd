@@ -15,6 +15,7 @@ var lifecycle: int
 var closed := false
 var reaction_started := false
 var corruption_exempt := false # Q11: only the originating Yudaxi success reward.
+var allow_dying_owner := false # Q16: explicit awakening reward only.
 var _card_ids: Array[int] = []
 var _tracking_epoch: int
 var _general_revision: int
@@ -40,7 +41,7 @@ func is_extra() -> bool:
 	return context==Context.EXTRA
 
 func valid() -> bool:
-	return _resource_current() and owner.is_alive() and not owner.unit_disappeared and remaining_count()>0
+	return _resource_current() and (owner.is_alive() or (allow_dying_owner and owner.is_dying())) and not owner.unit_disappeared and remaining_count()>0
 
 func _resource_current() -> bool:
 	return not closed and is_instance_valid(owner) and owner.awakening_revision==_general_revision \

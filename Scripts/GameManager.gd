@@ -2155,7 +2155,7 @@ func _on_turn_ended(pid: int):
 #  手牌管理
 # ============================
 
-func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA, corruption_exempt: bool = false) -> ExtraDrawBatch:
+func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = ExtraDrawBatch.Context.EXTRA, corruption_exempt: bool = false, allow_dying_owner: bool = false) -> ExtraDrawBatch:
 	var first=p.hand.size()
 	for i in count:
 		p.append_hand_card_silent(null)
@@ -2169,6 +2169,7 @@ func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = 
 			return is_instance_valid(game) and not game._game_over and game._dying_lifecycle_generation==lifecycle
 		receipt=ExtraDrawBatch.new(p,first,count,context,_draw_batch_serial,yudaxi.is_active(),lifecycle,current)
 		receipt.corruption_exempt=corruption_exempt
+		receipt.allow_dying_owner=allow_dying_owner
 		_draw_batches.append(receipt)
 	if count > 0: _history_event("draw", "%s 摸%d张牌" % [p.player_name, count], p, [], {"count": count})
 	return receipt
@@ -2180,12 +2181,21 @@ func _draw_yudaxi_reward(p: Player, count: int) -> ExtraDrawBatch:
 
 # Q10 supersedes the deferred Sage plan: complete this reaction before the
 # dying/rule parent continues. Other draw parents are migrated separately.
+# Q16 permits this awakening receipt while its owner is still DYING.
+# This is a response permission, not broader active-skill target eligibility.
+func _corruption_target_allowed(actor: Player, batch: ExtraDrawBatch) -> bool:
+	var target=batch.owner
+	return is_instance_valid(target) and target!=actor and _has_character_body(target) \
+		and (target.is_alive() or (batch.allow_dying_owner and target.is_dying())) \
+		and not _is_kneeling(target) and _can_target_body(actor,target) \
+		and _mountain_effect_reaches(_retained_effect_anchor(actor),target)
+
 func _resolve_corruption_batch(batch: ExtraDrawBatch) -> int:
 	if not _corruption_rules_enabled or batch==null or not batch.is_extra() or batch.corruption_exempt or batch.reaction_started or not batch.valid(): return 0
 	batch.reaction_started=true
 	var actor: Player
 	for p in players:
-		if p.general_name=="桑尼·斯派" and p.is_alive() and not _is_kneeling(p) and _paid_skill_target_allowed(p,batch.owner):
+		if p.general_name=="桑尼·斯派" and p.is_alive() and not _is_kneeling(p) and _corruption_target_allowed(p,batch):
 			actor=p
 			break # Non-placeholder generals cannot be duplicated.
 	if actor==null: return 0
@@ -2197,7 +2207,7 @@ func _resolve_corruption_batch(batch: ExtraDrawBatch) -> int:
 	var valid=func(): return _corruption_rules_enabled and not _game_over and generation==_dying_lifecycle_generation \
 		and revision==turn_manager.get_context_revision() and registry==unit_registry.generation() and space==terrain_markers() \
 		and actor.general_name=="桑尼·斯派" and actor.awakening_revision==general_revision and actor.is_alive() \
-		and not _is_kneeling(actor) and _paid_skill_target_allowed(actor,batch.owner) and batch.valid()
+		and not _is_kneeling(actor) and _corruption_target_allowed(actor,batch) and batch.valid()
 	var input_before=_input_seat
 	var result=await _run_corruption_batch(actor,batch,valid)
 	if generation==_dying_lifecycle_generation and revision==turn_manager.get_context_revision(): _input_seat=input_before
@@ -8771,7 +8781,7 @@ var _awaken_in_progress: Dictionary = {}
 # response/equipment parent advances. UI/deferred checks are only a fallback.
 func _await_hand_awakening(p: Player) -> int:
 	if not is_instance_valid(p) or p.general_name != "史蒂芬·彼特先斯": return 0
-	if _game_over or not _has_character_body(p) or not p.is_alive(): return CHOICE_INVALID
+	if _game_over or not _has_character_body(p) or p.is_dead(): return CHOICE_INVALID
 	if not p.awoken:
 		if p.hand_size() > 0: return 0
 		p.awoken = true
@@ -8782,7 +8792,7 @@ func _await_hand_awakening(p: Player) -> int:
 	var context = turn_manager.get_context_revision()
 	var valid = func(): return not _game_over and lifecycle == _dying_lifecycle_generation \
 		and context == turn_manager.get_context_revision() and is_instance_valid(p) \
-		and _has_character_body(p) and p.is_alive() and p.general_name == "史蒂芬·彼特先斯" \
+		and _has_character_body(p) and not p.is_dead() and p.general_name == "史蒂芬·彼特先斯" \
 		and generation == p.awakening_revision
 	if await _do_awaken(p, generation, lifecycle) == CHOICE_INVALID: return CHOICE_INVALID
 	# Public legacy callers of _do_awaken may return immediately for an active
@@ -8795,7 +8805,7 @@ func _await_hand_awakening(p: Player) -> int:
 
 
 func _check_player_awaken(p: Player):
-	if _game_over or not _has_character_body(p) or not p.is_alive() or p.general_name != "史蒂芬·彼特先斯":
+	if _game_over or not _has_character_body(p) or p.is_dead() or p.general_name != "史蒂芬·彼特先斯":
 		return
 	if p.awoken:
 		if p.awake_choice != 0 or not p.awaken_effects_applied:
@@ -8817,7 +8827,7 @@ func _on_hand_updated(p: Player):
 
 # 觉醒：失去一点体力上限 → 摸两张牌 → 三选一
 func _awaken_choice_pending(p: Player, revision: int) -> bool:
-	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
+	return not _game_over and is_instance_valid(p) and _has_character_body(p) and not p.is_dead() \
 		and p.general_name == "史蒂芬·彼特先斯" and p.awoken and p.awake_choice == 0 \
 		and p.awakening_revision == revision
 
@@ -8848,7 +8858,7 @@ func _do_awaken(p: Player, expected_revision: int = -1, expected_lifecycle: int 
 		p.max_hp -= 1
 		p.hp = mini(p.hp, p.max_hp)
 		_update_debug("%s 觉醒！失去 1 点体力上限（上限 %d，体力 %d/%d），摸两张牌" % [p.player_name, p.max_hp, p.hp, p.max_hp])
-		var batch = _draw_blank_cards(p, 2)
+		var batch = _draw_blank_cards(p, 2, ExtraDrawBatch.Context.EXTRA, false, true)
 		reaction = await _resolve_corruption_batch(batch)
 	if reaction != CHOICE_INVALID and lifecycle == _dying_lifecycle_generation and _awaken_choice_pending(p,generation):
 		await _resolve_awaken_choice(p, generation)
@@ -12936,6 +12946,11 @@ func _run_rescue_round(dying: Player) -> int:
 			var hp_before = dying.hp
 			if not _use_rescue_card(rescuer, dying, sub) or dying.hp <= hp_before:
 				break # 本人可连续出牌；拒绝/无牌/过期选择则轮到下一人。
+			# Q15/Q16: Peach has already healed; finish awakening/Corruption
+			# before the next Peach, responder or original dying parent.
+			if await _await_hand_awakening(rescuer) == CHOICE_INVALID or not valid.call():
+				_egg_rescue_turns.erase(dying)
+				return CHOICE_INVALID
 		_egg_rescue_turns.erase(dying)
 		if not dying.is_dying() or _game_over:
 			break

@@ -9,6 +9,7 @@ const SharedPayment=preload("res://Test/i05_sunny_shared_payment_cases.gd")
 const OtherUse=preload("res://Test/i05_sunny_other_use_payment_cases.gd")
 const OtherResponse=preload("res://Test/i05_sunny_other_response_payment_cases.gd")
 const TargetBinding=preload("res://Test/i05_awakening_target_binding_cases.gd")
+const RescueAwakening=preload("res://Test/i05_sunny_rescue_awakening_cases.gd")
 var checks:=0
 var failures:=0
 func _initialize(): run.call_deferred()
@@ -34,5 +35,6 @@ func run():
 	await OtherUse.new().run(self)
 	await OtherResponse.new().run(self)
 	await TargetBinding.new().run(self)
+	await RescueAwakening.new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)
