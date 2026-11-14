@@ -347,6 +347,7 @@ var ai_pacer = AiActionPacer.new()
 var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
 var _ai_terrain_snapshot: Array = []
+var _ai_sunny_context: Dictionary = {} # Server-only body epochs; never sent to chooser.
 var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
 var _prep_replace_override: Callable = Callable()
@@ -1816,6 +1817,9 @@ func _choose_ai_response(p: Player, kind: String, options: Array, context: Dicti
 	var view = _ai_observation(p)
 	view["response"] = context.duplicate(true)
 	var selected = await _ai_response_override.call(view, kind, options.duplicate()) if _ai_response_override.is_valid() else ResponsePolicy.choose(view, kind, options)
+	# Preserve technical failure for the new nested draw reaction; -1 alone
+	# means a voluntary decline. Existing response kinds keep their contract.
+	if selected==CHOICE_INVALID and kind in ["corruption_activate","corruption_tie"]: return CHOICE_INVALID
 	return selected if options.has(selected) else -1
 
 # 规则查询同时供普通出牌和AI使用；策略不会另造次数、距离或支付规则。
@@ -1904,6 +1908,60 @@ func _ai_farming_upgrade_eligible(p: Player) -> bool:
 		and p.general_name == "大卫·法米尔" and p.farm_empty_fields > 0 \
 		and p.farm_good_fields == 0 and p.hand_size() >= 2 and not _play_skill_execution_busy()
 
+func _ai_sunny_targets(p: Player, skill: String) -> Array[Player]:
+	var options: Array[Player] = []
+	if _play_skill_execution_busy(): return options
+	if skill == "spy":
+		if not _spy_eligible(p): return options
+		for target in players:
+			if _spy_target_valid(p,target): options.append(target)
+		if options.size()<2: return []
+		# Strategy sees no hidden identity categories: sample legal non-lords,
+		# including equal identities. Legality remains in the shared entry.
+		var first=options.pop_at(ai_driver.rng.randi_range(0,options.size()-1))
+		return [first,options[ai_driver.rng.randi_range(0,options.size()-1)]]
+	if skill != "paipian" or not _paipian_rules_enabled or not _can_use_play_skill(p) \
+			or p.general_name != "桑尼·斯派" or p.hand_size()<1: return options
+	for target in _character_targets(p):
+		if _paipian_target_valid(p,target): options.append(target)
+	options.sort_custom(func(a,b): return a.max_hp-a.hp > b.max_hp-b.hp)
+	if options.size()<2 or options[0].hp>=options[0].max_hp: return []
+	return [options[0],options[1]] # A full-health second recipient is legal.
+
+func _capture_ai_sunny_context(p: Player):
+	_ai_sunny_context={}
+	if p.general_name != "桑尼·斯派": return
+	var bodies: Dictionary = {}
+	for target in _character_targets(p):
+		bodies[TargetIdentity.key_for(players,unit_registry,target)]={"body":target,"revision":target.awakening_revision,"general":target.general_name}
+	# Spy may include its own non-lord actor.
+	bodies[TargetIdentity.key_for(players,unit_registry,p)]={"body":p,"revision":p.awakening_revision,"general":p.general_name}
+	_ai_sunny_context={"actor":p,"revision":p.awakening_revision,"lifecycle":_dying_lifecycle_generation,
+		"registry":unit_registry.generation(),"bodies":bodies}
+
+func _ai_sunny_action_current(p: Player, action: Dictionary) -> bool:
+	if not _ai_offered_actions.has(action) or _ai_sunny_context.is_empty() \
+			or _ai_sunny_context.actor!=p or p.general_name!="桑尼·斯派" \
+			or p.awakening_revision!=_ai_sunny_context.revision or _dying_lifecycle_generation!=_ai_sunny_context.lifecycle \
+			or unit_registry.generation()!=_ai_sunny_context.registry or _ai_terrain_snapshot!=terrain_markers() \
+			or not _can_use_play_skill(p) or _play_skill_execution_busy(): return false
+	var keys=action.get("targets",[])
+	if keys.size()!=2: return false
+	if typeof(keys[0])==typeof(keys[1]) and keys[0]==keys[1]: return false
+	for key in keys:
+		var target=TargetIdentity.resolve_live(players,unit_registry,key)
+		var saved=_ai_sunny_context.bodies.get(key,{})
+		if target==null or saved.is_empty() or saved.body!=target \
+				or saved.revision!=target.awakening_revision or saved.general!=target.general_name: return false
+		if action.skill=="spy":
+			if not _spy_eligible(p) or not _spy_target_valid(p,target): return false
+		elif action.skill=="paipian":
+			if not _paipian_rules_enabled or p.hand_size()<1 or not _paipian_target_valid(p,target): return false
+		else: return false
+	return action.skill=="spy" or keys.any(func(key):
+		var target=TargetIdentity.resolve_live(players,unit_registry,key)
+		return target.hp<target.max_hp)
+
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat: Variant = observation.actor
@@ -1914,9 +1972,16 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 	if p == null: return []
 	_ai_hand_snapshot = HandSelection.new(p)
 	_ai_terrain_snapshot = terrain_markers()
+	_capture_ai_sunny_context(p)
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
 	var choices: Array = []
+	if p.general_name=="桑尼·斯派":
+		for skill in ["paipian","spy"]:
+			var targets=_ai_sunny_targets(p,skill)
+			if targets.size()==2:
+				choices.append({"skill":skill,"sub":-1,"target":-1,"priority":95 if skill=="paipian" else 90,
+					"targets":targets.map(func(target): return TargetIdentity.key_for(players,unit_registry,target))})
 	if _ai_farming_upgrade_eligible(p):
 		choices.append({"skill": "farming_upgrade", "sub": -1, "target": -1, "priority": 90})
 	for sub in [CardData.CardSubType.PEACH, CardData.CardSubType.WINE,
@@ -1997,6 +2062,13 @@ func _execute_ai_action(action: Dictionary):
 	if action.get("skill", "") == "farming_upgrade":
 		if _ai_farming_upgrade_eligible(p): await _activate_farming_upgrade(p)
 		return
+	if action.get("skill", "") in ["paipian","spy"]:
+		if not _ai_sunny_action_current(p,action): return
+		var recipients: Array[Player] = []
+		for key in action.targets: recipients.append(TargetIdentity.resolve_live(players,unit_registry,key))
+		if action.skill=="paipian": await _execute_paipian(p,recipients)
+		else: _execute_spy(p,recipients)
+		return
 	var sub = int(action.sub)
 	if typeof(action.target) == TYPE_STRING or action.target >= 0:
 		var target = TargetIdentity.resolve_live(players, unit_registry, action.target)
@@ -2016,6 +2088,7 @@ func _execute_ai_action(action: Dictionary):
 func _run_ai_play(actor: Player):
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
+	var sunny_revision = actor.awakening_revision if actor.general_name=="桑尼·斯派" else -1
 	if _ai_running_revisions.get(revision, -1) == generation:
 		return
 	_ai_running_revisions[revision] = generation
@@ -2024,6 +2097,7 @@ func _run_ai_play(actor: Player):
 			and generation == _dying_lifecycle_generation and is_instance_valid(actor) and _has_character_body(actor) \
 			and actor.is_alive() and turn_manager.current_phase == TurnManager.Phase.PLAY \
 			and _play_actor() == actor \
+			and (sunny_revision<0 or (actor.general_name=="桑尼·斯派" and actor.awakening_revision==sunny_revision)) \
 			and turn_manager.get_context_revision() == revision
 	# 让阶段调用栈返回；连续AI回合不会同步递归推进。
 	await get_tree().process_frame
@@ -2041,6 +2115,7 @@ func _run_ai_play(actor: Player):
 			if snapshot == null or snapshot != _ai_hand_snapshot or not _ai_offered_actions.has(action): return false
 			if _ai_terrain_snapshot != terrain_markers(): return false
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
+			if action.get("skill","") in ["paipian","spy"]: return _ai_sunny_action_current(actor,action)
 			if target == null: return true
 			if not is_instance_valid(target) or not _has_damage_target_body(target) or not target.is_alive(): return false
 			if TargetIdentity.resolve_live(players, unit_registry, action.target) != target: return false
@@ -2050,6 +2125,14 @@ func _run_ai_play(actor: Player):
 	var result = await ai_driver.run(func(): return _ai_observation(actor),
 		_ai_play_candidates, _execute_ai_action, valid, before_execute)
 	if _ai_running_revisions.get(revision, -1) == generation: _ai_running_revisions.erase(revision)
+	# Sage restores the general card, not the turn. Retire this Sunny frame
+	# and schedule a fresh observation instead of leaving an AI PLAY stalled.
+	if sunny_revision>=0 and not _game_over and generation==_dying_lifecycle_generation \
+			and is_instance_valid(actor) and _has_character_body(actor) and actor.is_alive() \
+			and actor.general_name=="桑尼·斯派" and actor.awakening_revision!=sunny_revision \
+			and turn_manager.get_context_revision()==revision and turn_manager.current_phase==TurnManager.Phase.PLAY and _play_actor()==actor:
+		call_deferred("_run_ai_play",actor)
+		return
 	if not _game_over and generation == _dying_lifecycle_generation and is_instance_valid(actor) \
 			and (actor.is_dead() or actor.unit_disappeared) and turn_manager.get_context_revision() == revision \
 			and turn_manager.current_phase == TurnManager.Phase.PLAY and _play_actor() == actor:
@@ -2215,7 +2298,9 @@ func _resolve_corruption_batch(batch: ExtraDrawBatch) -> int:
 
 func _corruption_choice(actor: Player, batch: ExtraDrawBatch, stage: String, valid: Callable) -> int:
 	if _corruption_choice_override.is_valid(): return await _corruption_choice_override.call(actor,batch,stage,valid)
-	if not _is_human(actor): return -1 if stage=="activate" else 0 # Strategy only; full AI is I05c-5.
+	if not _is_human(actor):
+		return await _choose_ai_response(actor,"corruption_activate" if stage=="activate" else "corruption_tie",[0],
+			{"target":ActorIdentity.key_for(players,unit_registry,batch.owner),"count":batch.remaining_count()})
 	_set_input_player(actor)
 	if stage=="activate":
 		return await _show_choice_popup("是否对%s本次额外摸的牌发动【贪污】？"%batch.owner.player_name,["发动"],valid)

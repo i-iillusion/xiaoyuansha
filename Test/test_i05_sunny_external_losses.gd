@@ -3,6 +3,7 @@ extends SceneTree
 const Losses=preload("res://Test/i05_sunny_external_loss_cases.gd")
 const StrikeBinding=preload("res://Test/i05_strike_declaration_awakening_cases.gd")
 const DelayedReveal=preload("res://Test/i05_dragon_delayed_reveal_cases.gd")
+const SunnyAi=preload("res://Test/i05_sunny_ai_cases.gd")
 var checks:=0
 var failures:=0
 func _initialize(): run.call_deferred()
@@ -14,5 +15,6 @@ func run():
 	await Losses.new().run(self)
 	await StrikeBinding.new().run(self)
 	await DelayedReveal.new().run(self)
+	await SunnyAi.new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)
