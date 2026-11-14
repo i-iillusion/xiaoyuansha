@@ -51,6 +51,9 @@ var source_card: CardBase
 # Explicit original declaration supplied by a multi-target card, never inferred
 # from this single damage record or its surviving targets.
 var declared_targets: Array[Player] = []
+# Q13/Q14: only the original declaration's awakening qualification is bound.
+# This does not bypass armor, kneeling, response or damage prevention checks.
+var awakening_target_bound: bool = false
 var damage: DamageRecord
 var scheduler: RuleScheduler
 var skip_targeting: bool = false

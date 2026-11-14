@@ -3244,6 +3244,8 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 
 	match sub:
 		CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE:
+			if target == null or _awake_blocks(target, 1): return
+			var declared: Array[Player] = [target]
 			card = _take_play_card(p, sub)
 			if card == null:
 				_update_debug("没有可用的【%s】或任意牌，未使用杀" % CardData.get_type_name(sub))
@@ -3270,7 +3272,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 				CardData.CardSubType.THUNDER_STRIKE:
 					element = EffectChain.DamageType.THUNDER
 
-			var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage)
+			var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage, false, declared, true)
 			if (dealt is int and dealt == CHOICE_INVALID) or action_revision != turn_manager.get_context_revision():
 				_abandon_card_actions([action])
 				return
@@ -3350,18 +3352,19 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 # 杀次数/手牌/酒 buff 已在调用方消耗
 # 返回 true = 本次结算对目标造成了伤害（供【灾厄剑】转移判定：全部处理完成后再转移）
 # 已提交伤害后的选择失效须通知多目标调用者；普通命中/闪仍为bool。
-func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false, declared_targets: Array[Player] = []) -> Variant:
+func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: CardData.CardSubType, element: EffectChain.DamageType, base_damage: int, ignore_target_restrictions: bool = false, declared_targets: Array[Player] = [], awakening_target_bound: bool = false) -> Variant:
 	if _game_over or target == null or not target.is_alive():
 		return false
 	if _is_mountain_body(target) and not _has_damage_target_body(target):
 		return false
 	# “无论是否合法”只越过选目标限制，不跳过响应和伤害防止。
 	if not ignore_target_restrictions and (target.get_armor() == CardData.CardSubType.TENGJIA \
-			or _awake_blocks(target, 1) or _is_bare_running(target) or _is_kneeling(target)):
+			or (not awakening_target_bound and _awake_blocks(target, 1)) or _is_bare_running(target) or _is_kneeling(target)):
 		return false
 	var chain = _new_damage_chain(p, target, card, base_damage, element)
 	chain.ignore_target_restrictions = ignore_target_restrictions
 	chain.declared_targets = declared_targets.duplicate()
+	chain.awakening_target_bound = awakening_target_bound
 	chain.response_callback = _on_chain_response_check
 	var strike_revision = turn_manager.get_context_revision()
 	var strike_generation = _dying_lifecycle_generation
@@ -3415,13 +3418,13 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 		return CHOICE_INVALID
 	return chain.damage.final_damage().committed
 
-func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool, invalid_out: Array = []) -> bool:
+func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool, invalid_out: Array = [], awakening_target_bound: bool = false) -> bool:
 	# 【藤甲】：你不能成为【杀】的目标（目标选择已过滤，这里兜底防直调）
 	if not ignore_restrictions and target.get_armor() == CardData.CardSubType.TENGJIA:
 		_update_debug("%s 的【藤甲】：不能成为【杀】的目标！" % target.player_name)
 		return false
 	# 【觉醒】选择1：不能成为【杀】的目标（兜底防直调）
-	if not ignore_restrictions and _awake_blocks(target, 1):
+	if not ignore_restrictions and not awakening_target_bound and _awake_blocks(target, 1):
 		_update_debug("%s 的【觉醒】：不能成为【杀】的目标！" % target.player_name)
 		return false
 	# 【裸奔】：凯文·罗本装备区无装备时不能成为【杀】的目标（兜底防直调）
@@ -3494,6 +3497,10 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 
 func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 	if _game_over: return
+	targets = targets.duplicate()
+	# Freeze qualification for every original recipient before any reward or
+	# earlier recipient can cause a nested awakening. New declarations recheck.
+	if targets.any(func(target): return target == null or _awake_blocks(target, 1)): return
 	var action_revision = turn_manager.get_context_revision()
 	var action_generation = _dying_lifecycle_generation
 	if targets.is_empty():
@@ -3541,7 +3548,7 @@ func execute_multi_strike(targets: Array[Player], sub: CardData.CardSubType):
 		# 胜负已分：不再结算后续目标
 		if _game_over:
 			break
-		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage, false, targets)
+		var dealt = await _execute_single_strike(p, target, card, sub, element, base_damage, false, targets, true)
 		if (dealt is int and dealt == CHOICE_INVALID) or action_revision != turn_manager.get_context_revision():
 			_abandon_card_actions([action])
 			return
@@ -4865,7 +4872,7 @@ func _resolve_borrowed_strike(first: Player, targets: Array, strike_sub: int, al
 			_abandon_card_actions([strike_action])
 			return CHOICE_INVALID
 		if not target.is_alive(): continue
-		var dealt = await _execute_single_strike(first, target, card, strike_sub, element, damage, false, seen)
+		var dealt = await _execute_single_strike(first, target, card, strike_sub, element, damage, false, seen, true)
 		if (typeof(dealt) == TYPE_INT and dealt == CHOICE_INVALID) or _game_over \
 				or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 			_abandon_card_actions([strike_action])
@@ -7340,7 +7347,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 			return true
 		if immune == 1: return true
 		var invalid: Array = []
-		var prepared = await _prepare_strike_target(source, subject, chain.ignore_target_restrictions, invalid)
+		var prepared = await _prepare_strike_target(source, subject, chain.ignore_target_restrictions, invalid, chain.awakening_target_bound)
 		if not invalid.is_empty(): chain.continuation_invalid = true
 		return not prepared
 
@@ -9847,6 +9854,8 @@ func _on_shensu_target_click(target: Player):
 func _execute_shensu_strike(p: Player, target: Player) -> void:
 	if p.general_name != "比尔·盖伊" or not p.is_alive() or not target.is_alive():
 		return
+	if _awake_blocks(target, 1): return
+	var declared: Array[Player] = [target]
 	var card = CardBase.create(CardData.CardSubType.STRIKE)
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
@@ -9860,7 +9869,7 @@ func _execute_shensu_strike(p: Player, target: Player) -> void:
 			or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
 		_abandon_card_actions([action])
 		return
-	var result = await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage)
+	var result = await _execute_single_strike(p, target, card, CardData.CardSubType.STRIKE, EffectChain.DamageType.PHYSICAL, base_damage, false, declared, true)
 	if (result is int and result == CHOICE_INVALID) or _game_over or revision != turn_manager.get_context_revision() \
 			or generation != _dying_lifecycle_generation:
 		_abandon_card_actions([action])
