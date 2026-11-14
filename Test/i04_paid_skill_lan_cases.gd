@@ -28,6 +28,9 @@ func run(t):
 			var game = bridge.game
 			game.players[1].general_name = "杰基·斯特朗" if skill == "校园霸主" else "史蒂芬·彼特先斯"
 			game.players[1].awoken = true
+			# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+			game.players[1].awaken_effects_applied = true
+			if game.players[1].awake_choice == 0: game.players[1].awake_choice = 3
 			game._zhuangbi_again_override = func(): return false
 			if not await click(t,bridge,0,"结束出牌"): bridge.queue_free(); await frames(t); continue
 			var inspect = bridge.snapshot(1).targets.get("1","")

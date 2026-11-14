@@ -33,6 +33,9 @@ func zhuangbi(t):
 			var source=game.players[0]
 			source.general_name="史蒂芬·彼特先斯"
 			source.awoken=true
+			# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+			source.awaken_effects_applied = true
+			if source.awake_choice == 0: source.awake_choice = 3
 			source.hand.assign([null,null])
 			var original=CardBase.create(CardData.CardSubType.DODGE)
 			game.players[1].determined_cards.append(original)
@@ -152,6 +155,9 @@ func zhuangbi_bridge(t):
 		game._halt_countdown()
 		for p in game.players: p.hand.clear(); p.determined_cards.clear()
 		game.players[0].awoken=true
+		# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+		game.players[0].awaken_effects_applied = true
+		if game.players[0].awake_choice == 0: game.players[0].awake_choice = 3
 		game.players[0].hand.assign([null,null])
 		var fee=CardBase.create(CardData.CardSubType.DODGE)
 		game.players[1].determined_cards.append(fee)

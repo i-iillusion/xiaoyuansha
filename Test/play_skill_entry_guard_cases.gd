@@ -7,6 +7,9 @@ func run(host):
 	for active in specs:
 		reset(active[0])
 		game.players[0].awoken = true
+		# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+		game.players[0].awaken_effects_applied = true
+		if game.players[0].awake_choice == 0: game.players[0].awake_choice = 3
 		game.players[2].equip_card_to_slot("weapon", CardBase.create(CardData.CardSubType.LIANNU))
 		var actor = game.players[0]
 		var target = game.players[1]
@@ -56,6 +59,9 @@ func run(host):
 	# 成功再选允许通过同一执行锁；再次真正执行仍重新收一次费用。
 	reset("史蒂芬·彼特先斯")
 	game.players[0].awoken = true
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	game.players[0].awaken_effects_applied = true
+	if game.players[0].awake_choice == 0: game.players[0].awake_choice = 3
 	game.players[1].hp = 5
 	game.players[1].hand.assign([null, null])
 	game._hand_discard_override = func(snapshot, count, _mandatory): return snapshot.defaults(count)

@@ -11,6 +11,9 @@ func run(t):
 				var target = game.players[0]
 				actor.general_name = general
 				actor.awoken = true # Keep mandatory awakening outside this region test.
+				# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+				actor.awaken_effects_applied = true
+				if actor.awake_choice == 0: actor.awake_choice = 3
 				game.turn_manager.current_phase = TurnManager.Phase.PLAY
 				game.turn_manager.play_actor_idx = 1
 				game._set_input_player(actor)

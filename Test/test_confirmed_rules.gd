@@ -56,6 +56,7 @@ func reset_players():
 		p.consume_wine_bonus()
 		p.heal_staff_peach_used = false
 		p.awoken = false
+		p.awaken_effects_applied = false
 		p.awake_choice = 0
 		p.prep_tokens = 0
 		p.capture_game_start_state()
@@ -87,6 +88,9 @@ func _run():
 	var owner = game.players[0]
 	owner.general_name = "史蒂芬·彼特先斯"
 	owner.awoken = true # 本测试不触发另一个技能的交互弹窗。
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	owner.awaken_effects_applied = true
+	if owner.awake_choice == 0: owner.awake_choice = 3
 	for i in range(3):
 		owner.hand.append(null)
 	var opponents: Array[Player] = []

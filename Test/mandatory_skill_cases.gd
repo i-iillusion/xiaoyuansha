@@ -43,6 +43,9 @@ func run(host):
 	# 本例只验证装逼支付；使用已觉醒角色，避免空手时排入延迟觉醒，
 	# 在后续案例让出帧后给已 reset 的同一 Player 补牌、污染跨例断言。
 	actor.awoken = true
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	actor.awaken_effects_applied = true
+	if actor.awake_choice == 0: actor.awake_choice = 3
 	actor.awake_choice = 1
 	actor.hand.append(null)
 	target.hand.append(null)
@@ -192,6 +195,9 @@ func check_paixiong_result_boundaries(actor: Player, target: Player):
 	target.general_name = "史蒂芬·彼特先斯"
 	target.hand.append(null) # 拍胸脯用例保留一牌，避免混入空手觉醒的上限变化。
 	actor.awoken = true
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	actor.awaken_effects_applied = true
+	if actor.awake_choice == 0: actor.awake_choice = 3
 	var concrete = CardBase.create(CardData.CardSubType.PEACH)
 	actor.determined_cards.append(concrete)
 	game._paixiong_override = func(): return true
@@ -299,6 +305,9 @@ func check_paid_rps_context(actor: Player, target: Player, second: Player):
 	reset_case()
 	actor.general_name = "史蒂芬·彼特先斯"
 	actor.awoken = true # 此例隔离异步觉醒，另立组合回归。
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	actor.awaken_effects_applied = true
+	if actor.awake_choice == 0: actor.awake_choice = 3
 	actor.hand.append(null)
 	target.determined_cards.append(retained)
 	second.hand.append(null)
@@ -318,6 +327,9 @@ func check_zhuangbi_skipped_dead_target(actor: Player, target: Player, second: P
 		reset_case()
 		actor.general_name = "史蒂芬·彼特先斯"
 		actor.awoken = true
+		# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+		actor.awaken_effects_applied = true
+		if actor.awake_choice == 0: actor.awake_choice = 3
 		actor.hand.append(null)
 		actor.hand.append(null)
 		var retained: CardBase = null
@@ -350,6 +362,9 @@ func check_zhuangbi_skipped_dead_target(actor: Player, target: Player, second: P
 	reset_case()
 	actor.general_name = "史蒂芬·彼特先斯"
 	actor.awoken = true
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	actor.awaken_effects_applied = true
+	if actor.awake_choice == 0: actor.awake_choice = 3
 	actor.hand.append(null)
 	target.hand.append(null)
 	second.hand.append(null)
@@ -372,6 +387,9 @@ func check_context_invalidation(actor: Player, target: Player):
 			reset_case()
 			actor.general_name = "杰基·斯特朗" if skill == "campus" else "史蒂芬·彼特先斯"
 			actor.awoken = true # 支付案例不引入跨例延迟觉醒。
+			# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+			actor.awaken_effects_applied = true
+			if actor.awake_choice == 0: actor.awake_choice = 3
 			actor.hand.append(null)
 			var retained = CardBase.create(CardData.CardSubType.PEACH)
 			target.determined_cards.append(retained)

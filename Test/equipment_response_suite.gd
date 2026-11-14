@@ -53,6 +53,7 @@ func reset_players():
 		p.consume_wine_bonus()
 		p.heal_staff_peach_used = false
 		p.awoken = false
+		p.awaken_effects_applied = false
 		p.awake_choice = 0
 		p.prep_tokens = 0
 		p.capture_game_start_state()

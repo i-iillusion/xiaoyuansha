@@ -4,6 +4,9 @@ func configure(actor: Player, wins: int):
 	actor.general_name = "史蒂芬·彼特先斯"
 	actor.hp = 2
 	actor.awoken = true
+	# Completed-awakening fixture: do not leave an unpaid mandatory choice.
+	actor.awaken_effects_applied = true
+	if actor.awake_choice == 0: actor.awake_choice = 3
 	actor.hand.assign([null, null, null, null, null, null])
 	game._zhuangbi_blocked_this_phase = false
 	game._zhuangbi_again_override = func(): return false

@@ -5313,6 +5313,10 @@ func _resolve_forced_steal_pick(attacker: Player, target: Player, is_snatch: boo
 	if not is_snatch and taken != null: deck.discard(taken)
 	_update_debug("%s %s %s 的一张%s牌" % [attacker.player_name, "获得" if is_snatch else "弃置", target.player_name,
 		"手" if choice.zone == "hand" else ("装备" if choice.zone == "equip" else "判定")])
+	# The selected old card has moved. Do not reuse the pre-move hand snapshot
+	# after awakening has drawn new cards into this same hand.
+	if choice.zone == "hand" and await _await_hand_awakening(target) == CHOICE_INVALID: return CHOICE_INVALID
+	if not allowed.call(): return CHOICE_INVALID
 	return 0
 
 # 手牌：目标 -1；顺手牵羊时自己 +1
@@ -5335,6 +5339,8 @@ func _steal_hand(attacker: Player, target: Player, is_snatch: bool, card_name: S
 		if taken != null:
 			deck.discard(taken)
 		_update_debug("%s 弃置了 %s 的 1 张手牌（目标剩 %d 张）" % [attacker.player_name, target.player_name, target.hand_size()])
+	if await _await_hand_awakening(target) == CHOICE_INVALID: return CHOICE_INVALID
+	if allowed.is_valid() and not allowed.call(): return CHOICE_INVALID
 
 # 装备：目标失去该装备；顺手牵羊时放入自己「已确定的牌」
 func _equipment_resource_for_pick(p: Player, slot: String) -> CardBase:
@@ -7381,6 +7387,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 					if boundary == CardLossTransaction.Outcome.PREVENTED: return true
 				if chosen == 1 and discard_count > 0 and _discard_hand_cards(actual, discard_count):
 					_public_result("%s 发动【寒冰剑】：防止本次伤害，弃置 %s %d张手牌" % [subject.player_name, actual.player_name, discard_count])
+					if await _await_hand_awakening(actual) == CHOICE_INVALID or not hit_valid.call():
+						chain.continuation_invalid = true
 					_sync_all_ui()
 					return true
 			if weapon == CardData.CardSubType.ZHANGBA_SPEAR:
@@ -8959,7 +8967,7 @@ func _try_paixiong_block(victim: Player, source: Player) -> PaixiongOutcome:
 			return PaixiongOutcome.NOT_USED # TIME-04：剩余伤害由链条改为无来源。
 		if action_revision != turn_manager.get_context_revision():
 			return PaixiongOutcome.INVALIDATED
-		if result == HandDiscardOutcome.ACTION_INVALIDATED or result == HandDiscardOutcome.GAME_ENDED:
+		if result in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED, HandDiscardOutcome.REACTION_INVALIDATED]:
 			return PaixiongOutcome.INVALIDATED
 		if result == HandDiscardOutcome.STALE_SELECTION:
 			await get_tree().process_frame # 非空旧答复不是拒绝；重建当前选择。
@@ -11688,7 +11696,7 @@ func _try_soul_blade(source: Player, victim: Player) -> int:
 			return 0
 	var payment = await _select_hand_discard_result(source, need, false, valid)
 	if payment != HandDiscardOutcome.PAID:
-		if payment in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED, HandDiscardOutcome.STALE_SELECTION] or not valid.call():
+		if payment in [HandDiscardOutcome.ACTION_INVALIDATED, HandDiscardOutcome.GAME_ENDED, HandDiscardOutcome.STALE_SELECTION, HandDiscardOutcome.REACTION_INVALIDATED] or not valid.call():
 			return CHOICE_INVALID
 		return 0
 	_public_result("%s 弃置 %d 张手牌，令 %s 武将牌翻面" % [source.player_name, need, victim.player_name])
@@ -12191,6 +12199,8 @@ func _handle_death(victim: Player, killer: Player):
 		elif victim.identity == "忠臣" and killer.identity == "主公":
 			_discard_all_cards(killer, false)
 			_update_debug("奖惩：主公 %s 误杀忠臣 %s，弃置所有手牌和装备！（%d 张手牌）" % [killer.player_name, victim.player_name, killer.hand_size()])
+			if await _await_hand_awakening(killer) == CHOICE_INVALID or death_generation != _dying_lifecycle_generation: return CHOICE_INVALID
+			if _game_over: return 0
 
 	# Must finish succession before the parent Yudaxi continues or rebels win.
 	if game_mode == MODE_AMBITIOUS_IDENTITY and _ambitious_state != null and _ambitious_state.candidate() != null:
@@ -12370,6 +12380,12 @@ func _select_hand_discard_result(p: Player, count: int, mandatory: bool, allowed
 				if card != null:
 					deck.discard(card)
 			_history_event("discard", "%s 弃置%d张手牌" % [p.player_name, count], p, [], {"count": count})
+			# Payment is committed, so an invalid nested reaction cannot retry or
+			# refund it. Join the mandatory awakening before the parent continues.
+			if await _await_hand_awakening(p) == CHOICE_INVALID or _game_over \
+					or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision() \
+					or (allowed.is_valid() and not allowed.call()):
+				return HandDiscardOutcome.REACTION_INVALIDATED
 			return HandDiscardOutcome.PAID
 		if not mandatory:
 			return HandDiscardOutcome.STALE_SELECTION # 非空无效答复不是主动拒绝。
