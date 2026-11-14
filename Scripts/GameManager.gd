@@ -3337,7 +3337,7 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 			target.judgment_cards.append(card)
 			if sub == CardData.CardSubType.INDULGENCE: turn_manager.use_card("indulgence")
 			elif sub == CardData.CardSubType.SUPPLY_SHORTAGE: turn_manager.use_card("supply_shortage")
-			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
+			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use, [target])
 			if await _await_hand_awakening(p) == CHOICE_INVALID:
 				_abandon_card_actions([action])
 				return
