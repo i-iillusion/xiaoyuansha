@@ -28,6 +28,8 @@ var general_name: String = "稻草人"
 var simba_lord_skill_enabled := false
 var simba_wanci_enabled := false
 var simba_good_deeds_enabled := false
+var simba_tuanfei_enabled := false
+var tuanfei_extra_draws: int = 0
 var good_deed_marks: int = 0
 
 # Numerical commits only. Callers authorize the skill, target and continuation;
@@ -74,7 +76,7 @@ var _game_start_state: Dictionary = {}
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
-	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks"]
+	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks", "tuanfei_extra_draws"]
 # I05c-3a: limited-skill state belongs to the general, identities do not.
 var spy_used := false
 # I05b-2a: general-card resources, restored by Sage; not physical cards.

@@ -128,7 +128,7 @@ func _refresh_commands() -> void:
 	shape.append(labels)
 	shape.append(UnitObservation.capture(game.unit_registry, game.players[input_owner()] if input_owner() >= 0 else null))
 	for p in game.players:
-		shape.append([p.hp, p.hand_size(), p.kneeling, p.kneel_used, p.is_dead(), p.farm_empty_fields, p.farm_good_fields, p.wrestle_round, p.spy_used, p.identity, p.identity_revealed, p.good_deed_marks])
+		shape.append([p.hp, p.hand_size(), p.kneeling, p.kneel_used, p.is_dead(), p.farm_empty_fields, p.farm_good_fields, p.wrestle_round, p.spy_used, p.identity, p.identity_revealed, p.good_deed_marks, p.tuanfei_extra_draws])
 	var signature = var_to_str(shape)
 	if signature == _signature: return
 	_signature = signature

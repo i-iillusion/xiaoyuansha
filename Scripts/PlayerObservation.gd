@@ -21,6 +21,7 @@ static func capture(players: Array, actor: Player, phase: int, revision: int) ->
 			"hand_count": p.hand_size(), "equipment": equipment,
 			"judgments": judgments, "chained": p.chained, "facedown": p.facedown})
 		if p.good_deed_marks > 0: visible.back()["good_deed_marks"] = p.good_deed_marks
+		if p.tuanfei_extra_draws > 0: visible.back()["tuanfei_extra_draws"] = p.tuanfei_extra_draws
 	var own_cards: Array = []
 	for zone in ["hand", "determined_cards"]:
 		var cards: Array = actor.get(zone)

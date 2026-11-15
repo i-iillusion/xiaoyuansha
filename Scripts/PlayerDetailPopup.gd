@@ -237,6 +237,11 @@ func _populate():
 	# 标记：贤者标记 + 判定区延时锦囊
 	_clear_container(_marks_container)
 	var has_marks := false
+	if _player.simba_tuanfei_enabled and _player.general_name == "辛巴·古德曼":
+		var fee = Label.new()
+		fee.text = "团费累计：%d（不足3保留）" % _player.tuanfei_extra_draws
+		_marks_container.add_child(fee)
+		has_marks = true
 	if _player.good_deed_marks > 0:
 		var deeds = Label.new()
 		deeds.text = "好事：%d" % _player.good_deed_marks

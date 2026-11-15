@@ -2241,6 +2241,36 @@ func _do_end(pid: int):
 	_update_debug("%s 回合结束" % _phase_actor(pid).player_name)
 	turn_manager.advance_phase()
 
+func _tuanfei_enabled(p: Player) -> bool:
+	return is_instance_valid(p) and players.has(p) and not p.is_dead() \
+		and p.simba_tuanfei_enabled and p.general_name == "辛巴·古德曼" and not _is_kneeling(p)
+
+func _record_tuanfei_draw(drawer: Player, count: int, context: ExtraDrawBatch.Context):
+	if _game_over or count <= 0 or context != ExtraDrawBatch.Context.EXTRA or not _has_character_body(drawer) \
+		or drawer.is_dead() or drawer.unit_disappeared: return
+	for observer in players:
+		if observer == drawer or not _tuanfei_enabled(observer): continue
+		# Q6/Q9: snapshot region eligibility at the actual physical draw.
+		# This observes facts, not a target declaration or a transferable receipt.
+		if not _mountain_effect_reaches(_retained_effect_anchor(observer), drawer): continue
+		observer.tuanfei_extra_draws += count
+
+# Private payout primitive only. END parent integration waits for Q11; calling
+# this directly never advances phases or treats a technical END as a rule event.
+func _settle_tuanfei_end(allowed: Callable) -> int:
+	for observer in players:
+		if not allowed.call(): return CHOICE_INVALID
+		if not _tuanfei_enabled(observer) or not observer.is_alive() or observer.tuanfei_extra_draws < 3: continue
+		var reward = floori(observer.tuanfei_extra_draws / 3.0)
+		observer.tuanfei_extra_draws %= 3
+		# Q2/Q10: retain remainder, commit one reward batch before awaiting
+		# its real Corruption reaction. Reentry must never award it twice.
+		var batch = _draw_blank_cards(observer, reward)
+		_history_event("skill", "%s 的【团费】：摸%d张牌，累计余数%d" % [observer.player_name, reward, observer.tuanfei_extra_draws], observer)
+		if await _resolve_corruption_batch(batch) == CHOICE_INVALID or not allowed.call(): return CHOICE_INVALID
+		_sync_all_ui()
+	return 0
+
 func _on_turn_ended(pid: int):
 	# 胜负已分：不再进入下一回合
 	if _game_over:
@@ -2255,6 +2285,7 @@ func _draw_blank_cards(p: Player, count: int, context: ExtraDrawBatch.Context = 
 	var first=p.hand.size()
 	for i in count:
 		p.append_hand_card_silent(null)
+	_record_tuanfei_draw(p, count, context)
 	var receipt: ExtraDrawBatch
 	if (_extra_draw_receipts_enabled or _corruption_rules_enabled) and count>0:
 		_draw_batch_serial+=1
