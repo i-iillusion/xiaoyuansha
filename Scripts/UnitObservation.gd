@@ -22,6 +22,7 @@ static func capture(registry: UnitRegistry, viewer: Player = null) -> Array:
 			"equipment": body.equipment.duplicate(), "judgments": judgments, "own_cards": own_cards,
 			"facedown": body.facedown, "chained": body.chained, "wine": body.wine_stacks,
 			"gender": body.gender if entry.kind == UnitRegistry.Kind.FIRE_DRAGON else ""})
+		if body.good_deed_marks > 0: rows.back()["good_deed_marks"] = body.good_deed_marks
 	return rows
 
 static func valid(rows: Variant, count: int, viewer: int) -> bool:
@@ -30,7 +31,8 @@ static func valid(rows: Variant, count: int, viewer: int) -> bool:
 	var dragon_owners: Array = []
 	var mountains := 0
 	for row in rows:
-		if typeof(row) != TYPE_DICTIONARY or row.size() != FIELDS.size() or not row.keys().all(func(key): return key in FIELDS): return false
+		if typeof(row) != TYPE_DICTIONARY or not row.has_all(FIELDS) or not row.keys().all(func(key): return key in FIELDS or key == "good_deed_marks"): return false
+		if row.has("good_deed_marks") and (typeof(row.good_deed_marks) != TYPE_INT or row.good_deed_marks <= 0): return false
 		if typeof(row.id) != TYPE_STRING or not row.id.begins_with("unit:") or ids.has(row.id): return false
 		ids.append(row.id)
 		if typeof(row.kind) != TYPE_INT or row.kind not in [UnitRegistry.Kind.FIRE_DRAGON, UnitRegistry.Kind.MOUNTAIN]: return false

@@ -50,6 +50,8 @@ var _paipian_targets: Array[Player] = []
 var _paipian_selection_actor: Player
 var _paipian_selection_general := -1
 var _paipian_pending: Dictionary = {}
+var _simba_deed_pending: Dictionary = {}
+var _simba_deed_choice_override: Callable = Callable()
 var _david_rules_enabled := true
 var _farming_upgrade_pending: Dictionary = {}
 var _farming_peach_pending: Dictionary = {}
@@ -9112,6 +9114,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _simba_deed_pending.is_empty(): return true
 	if not _paipian_pending.is_empty(): return true
 	if not _farming_peach_pending.is_empty(): return true
 	if not _card_loss_pending.is_empty() or not _wrestling_resolving.is_empty(): return true
@@ -10165,6 +10168,106 @@ func _execute_paipian(p: Player, targets: Array[Player]) -> int:
 	if is_same(_paipian_pending,lease): _paipian_pending = {}
 	_restore_input_owner()
 	return result
+
+# I05d-4: private active skill and pre-rescue mark recovery. Optional prompts
+# use one original countdown throughout target selection and confirmation.
+func _simba_deeds_enabled(p: Player) -> bool:
+	return is_instance_valid(p) and _has_character_body(p) and not p.is_dead() \
+		and p.simba_good_deeds_enabled and p.general_name == "辛巴·古德曼" and not _is_kneeling(p)
+
+func _good_deed_target_allowed(owner: Player, target: Player, reclaim: bool) -> bool:
+	if target == null or not _has_character_body(target) or target.is_dead() or _is_kneeling(target): return false
+	if not _can_target_body(owner, target) or not _mountain_effect_reaches(_retained_effect_anchor(owner), target): return false
+	if reclaim: return target.good_deed_marks > 0
+	return target != owner and target.is_alive()
+
+func _choose_good_deed_target(owner: Player, candidates: Array[Player], reclaim: bool, allowed: Callable) -> int:
+	var choice: int
+	if _simba_deed_choice_override.is_valid():
+		choice = await _simba_deed_choice_override.call(owner, candidates.duplicate(), reclaim, allowed)
+	elif not _is_human(owner):
+		choice = -1 # AI selection is added only in I05d-7, through this same entry.
+	else:
+		var prompt = GoodDeedPrompt.new()
+		$UI.add_child(prompt)
+		var names: Array[String] = []
+		for target in candidates:
+			names.append("%s · 体力%d/%d · 好事%d" % [target.player_name, target.hp, target.max_hp, target.good_deed_marks])
+		prompt.setup("回收好事：选择一名角色，确认后回收其全部标记" if reclaim else "做好事：失去1体力，令另一名角色获得1额外体力和1好事", names)
+		var answer = ChoicePromptAnswer.new()
+		prompt.answered.connect(answer.submit)
+		_set_input_player(owner)
+		choice = await _wait_choice_prompt(prompt, answer, allowed)
+	if not allowed.call() or choice < -1 or choice >= candidates.size(): return CHOICE_INVALID
+	return choice
+
+func _perform_good_deed(owner: Player) -> int:
+	if not _simba_deeds_enabled(owner) or not _can_use_play_skill(owner) or _play_skill_execution_busy(): return 0
+	var candidates: Array[Player] = []
+	for target in _character_targets(owner):
+		if _good_deed_target_allowed(owner, target, false): candidates.append(target)
+	if candidates.is_empty(): return 0
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var lease = {"owner": owner}
+	_simba_deed_pending = lease
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var general = owner.awakening_revision
+	var registry = unit_registry.generation()
+	var space = terrain_markers()
+	var target_states = candidates.map(func(p): return [p.awakening_revision, p.hp, p.good_deed_marks])
+	var valid = func(): return is_same(_simba_deed_pending, lease) and not _game_over \
+		and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation \
+		and _simba_deeds_enabled(owner) and _can_use_play_skill(owner) and general == owner.awakening_revision \
+		and registry == unit_registry.generation() and space == terrain_markers() \
+		and candidates.map(func(p): return [p.awakening_revision, p.hp, p.good_deed_marks]) == target_states
+	var selected = await _choose_good_deed_target(owner, candidates, false, valid)
+	var result = selected if selected == CHOICE_INVALID else 0
+	if selected >= 0:
+		var target = candidates[selected]
+		if not valid.call() or not _good_deed_target_allowed(owner, target, false): result = CHOICE_INVALID
+		else:
+			owner.hp -= 1
+			target.receive_good_deed()
+			_history_event("skill", "%s 发动【做好事】：失去1体力，%s获得1额外体力和1好事" % [owner.player_name, target.player_name], owner, [target])
+			_sync_all_ui()
+			# SI-Q3: the recipient commit precedes any rescue for the paid HP.
+			var dying = await _resolve_dying(owner, null, "good_deed_cost")
+			result = CHOICE_INVALID if dying == CHOICE_INVALID or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision() else 1
+	if is_same(_simba_deed_pending, lease): _simba_deed_pending = {}
+	_restore_input_owner()
+	return result
+
+func _try_reclaim_good_deeds(owner: Player, allowed: Callable) -> int:
+	while owner.is_dying() and _simba_deeds_enabled(owner):
+		var candidates: Array[Player] = []
+		for target in _character_targets(owner):
+			if _good_deed_target_allowed(owner, target, true): candidates.append(target)
+		if candidates.is_empty(): break
+		var revision = owner.awakening_revision
+		var registry = unit_registry.generation()
+		var space = terrain_markers()
+		var states = candidates.map(func(p): return [p.awakening_revision, p.hp, p.good_deed_marks])
+		var valid = func(): return allowed.call() and _simba_deeds_enabled(owner) and owner.is_dying() \
+			and revision == owner.awakening_revision and registry == unit_registry.generation() and space == terrain_markers() \
+			and candidates.map(func(p): return [p.awakening_revision, p.hp, p.good_deed_marks]) == states
+		var selected = await _choose_good_deed_target(owner, candidates, true, valid)
+		if selected == CHOICE_INVALID: return CHOICE_INVALID
+		if selected == -1: break
+		var target = candidates[selected]
+		if not valid.call() or not _good_deed_target_allowed(owner, target, true): return CHOICE_INVALID
+		var amount = owner.reclaim_good_deeds_from(target)
+		_history_event("skill", "%s 回收%s的%d个【好事】：扣除其%d体力，自己回复%d体力" % [owner.player_name, target.player_name, amount, amount, amount], owner, [target])
+		_sync_all_ui()
+		# SI-Q5b: the owner is already healed before nested target rescue.
+		if owner.is_alive() and target.is_dying():
+			var context: DyingContext = _dying_contexts.get(owner)
+			if context != null:
+				context.pending_good_deed_rescue = target
+				return 0
+		if await _resolve_dying(target, null, "good_deed_reclaim") == CHOICE_INVALID or not allowed.call(): return CHOICE_INVALID
+	return 0
 
 func _gay_target_valid(actor: Player, target: Player) -> bool:
 	return target != null and _has_character_body(target) and target != actor and target.is_alive() \
@@ -12173,6 +12276,10 @@ func _resolve_dying(victim: Player, killer: Player, cause: String, chain: Effect
 	context.stage = DyingContext.Stage.FINISHED
 	_dying_contexts.erase(victim)
 	_sync_all_ui()
+	if is_instance_valid(context.pending_good_deed_rescue):
+		var nested = await _resolve_dying(context.pending_good_deed_rescue, null, "good_deed_reclaim")
+		if nested == CHOICE_INVALID or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision():
+			return _invalidate_dying_context(victim, context)
 	_check_win_condition(null, null)
 	return 0
 
@@ -12230,6 +12337,10 @@ func _check_dying(dying: Player) -> int:
 	var valid = func():
 		return not _game_over and generation == _dying_lifecycle_generation and _has_character_body(dying) \
 			and turn_manager.get_context_revision() == revision and _dying_contexts.get(dying) == context
+
+	if await _try_reclaim_good_deeds(dying, valid) == CHOICE_INVALID: return CHOICE_INVALID
+	if not valid.call(): return CHOICE_INVALID
+	if dying.is_alive(): return 0
 
 	if await _choose_peter_peach_restriction(context, valid) == CHOICE_INVALID: return CHOICE_INVALID
 	if not valid.call(): return CHOICE_INVALID
@@ -13477,6 +13588,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "做好事":
+		await _perform_good_deed(owner_player)
+		return
 	if skill_key == "间谍":
 		_on_spy_skill_clicked(owner_player)
 		return

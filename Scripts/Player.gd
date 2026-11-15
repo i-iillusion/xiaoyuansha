@@ -27,6 +27,26 @@ var general_name: String = "稻草人"
 # Configuration, not general-card state: Sage must not cache lord authority.
 var simba_lord_skill_enabled := false
 var simba_wanci_enabled := false
+var simba_good_deeds_enabled := false
+var good_deed_marks: int = 0
+
+# Numerical commits only. Callers authorize the skill, target and continuation;
+# no dying resolution or ordinary healing cap is hidden in the extra-HP grant.
+func receive_good_deed() -> bool:
+	if is_dead() or unit_disappeared: return false
+	good_deed_marks += 1
+	hp += 1
+	return true
+
+func reclaim_good_deeds_from(target: Player) -> int:
+	if is_dead() or unit_disappeared or not is_instance_valid(target) \
+			or target.is_dead() or target.unit_disappeared or target.good_deed_marks <= 0: return 0
+	var amount = target.good_deed_marks
+	target.good_deed_marks = 0
+	target.hp -= amount
+	# SI-Q5b: recover the owner before the caller resolves the target's dying.
+	heal(amount)
+	return amount
 
 func has_wanci() -> bool:
 	return simba_wanci_enabled and general_name == "辛巴·古德曼" and not is_dead()
@@ -54,7 +74,7 @@ var _game_start_state: Dictionary = {}
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
-	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used"]
+	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks"]
 # I05c-3a: limited-skill state belongs to the general, identities do not.
 var spy_used := false
 # I05b-2a: general-card resources, restored by Sage; not physical cards.

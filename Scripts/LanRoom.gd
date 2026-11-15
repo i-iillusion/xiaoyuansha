@@ -201,6 +201,7 @@ func _state_changed(state: Dictionary) -> void:
 		if player.dying: text += "\n濒死求救中"
 		if int(player.prep) > 0: text += "\n预习标记：%d" % player.prep
 		if int(player.wine) > 0: text += "\n酒：%d" % player.wine
+		if int(player.get("good_deed_marks", 0)) > 0: text += "\n好事：%d" % player.good_deed_marks
 		if player.general == "克里斯·西弗": text += "\n火龙蛋：%d" % int(player.get("eggs", 0))
 		if player.general == "大卫·法米尔": text += "\n空田：%d  好田：%d" % [int(player.get("empty_fields", 0)), int(player.get("good_fields", 0))]
 		var token: String = state.targets.get(str(player.seat), "")
@@ -230,6 +231,7 @@ func _state_changed(state: Dictionary) -> void:
 			if unit.facedown: text += "\n翻面"
 			if unit.chained: text += "\n横置"
 			if unit.wine > 0: text += "\n酒：%d" % unit.wine
+			if int(unit.get("good_deed_marks", 0)) > 0: text += "\n好事：%d" % unit.good_deed_marks
 			if unit.gender == "none": text += "\n无性别"
 			var judgments: Array[String] = []
 			for sub in unit.judgments: judgments.append(CardData.get_type_name(int(sub)))

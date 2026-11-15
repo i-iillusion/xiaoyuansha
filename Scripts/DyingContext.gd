@@ -11,6 +11,10 @@ var cause: String
 var effect_chain: EffectChain
 var stage: Stage = Stage.RESCUE
 var invalidated: bool = false
+# SI-Q5b: once this victim is rescued, retire its rescue frame before
+# processing the reclaimed target. The recovered owner is not immune to a
+# nested Yudaxi merely because its old caller has not returned yet.
+var pending_good_deed_rescue: Player
 # Peter Q3: only this rescue frame restricts third-party Peaches. Not a
 # permanent victim/source state; self-rescue and source rescue remain legal.
 var peter_peach_restricted: bool = false

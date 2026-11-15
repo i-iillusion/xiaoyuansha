@@ -139,6 +139,9 @@ func _populate():
 		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
+	if _viewer == _player and _player.general_name == "辛巴·古德曼" and _player.simba_good_deeds_enabled:
+		_add_skill_btn("做好事", "【做好事】失去1体力，令另一名角色获得1额外体力及1好事标记")
+
 	_clear_container(_equip_container)
 	var equip_rows := 0
 	if _player.equipment.has("weapon"):
@@ -234,6 +237,11 @@ func _populate():
 	# 标记：贤者标记 + 判定区延时锦囊
 	_clear_container(_marks_container)
 	var has_marks := false
+	if _player.good_deed_marks > 0:
+		var deeds = Label.new()
+		deeds.text = "好事：%d" % _player.good_deed_marks
+		_marks_container.add_child(deeds)
+		has_marks = true
 	if _farming_skills_enabled and _player.general_name == "大卫·法米尔":
 		var fields = Label.new()
 		fields.text = "空田：%d  好田：%d" % [_player.farm_empty_fields, _player.farm_good_fields]

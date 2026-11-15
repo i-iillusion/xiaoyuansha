@@ -20,6 +20,7 @@ static func capture(players: Array, actor: Player, phase: int, revision: int) ->
 			"identity": visible_identity(p, actor),
 			"hand_count": p.hand_size(), "equipment": equipment,
 			"judgments": judgments, "chained": p.chained, "facedown": p.facedown})
+		if p.good_deed_marks > 0: visible.back()["good_deed_marks"] = p.good_deed_marks
 	var own_cards: Array = []
 	for zone in ["hand", "determined_cards"]:
 		var cards: Array = actor.get(zone)

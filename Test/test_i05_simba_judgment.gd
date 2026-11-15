@@ -7,6 +7,8 @@ func check(ok: bool, message: String):
 	if not ok: failures += 1
 	print(("PASS: " if ok else "FAIL: ") + message)
 func run():
+	await load("res://Test/i05_simba_good_deed_state_cases.gd").new().run(self)
+	await load("res://Test/i05_simba_good_deed_flow_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_judgment_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)
