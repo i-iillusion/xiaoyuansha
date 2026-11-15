@@ -33,18 +33,18 @@ var _card_action_serial: int = 0
 var _pending_card_actions: Dictionary = {}
 # Receipt capture stays synchronous; explicitly migrated parents await reactions.
 var _extra_draw_receipts_enabled := false
-var _corruption_rules_enabled := false # Private until all Sunny gates pass.
+var _corruption_rules_enabled := true # Public Sunny capability; clients cannot configure it.
 var _corruption_choice_override: Callable = Callable()
 var _draw_batch_serial := 0
 var _draw_batches: Array[ExtraDrawBatch] = []
 # Server-owned capabilities; callers cannot enable them through a client option.
-# I05c-2 remains private until all Sunny skills and natural ENet gates pass.
-var _spy_rules_enabled := false
+# Public Sunny skills share the same authoritative rule paths as private regression fixtures.
+var _spy_rules_enabled := true
 var _is_spy_targeting := false
 var _spy_targets: Array[Player] = []
 var _spy_selection_actor: Player
 var _spy_selection_general := -1
-var _paipian_rules_enabled := false
+var _paipian_rules_enabled := true
 var _is_paipian_targeting := false
 var _paipian_targets: Array[Player] = []
 var _paipian_selection_actor: Player

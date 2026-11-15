@@ -5,6 +5,7 @@ const Sage=preload("res://Test/i05_sunny_corruption_sage_cases.gd")
 
 func fixture(t,mode=GameModes.FREE_FOR_ALL):
 	var game=Base.new().fixture(t,5,mode)
+	game._corruption_rules_enabled=false # Isolated active-skill fixture; actual Greed cases explicitly enable it.
 	game.turn_manager.phase_changed.disconnect(game._on_phase_changed)
 	game.lan_enabled=false; game._paipian_rules_enabled=true; game._spy_rules_enabled=true
 	for p in game.players: p.clear_hand_silent(); p.determined_cards.clear(); p.hp=p.max_hp

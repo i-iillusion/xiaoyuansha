@@ -3,6 +3,7 @@ const Farming=preload("res://Test/i05_david_farming_cases.gd")
 
 func fixture(t):
 	var game=Farming.new().fixture(t)
+	game._corruption_rules_enabled=false # Receipt-only fixture; reaction integration cases explicitly enable Greed.
 	game._extra_draw_receipts_enabled=true
 	for p in game.players: p.hand.clear(); p.determined_cards.clear()
 	return game
@@ -47,6 +48,7 @@ func resources(t):
 	var serial=game._draw_batch_serial
 	t.check(game._draw_blank_cards(p,0)==null and game._draw_batch_serial==serial,"I05c zero-card draw creates no batch or serial")
 	game._extra_draw_receipts_enabled=false
+	game._corruption_rules_enabled=false
 	t.check(game._draw_blank_cards(p,2)==null and p.hand_size()==4 and game._draw_batch_serial==serial,"I05c disabled private capture preserves legacy synchronous draws and allocates no records")
 	await Farming.new().dispose(t,game)
 

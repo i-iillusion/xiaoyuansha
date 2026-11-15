@@ -5,6 +5,7 @@ const StrikeBinding=preload("res://Test/i05_strike_declaration_awakening_cases.g
 const DelayedReveal=preload("res://Test/i05_dragon_delayed_reveal_cases.gd")
 const SunnyAi=preload("res://Test/i05_sunny_ai_cases.gd")
 const CounterCombinations=preload("res://Test/i05_sunny_counter_combinations.gd")
+const PublicOpening=preload("res://Test/i05_sunny_public_opening_cases.gd")
 var checks:=0
 var failures:=0
 func _initialize(): run.call_deferred()
@@ -18,5 +19,6 @@ func run():
 	await DelayedReveal.new().run(self)
 	await SunnyAi.new().run(self)
 	await CounterCombinations.new().run(self)
+	await PublicOpening.new().run(self)
 	print("RESULT: %d asserts, %d failures"%[checks,failures])
 	quit(1 if failures else 0)

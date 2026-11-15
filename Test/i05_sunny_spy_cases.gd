@@ -4,6 +4,7 @@ const Filming=preload("res://Test/i05_sunny_filming_cases.gd")
 
 func fixture(t,count:=5,mode:=GameModes.CLASSIC):
 	var game=load("res://Test/h02_integration_cases.gd").new().fixture(t,count,mode)
+	game._corruption_rules_enabled=false # Isolated active-skill fixture; actual Greed cases explicitly enable it.
 	game.lan_enabled=true
 	game._spy_rules_enabled=true
 	game.turn_manager.current_phase=TurnManager.Phase.PLAY

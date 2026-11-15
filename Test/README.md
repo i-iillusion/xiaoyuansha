@@ -1,5 +1,17 @@
 # 本地无窗口回归（Windows）
 
+## QA-T354 / I05c complete public Sunny candidate
+
+The original 2357-assert Sunny aggregate exceeded the strict 60-second normal wrapper in the final matrix. Its existing modules are now partitioned into `test_i05_sunny_reactions.gd` (skills/batches/rewards) and mandatory `test_i05_sunny_payments.gd` (the six original Q12-Q16 parent modules). Module files and assertions are unchanged; the two counts must sum to 2357. Both local total entry and CI require both groups. Total assertions remain 28395; import plus fifteen groups produce sixteen receipts. No timeout, clock or error predicate changes.
+
+
+`i05_sunny_public_opening_cases.gd` adds 18 mandatory checks through the existing external-loss suite (1117 retained, now 1135). It checks the thirteen-general pool, four-HP data, all default capabilities, protocol 16, real native menu selection, exactly one Filming/Spy action and limited-use state. Previous metadata/pool expectations now describe the public roster; unchanged negative cases still exclude Lucas/Andy. The old reentrant-awakening fixture drives the mandatory answer concurrently and verifies that its joining caller finishes or is invalidated with the original phase.
+
+`test_i05_sunny_network.gd` and `lan_sunny_driver.gd` drive independent ENet peers from ordinary setup and public inputs. A real bow equips unlimited Kill range, a Duel and Kill response injure the source, a real Strike injures Sunny, and Harvest draws a tracked new card. Greed uses actual RPS; Filming pays a real card and heals two recipients; identity modes use Spy through public portraits. Five physical USE/RESPONSE facts complete, no extra skill USE is fabricated, exact hand counts and viewer-specific identities are verified. The eleven CI cases, in a separate job with the unchanged ten-minute job limit, include 3/5 players, host/remote Sunny, cancellations, real base-step/reserve elapsed time, active-window disconnects, and six-player ambitious identity exchange. No hand/HP/identity injection, shortened clock, new LAN AI seat or relaxed timeout is used.
+
+Failure evidence remains in local candidate receipts. Initial pool/menu omissions, older isolated active-skill fixtures encountering the newly enabled Greed prompt, reentrant-awakening test scheduling, one malformed fixture insertion, exact-versus-full skill button text, one unparented test Player cleanup, and mid-PLAY fixture receipt ledgers containing newly captured startup records were corrected without deleting assertions. Natural probes also corrected child-number/assigned-seat confusion, fee-control recognition, and inclusion of the real Duel Kill response in event accounting. Final acceptance requires one new source snapshot, all fifteen groups, the complete old CI matrix plus the new cases and all fifteen modes; earlier probes are not final acceptance.
+
+
 ## 2026-11-15 / QA-T353: Greed, Wrestle, PREP and field counters
 
 `i05_sunny_counter_combinations.gd` adds 229 assertions to the existing mandatory external-loss suite (888 retained; now 1117). Actual Harvest draws feed AI Greed, David's committed Wrestle prevention, and Leo's replacement of the virtual counter Duel. Arbitrary/concrete fees, empty/good-field Nullification, immediate healing despite anti-Nullification, technical invalidation, normal source death and terminal FFA victory are covered. Paid resources and committed prevention do not roll back; events and physical entities complete/discard at most once.

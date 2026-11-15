@@ -4,6 +4,7 @@ const Farming = preload("res://Test/i05_david_farming_cases.gd")
 
 func fixture(t, count := 5):
 	var game = load("res://Test/h02_integration_cases.gd").new().fixture(t,count,GameModes.FREE_FOR_ALL)
+	game._corruption_rules_enabled=false # Isolated active-skill fixture; actual Greed cases explicitly enable it.
 	game.lan_enabled = true
 	game._paipian_rules_enabled = true
 	game.turn_manager.current_phase = TurnManager.Phase.PLAY
@@ -124,7 +125,7 @@ func targets(t):
 	var list: Array[Player] = [dragon,game.players[1]]
 	t.check(game._paipian_target_valid(p,dragon) and await game._execute_paipian(p,list)==1 and dragon.hp==2,"I05c revealed intelligent dragon is a legal healing character")
 	game._paipian_rules_enabled=false
-	t.check(await game._execute_paipian(p,list)==0 and not GeneralData.get_available_random_generals().has(SUNNY),"I05c server capability remains private and does not open a general")
+	t.check(await game._execute_paipian(p,list)==0 and GeneralData.get_available_random_generals().count(SUNNY)==1,"I05c explicitly disabled filming refuses execution even for a public general")
 	await Farming.new().dispose(t,game)
 
 func selection_guards(t):

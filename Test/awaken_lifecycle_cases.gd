@@ -27,10 +27,12 @@ func run(host):
 		var p = setup()
 		game._check_player_awaken(p) # 排队的旧deferred与直接调用重叠。
 		game._do_awaken(p)
-		await game._do_awaken(p)
+		var joined: Array=[]
+		var join=func(): joined.append(await game._do_awaken(p))
+		join.call_deferred()
 		await frames()
 		suite.check(p.max_hp == 2 and p.hand_size() == 2 and p.awaken_effects_applied
-			and game._choice_prompt_stack.size() == 1,
+			and game._choice_prompt_stack.size() == 1 and joined.is_empty(),
 			"E03c：重复直接/延迟觉醒只扣一次上限、摸两张、开一个窗口")
 		var previous = game._choice_prompt_stack[0]
 		if invalidation == "close":
@@ -51,7 +53,8 @@ func run(host):
 		game._choice_prompt_stack[0].answer.submit(2)
 		await frames()
 		suite.check(p.awake_choice == 3 and p.max_hp == 2 and p.hand_size() == 2
-			and game._choice_prompt_stack.is_empty() and not game._awaken_in_progress.has(p),
+			and game._choice_prompt_stack.is_empty() and not game._awaken_in_progress.has(p)
+			and joined == ([GameManager.CHOICE_INVALID] if invalidation=="phase" else [0]),
 			"E03c：新窗口完成真实三选一，旧答复不能污染且清等待状态")
 		await game._do_awaken(p)
 		suite.check(p.max_hp == 2 and p.hand_size() == 2, "E03c：已选完后重复觉醒无额外效果")

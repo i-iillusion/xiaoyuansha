@@ -121,18 +121,16 @@ func _populate():
 				_add_skill_btn(sk.substr(1, 2), sk)
 			elif _farming_skills_enabled and _viewer == _player and sk.begins_with("【种田】"):
 				_add_skill_btn("种田", sk)
+			elif _filming_skills_enabled and _viewer == _player and sk.begins_with("【拍片】"):
+				_add_skill_btn("拍片", sk)
+			elif _spy_skills_enabled and _viewer == _player and sk.begins_with("【间谍】"):
+				_add_skill_btn("间谍", sk + ("（已使用）" if _player.spy_used else ""))
+				_skills_container.get_child(_skills_container.get_child_count()-1).disabled = _player.spy_used
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
 			else:
 				_add_skill_label(sk, Color(0.9, 0.9, 0.7))
-
-	if _filming_skills_enabled and _viewer == _player and _player.general_name == "桑尼·斯派":
-		_add_skill_btn("拍片", "【拍片】出牌阶段，弃置一张手牌，令除自己以外的两名角色各回复1体力")
-
-	if _spy_skills_enabled and _viewer == _player and _player.general_name == "桑尼·斯派":
-		_add_skill_btn("间谍", "【间谍】限定技，交换两名非主公角色的身份" + ("（已使用）" if _player.spy_used else ""))
-		_skills_container.get_child(_skills_container.get_child_count()-1).disabled = _player.spy_used
 
 	# Private metadata fixtures retain the same three actions before publication.
 	if skills.is_empty() and _mountain_skills_enabled and _player.general_name == "吉姆·芒顿":

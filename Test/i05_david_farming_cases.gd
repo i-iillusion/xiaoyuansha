@@ -3,6 +3,11 @@ const DAVID = "大卫·法米尔"
 
 func fixture(t):
 	var game = load("res://Test/h02_integration_cases.gd").new().fixture(t, 5, GameModes.FREE_FOR_ALL)
+	# This is a mid-PLAY resource fixture. Public startup now records initial
+	# deals/normal DRAW too; start the isolated receipt ledger at this prefix.
+	# Ordinary opening capture is tested separately through actual start_game.
+	game._draw_batches.clear()
+	game._draw_batch_serial=0
 	game.lan_enabled = true
 	game._david_rules_enabled = true
 	game._nullify_override = func(): return false
@@ -165,5 +170,5 @@ func resets_and_gate(t):
 		var event = game._record_card_action(p, CardBase.create(CardData.CardSubType.DODGE), CardActionEvent.Kind.RESPONSE)
 		game._complete_card_actions([event])
 	t.check(p.farm_empty_fields == 1 and p.farm_hand_actions == 2, "I05b restored general can start a fresh legal farming pair")
-	t.check(GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 12 and GeneralData.get_implementation_status(DAVID) == "prototype" and LanSession.PROTOCOL == "campus-lan-15", "I05b fully accepted public David appears once with new LAN protocol/pool")
+	t.check(GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 13 and GeneralData.get_implementation_status(DAVID) == "prototype" and LanSession.PROTOCOL == "campus-lan-16", "I05b fully accepted public David appears once with new LAN protocol/pool")
 	await dispose(t, game)
