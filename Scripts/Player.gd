@@ -23,6 +23,10 @@ var identity_revealed: bool = false
 # 武将（以同学为原型）：默认稻草人（5 血无技能）
 var general_name: String = "稻草人"
 
+# I05d-2 private capability; enabled by the server only when Simba opens.
+# Configuration, not general-card state: Sage must not cache lord authority.
+var simba_lord_skill_enabled := false
+
 # 性别（雌雄双股剑判定用）："male" / "female" / "none"（火龙）
 var gender: String = "male"
 
@@ -253,9 +257,11 @@ func restore_game_start_state():
 	life_state = LifeState.ACTIVE
 	hp = max_hp
 
-# 当前手牌上限（弃牌阶段用）：体力 + 破风枪加成 + 圣光白衣加成
+# 当前手牌上限（弃牌阶段用）：体力及现行技能/装备加成。
 func hand_limit() -> int:
 	var bonus = hand_limit_bonus
+	if simba_lord_skill_enabled and general_name == "辛巴·古德曼" and has_lord_skill_authority():
+		bonus += 2
 	# 【圣光白衣】：你的手牌上限+2（锁定被动，装备即生效，失去/替换自动恢复）
 	if get_armor() == CardData.CardSubType.SHENGGUANG_BAIYI:
 		bonus += 2

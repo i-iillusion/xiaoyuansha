@@ -7,6 +7,7 @@ func check(ok:bool,message:String):
 	if not ok: failures+=1
 	print(("PASS: " if ok else "FAIL: ")+message)
 func run():
+	await load("res://Test/i05_simba_lord_cases.gd").new().run(self)
 	await load("res://Test/i05_peter_card_cases.gd").new().run(self)
 	await load("res://Test/i05_peter_skill_cases.gd").new().run(self)
 	await load("res://Test/i05_peter_counter_cases.gd").new().run(self)
