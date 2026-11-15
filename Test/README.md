@@ -1,5 +1,13 @@
 # 本地无窗口回归（Windows）
 
+## 2026-11-15 / QA-T353: Greed, Wrestle, PREP and field counters
+
+`i05_sunny_counter_combinations.gd` adds 229 assertions to the existing mandatory external-loss suite (888 retained; now 1117). Actual Harvest draws feed AI Greed, David's committed Wrestle prevention, and Leo's replacement of the virtual counter Duel. Arbitrary/concrete fees, empty/good-field Nullification, immediate healing despite anti-Nullification, technical invalidation, normal source death and terminal FFA victory are covered. Paid resources and committed prevention do not roll back; events and physical entities complete/discard at most once.
+
+Actual human Bridge field windows check seat authority, stale tokens and UI teardown. These local AI/human fixtures do not claim public Sunny ENet or LAN AI seat support. Native human input and the current AI turn actor are checked separately.
+
+Strict diagnostic baseline `sunny-external-20261115-104425-74eba10b`: 1103 assertions / 40 failures. It reproduced the abandoned-counter parent-completion bug, alongside new-fixture mistakes (native input versus actor, deliberate refusal needed for the death case, and per-target root Nullification windows). Minimal production fix and fixture corrections: `104904-4559456a`, 1112/0. Added normal terminal victory: `105148-ad91620c`, 1117/0. Existing assertions, import/60-second suite deadlines and engine-error checks remain unchanged. Final same-source evidence is recorded under QA-T353.
+
 2026-11-15 / I05c-5c AI：新增`i05_sunny_ai_cases.gd`143项挂既有组合必跑组，745+143=888。普通及真实烂忠厚赠PLAY中，默认AI拍片付1任意/具体牌、按公开缺血选两名合法其他对象，不生成USE；真实5经典/6奸雄开局中间谍随机合法非主公、限定一次、复原后新观察恢复资格，不按暗身份类别选人。值快照不含活对象/Callable，种子及公开状态相同、暗身份排列改变时选人相同；开关、模式、主体/目标复原、手牌/阶段/单位代次、目标死亡和空间快照过期均拒绝旧候选。实际AI贪污赢/输翻面/平局取1/放弃/技术失败/死亡/终局/阶段/重开，以及大卫保牌反击，仍沿共享批次与决斗入口。实际两山隔区、隐身/可见龙与满血第二目标、预大习内贤者摸4立即AI贪污且里奥自身奖励豁免、真实AI决斗致濒死贤者后新帧结束回合均验。
 
 本机AI效果与真人彼得免效通过实际Bridge令牌验证，错座/旧令牌拒绝；此为本机AI与真人响应观察，不冒称多人LAN房间新增AI席位或自然公开Sunny ENet。普通AI展示等待保留0.6秒语义、测试用现有专用时钟；旧帧不收费，新帧重观察后再收费一次并结束阶段。

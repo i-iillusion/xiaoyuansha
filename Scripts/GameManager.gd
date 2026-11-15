@@ -5199,9 +5199,9 @@ func _before_external_card_loss(source: Player, reason: String, losses: Array[Di
 		_history_event("skill", "%s 发动【我要跟你摔角】：防止本次失牌效果" % responder.player_name, responder)
 		var lease = RefCounted.new()
 		_wrestling_resolving[lease.get_instance_id()] = lease
-		await _resolve_wrestling_counter(responder, source)
+		var counter_result = await _resolve_wrestling_counter(responder, source)
 		_wrestling_resolving.erase(lease.get_instance_id())
-		if generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CardLossTransaction.Outcome.INVALIDATED
+		if counter_result == CHOICE_INVALID or generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CardLossTransaction.Outcome.INVALIDATED
 	if generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision(): _input_seat = input_before
 	return result
 
@@ -5232,9 +5232,9 @@ func _wrestling_duel_legal(owner: Player, source: Player) -> bool:
 		and _can_target_body(owner, source) and _mountain_allows_single_declaration(owner, source) \
 		and source.get_armor() != CardData.CardSubType.ZHANQI and not _awake_blocks(source, 2)
 
-func _resolve_wrestling_counter(owner: Player, source: Player):
+func _resolve_wrestling_counter(owner: Player, source: Player) -> int:
 	# Q6/Q10/Q11: prevention remains committed even without a legal Duel target.
-	if not _wrestling_duel_legal(owner, source): return
+	if not _wrestling_duel_legal(owner, source): return 0
 	var revision = turn_manager.get_context_revision()
 	var generation = _dying_lifecycle_generation
 	var general_revision = owner.awakening_revision
@@ -5248,6 +5248,10 @@ func _resolve_wrestling_counter(owner: Player, source: Player):
 	var quota_actor = ActorIdentity.key_for(players, unit_registry, owner)
 	var sub = await _maybe_prep_fixed_effect(owner, source, card.sub_type, valid, replacements, false, roster, quota_actor)
 	await _resolve_prep_effect(owner, [source], sub, actions, replacements, valid, revision, "", roster, true, quota_actor)
+	# The shared dispatcher owns completion, including replacements/counters.
+	# A technically abandoned counter cannot silently complete its paid parent.
+	# Normal victory remains a terminal result, not a technical prompt failure.
+	return 0 if _game_over or actions[0].settlement_completed else CHOICE_INVALID
 
 func _hand_loss_atoms(target: Player, count: int) -> Array[Dictionary]:
 	var selection = HandSelection.new(target)
