@@ -291,6 +291,7 @@ func _render_card_grid_into(box: VBoxContainer, cards: Array, _back_target: Call
 	var g = _make_grid(2)
 	for sub in cards:
 		var btn = _add_btn(g, CardData.get_type_name(sub), _on_sub_chosen.bind(sub))
+		btn.disabled = player != null and player.blocks_delayed_trick(sub)
 		_bind_tooltip(btn, sub)
 	box.add_child(g)
 
@@ -318,6 +319,7 @@ func _add_determined_section(box: VBoxContainer):
 	box.add_child(label)
 	for card in player.determined_cards:
 		var d_btn = _add_btn(box, card.card_name, _on_determined_card_clicked.bind(card))
+		d_btn.disabled = player.blocks_delayed_trick(card.sub_type)
 		_bind_tooltip(d_btn, card.sub_type)
 
 # ============ 选择逻辑 ============
@@ -338,6 +340,7 @@ func _on_variant_chosen(sub: CardData.CardSubType):
 func _on_confirm():
 	if _selected_sub < 0 or _confirm_pending:
 		return
+	if player != null and player.blocks_delayed_trick(_selected_sub): return
 	_confirm_pending = true
 	_hide_tooltip()
 	var tween = create_tween()
@@ -347,6 +350,7 @@ func _on_confirm():
 	queue_free()
 
 func _on_determined_card_clicked(card: CardBase):
+	if player != null and player.blocks_delayed_trick(card.sub_type): return
 	var tween = create_tween()
 	tween.tween_property(self, "modulate", Color(1, 1, 1, 0), 0.1)
 	await tween.finished

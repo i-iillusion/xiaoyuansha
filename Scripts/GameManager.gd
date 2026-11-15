@@ -1359,6 +1359,15 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
 		p.judgment_cards.erase(card)
+		# SI-Q1: judgment fails, not a skipped phase or a new card use.
+		# Recheck the current capability after the existing counter-chain wait.
+		if p.has_wanci():
+			_public_result("%s 的【万磁】使【%s】判定失效" % [p.player_name, card.card_name])
+			if card.sub_type == CardData.CardSubType.LIGHTNING:
+				if _move_lightning(p, card) == p: deferred.append(card)
+			else:
+				deck.discard(card)
+			continue
 		match card.sub_type:
 			CardData.CardSubType.LIGHTNING:
 				if nullified == NullificationOutcome.NULLIFIED:
@@ -1855,6 +1864,7 @@ func _mountain_allows_single_declaration(source: Player, target: Player) -> bool
 
 func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 	var result: Array[Player] = []
+	if p.blocks_delayed_trick(sub): return result
 	for target in _character_targets(p):
 		if not target.is_alive() or _is_kneeling(target) or (target == p and sub != CardData.CardSubType.IRON_CHAIN):
 			continue
@@ -1874,6 +1884,7 @@ func get_trick_targets(p: Player, sub: int) -> Array[Player]:
 	return result
 
 func can_declare_trick(p: Player, sub: int, virtual_payment: bool = false) -> bool:
+	if p.blocks_delayed_trick(sub): return false
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card() or (not virtual_payment and not _has_play_card(p, sub)):
 		return false
 	if sub in TARGET_TRICKS and get_trick_targets(p, sub).is_empty():
@@ -8286,6 +8297,7 @@ func _pay_yes_ah_cost_result(p: Player, allow_final_death: bool = false) -> int:
 
 # 取得本次使用的锦囊资源，不决定其去向。延时锦囊直接入判定区，不能同时进弃牌堆。
 func _take_trick_card(p: Player, sub: CardData.CardSubType) -> CardBase:
+	if p.blocks_delayed_trick(sub): return null
 	if _yes_ah_active:
 		_yes_ah_active = false
 		var revision = turn_manager.get_context_revision()

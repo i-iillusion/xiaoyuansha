@@ -26,6 +26,14 @@ var general_name: String = "稻草人"
 # I05d-2 private capability; enabled by the server only when Simba opens.
 # Configuration, not general-card state: Sage must not cache lord authority.
 var simba_lord_skill_enabled := false
+var simba_wanci_enabled := false
+
+func has_wanci() -> bool:
+	return simba_wanci_enabled and general_name == "辛巴·古德曼" and not is_dead()
+
+func blocks_delayed_trick(sub: int) -> bool:
+	return has_wanci() and sub in [CardData.CardSubType.LIGHTNING, CardData.CardSubType.INDULGENCE,
+		CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP]
 
 # 性别（雌雄双股剑判定用）："male" / "female" / "none"（火龙）
 var gender: String = "male"
