@@ -50,7 +50,7 @@ func pure(t):
 	p.mark_dead()
 	t.check(p.hand_limit() == 9, "I05d final death removes lord-skill authority")
 	p.free()
-	t.check(GeneralData.METADATA_ONLY_GENERALS.has(SIMBA) and not LanSession.GENERALS.has(SIMBA) and LanSession.PROTOCOL == "campus-lan-16", "I05d private implementation leaves public pools and protocol unchanged")
+	t.check(GeneralData.GENERALS.has(SIMBA) and LanSession.GENERALS.count(SIMBA)==1 and LanSession.PROTOCOL == "campus-lan-17", "I05d public Simba source, LAN pool and protocol agree after opening")
 
 func succession(t):
 	var helper = load("res://Test/h03_identity_state_cases.gd").new()

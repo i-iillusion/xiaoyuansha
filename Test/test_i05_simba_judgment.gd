@@ -16,6 +16,7 @@ func run():
 	await load("res://Test/i05_simba_ai_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_lifecycle_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_interaction_cases.gd").new().run(self)
+	await load("res://Test/i05_simba_public_opening_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_judgment_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

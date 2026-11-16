@@ -1032,6 +1032,12 @@ func start_game():
 			p.general_name = assigned_generals[i]
 		else:
 			p.general_name = GameManager.selected_general if i == 0 else "稻草人"
+		# Server-owned public capabilities; no client flag or partial opening.
+		p.simba_lord_skill_enabled = p.general_name == "辛巴·古德曼"
+		p.simba_wanci_enabled = p.general_name == "辛巴·古德曼"
+		p.simba_good_deeds_enabled = p.general_name == "辛巴·古德曼"
+		p.simba_tuanfei_enabled = p.general_name == "辛巴·古德曼"
+		p.simba_emergency_enabled = p.general_name == "辛巴·古德曼"
 		p.max_hp = GeneralData.get_max_hp(p.general_name, player_count)
 		# Classic >=5 baseline: identity bonus is separate from
 		# the general snapshot, and must be set before Player._ready initializes HP.

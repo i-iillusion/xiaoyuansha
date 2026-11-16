@@ -126,6 +126,8 @@ func _populate():
 			elif _spy_skills_enabled and _viewer == _player and sk.begins_with("【间谍】"):
 				_add_skill_btn("间谍", sk + ("（已使用）" if _player.spy_used else ""))
 				_skills_container.get_child(_skills_container.get_child_count()-1).disabled = _player.spy_used
+			elif _viewer == _player and _player.simba_good_deeds_enabled and sk.begins_with("【做好事】"):
+				_add_skill_btn("做好事", sk)
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
@@ -139,7 +141,7 @@ func _populate():
 		_add_skill_btn("聚山", "【聚山】出牌阶段限一次，弃置一张手牌，使较少侧玩家回复1体力，或使较多侧玩家失去1体力")
 
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
-	if _viewer == _player and _player.general_name == "辛巴·古德曼" and _player.simba_good_deeds_enabled:
+	if skills.is_empty() and _viewer == _player and _player.general_name == "辛巴·古德曼" and _player.simba_good_deeds_enabled:
 		_add_skill_btn("做好事", "【做好事】失去1体力，令另一名角色获得1额外体力及1好事标记")
 
 	_clear_container(_equip_container)
@@ -239,7 +241,7 @@ func _populate():
 	var has_marks := false
 	if _player.simba_tuanfei_enabled and _player.general_name == "辛巴·古德曼":
 		var fee = Label.new()
-		fee.text = "团费累计：%d（不足3保留）" % _player.tuanfei_extra_draws
+		fee.text = "团费累计：%d（本轮保留，轮末清零）" % _player.tuanfei_extra_draws
 		_marks_container.add_child(fee)
 		has_marks = true
 	if _player.good_deed_marks > 0:

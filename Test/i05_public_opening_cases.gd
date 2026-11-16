@@ -4,8 +4,8 @@ const Cards=preload("res://Test/i05_peter_card_cases.gd")
 func run(t):
 	var saved=[GameManager.selected_players,GameManager.selected_mode,GameManager.selected_general,GameManager.random_general,GameManager.random_identity,MainMenu.random_mode]
 	t.check(GeneralData.get_implementation_status(Cards.PETER)=="prototype" and GeneralData.get_max_hp(Cards.PETER)==3 and not GeneralData.METADATA_ONLY_GENERALS.has(Cards.PETER),"I05 public Peter has one three-HP playable entry, no metadata duplicate")
-	t.check(GeneralData.get_available_random_generals().size()==13 and GeneralData.get_available_random_generals().count(Cards.PETER)==1 and LanSession.GENERALS.count(Cards.PETER)==1,"I05 thirteen-general random/native/LAN pool includes Peter exactly once")
-	t.check(LanSession.PROTOCOL=="campus-lan-16","I05 capability opening changes protocol, older clients do not silently join")
+	t.check(GeneralData.get_available_random_generals().size()==14 and GeneralData.get_available_random_generals().count(Cards.PETER)==1 and LanSession.GENERALS.count(Cards.PETER)==1,"I05 thirteen-general random/native/LAN pool includes Peter exactly once")
+	t.check(LanSession.PROTOCOL=="campus-lan-17","I05 capability opening changes protocol, older clients do not silently join")
 	MainMenu.random_mode=false
 	var menu=load("res://Scenes/MainMenu.tscn").instantiate()
 	menu.set_script(load("res://Test/leo_menu_observer.gd"))

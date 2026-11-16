@@ -1,5 +1,13 @@
 # 本地无窗口回归（Windows）
 
+## I05d-8 public Simba acceptance
+
+`test_i05_simba_judgment.gd` retains the private skill, AI and lifecycle checks and adds native menu/normal-roster/public-detail checks. The accepted rule source is manual 6.13 plus SI-Q1–Q12; remainder carries inside a round and clears at its end. No new PDF adoption.
+
+`test_i05_simba_network.gd` uses only normal lobby choices, initial dealing and real opaque UI tokens. Kevin's natural Duel/Strike RPS draws supply the other-character extra draws; Simba receives Burning Camp, uses Emergency, repeatedly gives Good Deeds, reclaims the donor's marks during actual dying and receives two real END fee batches. It also checks Wanci's original-card discard, real round cleanup, source/recipient HP and marks, authority/privacy and no forged card USE facts. No HP/hand/phase/mark/identity/clock seeding, no rule/response overrides. Normal public lobby-order choices make the two tested generals adjacent for the handbook distance-1 Burning Camp; the driver then locates actual public generals/space, never assumes client launch order equals seat order. Host/remote, normal/cancel, real 30-second step into reserve, disconnect and ambitious identity profiles retain the 45-second internal/60-second outer limits. Reserve selects a normal decline after observing reserve; full exhaustion is tested by the real timeout callbacks in the mandatory skill suite, not falsely claimed as a 90-second live wait inside a 45-second profile.
+
+The new standalone Simba CI job preserves the four original jobs and all original specs, assertions and 10-minute/120-second/60-second limits. The final candidate also requires all fifteen mode/count configurations plus every existing CI ownership/dragon/mountain/David/Sunny case. Public source is fourteen unique non-placeholder generals and `campus-lan-17`; no EXE is built without a new request.
+
 ## QA-T354 / I05c complete public Sunny candidate
 
 The original 2357-assert Sunny aggregate exceeded the strict 60-second normal wrapper in the final matrix. Its existing modules are now partitioned into `test_i05_sunny_reactions.gd` (skills/batches/rewards) and mandatory `test_i05_sunny_payments.gd` (the six original Q12-Q16 parent modules). Module files and assertions are unchanged; the two counts must sum to 2357. Both local total entry and CI require both groups. Total assertions remain 28395; import plus fifteen groups produce sixteen receipts. No timeout, clock or error predicate changes.

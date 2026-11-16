@@ -57,9 +57,15 @@ func run(t):
 func choose_duel(t,bridge,seat,target):
 	var helper = load("res://Test/i04_aoe_region_cases.gd").new()
 	for text in ["出牌","锦囊牌","普通锦囊","决斗"]: helper.click(t,bridge,seat,text)
-	await t.create_timer(0.15).timeout
+	# Wait for the real CardSelector confirmation tween to finish. A fixed
+	# timer can wake before the tween is processed on a loaded headless frame.
+	# Keep every target/owner/payment assertion and the original suite limit.
+	var ready_deadline = Time.get_ticks_msec() + 1000
+	var token: String = bridge.snapshot(seat).targets.get(str(target), "")
+	while token == "" and Time.get_ticks_msec() < ready_deadline:
+		await t.process_frame
+		token = bridge.snapshot(seat).targets.get(str(target), "")
 	bridge.game._target_confirm_override = func(): return 1
-	var token: String = bridge.snapshot(seat).targets.get(str(target),"")
 	t.check(token != "" and bridge.submit(seat,token), "I04 Q50 actual Duel target command: "+str(target))
 	for i in 3: await t.process_frame
 

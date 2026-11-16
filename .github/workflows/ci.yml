@@ -308,3 +308,65 @@ jobs:
           path: ${{ runner.temp }}/godot-ci-logs/*.log
           if-no-files-found: warn
           retention-days: 7
+
+  simba-network-tests:
+    name: Simba natural ENet (Godot 4.7.2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Prepare log directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/godot-ci-logs"
+          echo "CI_LOG_DIR=$RUNNER_TEMP/godot-ci-logs" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: '4.7.2'
+          use-dotnet: false
+          include-templates: false
+          path: ${{ runner.temp }}/godot
+          downloads-path: ${{ runner.temp }}/godot-downloads
+          bin-path: ${{ runner.temp }}/godot-bin
+
+      - name: Import project
+        run: |
+          set -euo pipefail
+          mkdir -p "$CI_LOG_DIR"
+          godot --version
+          timeout --kill-after=10s 120s godot --headless --path . --editor --import --quit 2>&1 | tee "$CI_LOG_DIR/import.log"
+          if grep -Eq '(^|[[:space:]])(SCRIPT ERROR:|ERROR:|Parse Error:)' "$CI_LOG_DIR/import.log"; then
+            echo '::error::Godot reported errors during project import.'
+            exit 1
+          fi
+
+      - name: Run natural Simba ENet lifecycle cases
+        run: |
+          set -euo pipefail
+          for spec in 'test_i05_simba_network 3' 'test_i05_simba_network 5' 'test_i05_simba_network 3 --host-controller' 'test_i05_simba_network 5 --host-controller' 'test_i05_simba_network 3 --cancel-case' 'test_i05_simba_network 5 --cancel-case' 'test_i05_simba_network 3 --reserve-case' 'test_i05_simba_network 3 --drop-case' 'test_i05_simba_network 5 --drop-case' 'test_i05_simba_network 3 --drop-case --host-controller' 'test_i05_simba_network 6 --mode=ambitious_identity'; do
+            read -r test players extra <<< "$spec"
+            log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
+            status=0
+            timeout --kill-after=10s 60s godot --headless --disable-render-loop --path . --script "Test/$test.gd" -- --players="$players" ${extra:-} 2>&1 | tee "$log" || status=$?
+            if (( status != 0 )) || ! grep -Eq '^RESULT: [1-9][0-9]* asserts, 0 failures[[:space:]]*$' "$log" || grep -Eq 'SCRIPT ERROR|ERROR:|Parse Error|FAIL ' "$log"; then
+              echo "::error::LAN validation failed ($spec, exit $status)."
+              exit 1
+            fi
+          done
+
+      - name: Upload Godot logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: simba-network-logs
+          path: ${{ runner.temp }}/godot-ci-logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
