@@ -354,6 +354,7 @@ var ai_pacer = AiActionPacer.new()
 var _ai_running_revisions: Dictionary = {}
 var _ai_hand_snapshot: HandSelection
 var _ai_terrain_snapshot: Array = []
+var _ai_simba_context: Dictionary = {}
 var _ai_sunny_context: Dictionary = {} # Server-only body epochs; never sent to chooser.
 var _ai_offered_actions: Array = []
 var _ai_response_override: Callable = Callable()
@@ -1835,7 +1836,7 @@ func _choose_ai_response(p: Player, kind: String, options: Array, context: Dicti
 	var selected = await _ai_response_override.call(view, kind, options.duplicate()) if _ai_response_override.is_valid() else ResponsePolicy.choose(view, kind, options)
 	# Preserve technical failure for the new nested draw reaction; -1 alone
 	# means a voluntary decline. Existing response kinds keep their contract.
-	if selected==CHOICE_INVALID and kind in ["corruption_activate","corruption_tie"]: return CHOICE_INVALID
+	if selected==CHOICE_INVALID and kind in ["corruption_activate","corruption_tie", "simba_give", "simba_reclaim", "simba_emergency"]: return CHOICE_INVALID
 	return selected if options.has(selected) else -1
 
 # 规则查询同时供普通出牌和AI使用；策略不会另造次数、距离或支付规则。
@@ -1980,6 +1981,40 @@ func _ai_sunny_action_current(p: Player, action: Dictionary) -> bool:
 		var target=TargetIdentity.resolve_live(players,unit_registry,key)
 		return target.hp<target.max_hp)
 
+func _simba_ai_targets(owner: Player, reclaim: bool = false) -> Array[Player]:
+	var targets: Array[Player] = []
+	for target in _character_targets(owner):
+		if _good_deed_target_allowed(owner, target, reclaim): targets.append(target)
+	return targets
+
+func _simba_ai_choice(owner: Player, targets: Array[Player], reclaim: bool = false) -> int:
+	var view = _ai_observation(owner)
+	view["response"] = {"targets": targets.map(func(p): return TargetIdentity.key_for(players, unit_registry, p))}
+	return SimbaPolicy.choose(view, "simba_reclaim" if reclaim else "simba_give", range(targets.size()))
+
+func _simba_ai_target_states(owner: Player, targets: Array[Player]) -> Array:
+	return targets.map(func(p): return [p.awakening_revision, p.hp, p.max_hp, p.good_deed_marks, PlayerObservation.visible_identity(p, owner)])
+
+func _capture_ai_simba_context(owner: Player):
+	_ai_simba_context = {}
+	if not _simba_deeds_enabled(owner) or not _can_use_play_skill(owner) or _play_skill_execution_busy(): return
+	var targets = _simba_ai_targets(owner)
+	if _simba_ai_choice(owner, targets) < 0: return
+	_ai_simba_context = {"owner": owner, "general": owner.awakening_revision, "hp": owner.hp,
+		"max_hp": owner.max_hp, "identity": owner.identity, "registry": unit_registry.generation(),
+		"lifecycle": _dying_lifecycle_generation, "targets": targets,
+		"states": _simba_ai_target_states(owner, targets)}
+
+func _ai_simba_action_current(owner: Player, action: Dictionary) -> bool:
+	if not _ai_offered_actions.has(action) or _ai_simba_context.is_empty(): return false
+	var context = _ai_simba_context
+	return context.owner == owner and _simba_deeds_enabled(owner) and _can_use_play_skill(owner) \
+		and not _play_skill_execution_busy() and owner.awakening_revision == context.general \
+		and owner.hp == context.hp and owner.max_hp == context.max_hp and owner.identity == context.identity \
+		and context.lifecycle == _dying_lifecycle_generation and context.registry == unit_registry.generation() \
+		and _ai_terrain_snapshot == terrain_markers() and context.targets == _simba_ai_targets(owner) \
+		and context.states == _simba_ai_target_states(owner, context.targets)
+
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat: Variant = observation.actor
@@ -1991,9 +2026,12 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_hand_snapshot = HandSelection.new(p)
 	_ai_terrain_snapshot = terrain_markers()
 	_capture_ai_sunny_context(p)
+	_capture_ai_simba_context(p)
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
 	var choices: Array = []
+	if not _ai_simba_context.is_empty():
+		choices.append({"skill": "good_deed", "sub": -1, "target": -1, "priority": 96})
 	if p.general_name=="桑尼·斯派":
 		for skill in ["paipian","spy"]:
 			var targets=_ai_sunny_targets(p,skill)
@@ -2077,6 +2115,9 @@ func _execute_ai_action(action: Dictionary):
 			or action.actor != turn_manager.get_play_actor_key() or action.revision != turn_manager.get_context_revision() \
 			or p.hand != _ai_hand_snapshot.hand or p.determined_cards != _ai_hand_snapshot.determined:
 		return
+	if action.get("skill", "") == "good_deed":
+		if _ai_simba_action_current(p, action): await _perform_good_deed(p)
+		return
 	if action.get("skill", "") == "farming_upgrade":
 		if _ai_farming_upgrade_eligible(p): await _activate_farming_upgrade(p)
 		return
@@ -2134,6 +2175,7 @@ func _run_ai_play(actor: Player):
 			if _ai_terrain_snapshot != terrain_markers(): return false
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
 			if action.get("skill","") in ["paipian","spy"]: return _ai_sunny_action_current(actor,action)
+			if action.get("skill", "") == "good_deed": return _ai_simba_action_current(actor, action)
 			if target == null: return true
 			if not is_instance_valid(target) or not _has_damage_target_body(target) or not target.is_alive(): return false
 			if TargetIdentity.resolve_live(players, unit_registry, action.target) != target: return false
@@ -10284,7 +10326,7 @@ func _try_simba_emergency(target: Player, chain: EffectChain) -> int:
 		if _simba_emergency_choice_override.is_valid():
 			choice = await _simba_emergency_choice_override.call(owner, target, valid)
 		elif not _is_human(owner):
-			choice = -1 # Conservative policy is added in I05d-7 through this entry.
+			choice = await _choose_ai_response(owner, "simba_emergency", [0], {"target": TargetIdentity.key_for(players, unit_registry, target)})
 		else:
 			_set_input_player(owner)
 			choice = await _show_choice_popup("是否发动【急救】：失去1体力，令%s获得1额外体力和1好事？" % target.player_name, ["发动急救"], valid)
@@ -10322,7 +10364,8 @@ func _choose_good_deed_target(owner: Player, candidates: Array[Player], reclaim:
 	if _simba_deed_choice_override.is_valid():
 		choice = await _simba_deed_choice_override.call(owner, candidates.duplicate(), reclaim, allowed)
 	elif not _is_human(owner):
-		choice = -1 # AI selection is added only in I05d-7, through this same entry.
+		choice = await _choose_ai_response(owner, "simba_reclaim" if reclaim else "simba_give", range(candidates.size()),
+			{"targets": candidates.map(func(p): return TargetIdentity.key_for(players, unit_registry, p))})
 	else:
 		var prompt = GoodDeedPrompt.new()
 		$UI.add_child(prompt)

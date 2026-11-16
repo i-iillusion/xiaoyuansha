@@ -3,6 +3,7 @@ class_name ResponsePolicy
 extends RefCounted
 
 static func choose(view: Dictionary, kind: String, options: Array) -> int:
+	if kind in ["simba_give", "simba_reclaim", "simba_emergency"]: return SimbaPolicy.choose(view, kind, options)
 	if options.is_empty():
 		return -1
 	if kind in ["basic", "awaken", "corruption_activate", "corruption_tie"]:
