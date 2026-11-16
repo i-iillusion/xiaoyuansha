@@ -4,6 +4,7 @@ class_name RoundLedger
 extends RefCounted
 
 signal space_relocated(seat: int, before: int)
+signal round_finished(number: int)
 
 enum Kind { ORDINARY, EXTRA }
 var round_id := 0
@@ -56,6 +57,7 @@ func begin_next(live: Array[int]) -> int:
 	# Final deaths count as processed without inventing a turn for the dead.
 	_pending = _pending.filter(func(seat): return live.has(seat))
 	if _pending.is_empty():
+		if round_id > 0: round_finished.emit(round_id)
 		round_id += 1
 		round_head = live.min()
 		_pending.assign(live)

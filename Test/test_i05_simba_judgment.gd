@@ -10,6 +10,7 @@ func run():
 	await load("res://Test/i05_simba_good_deed_state_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_good_deed_flow_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_tuanfei_cases.gd").new().run(self)
+	await load("res://Test/i05_simba_tuanfei_end_cases.gd").new().run(self)
 	await load("res://Test/i05_simba_judgment_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

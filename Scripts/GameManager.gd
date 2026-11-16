@@ -52,6 +52,10 @@ var _paipian_selection_general := -1
 var _paipian_pending: Dictionary = {}
 var _simba_deed_pending: Dictionary = {}
 var _simba_deed_choice_override: Callable = Callable()
+var _tuanfei_end_frames: Dictionary = {}
+var _tuanfei_round_ledger: RoundLedger
+var _tuanfei_round_generation := -1
+var _tuanfei_round_callback: Callable = Callable()
 var _david_rules_enabled := true
 var _farming_upgrade_pending: Dictionary = {}
 var _farming_peach_pending: Dictionary = {}
@@ -2219,6 +2223,19 @@ func _do_discard(pid: int):
 	turn_manager.advance_phase()
 
 func _do_end(pid: int):
+	if _game_over or turn_manager.current_phase != TurnManager.Phase.END \
+		or pid != turn_manager.current_player_idx or not turn_manager._standalone_play_frame.is_empty(): return
+	var generation = _dying_lifecycle_generation
+	var revision = turn_manager.get_context_revision()
+	var turn = turn_manager.turn_id
+	var key = "%d:%d" % [generation, turn]
+	if _tuanfei_end_frames.has(key): return
+	var frame = {"state": "waiting"}
+	_tuanfei_end_frames[key] = frame
+	var valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+		and revision == turn_manager.get_context_revision() and turn == turn_manager.turn_id \
+		and turn_manager.current_phase == TurnManager.Phase.END and pid == turn_manager.current_player_idx \
+		and is_same(_tuanfei_end_frames.get(key), frame)
 	_play_btn.visible = false
 	_end_play_btn.visible = false
 	_cancel_target_btn.visible = false
@@ -2239,7 +2256,31 @@ func _do_end(pid: int):
 	_is_meiyong_targeting = false
 	_refresh_status_line()
 	_update_debug("%s 回合结束" % _phase_actor(pid).player_name)
+	# Q7/Q11: dead turn holders and flipped whole-turn skips still settle.
+	# The real counter-response continuation must finish before next_turn.
+	if await _settle_tuanfei_end(valid) == CHOICE_INVALID or not valid.call():
+		frame.state = "invalid"
+		return
+	frame.state = "finished"
 	turn_manager.advance_phase()
+
+func _ensure_tuanfei_round_connection():
+	var ledger = turn_manager.rounds
+	if ledger == null: return
+	if ledger == _tuanfei_round_ledger and _tuanfei_round_generation == _dying_lifecycle_generation: return
+	if is_instance_valid(_tuanfei_round_ledger) and _tuanfei_round_callback.is_valid() \
+		and _tuanfei_round_ledger.round_finished.is_connected(_tuanfei_round_callback):
+		_tuanfei_round_ledger.round_finished.disconnect(_tuanfei_round_callback)
+	_tuanfei_round_ledger = ledger
+	_tuanfei_round_generation = _dying_lifecycle_generation
+	_tuanfei_round_callback = _clear_tuanfei_round.bind(ledger, _dying_lifecycle_generation)
+	ledger.round_finished.connect(_tuanfei_round_callback)
+
+func _clear_tuanfei_round(_number: int, ledger: RoundLedger, generation: int):
+	if _game_over or generation != _dying_lifecycle_generation or ledger != turn_manager.rounds: return
+	# Q12: ordinary END retains remainder; only the ledger's real round
+	# transition clears it, after attached/extra actors have completed.
+	for p in players: p.tuanfei_extra_draws = 0
 
 func _tuanfei_enabled(p: Player) -> bool:
 	return is_instance_valid(p) and players.has(p) and not p.is_dead() \
@@ -2253,13 +2294,15 @@ func _record_tuanfei_draw(drawer: Player, count: int, context: ExtraDrawBatch.Co
 		# Q6/Q9: snapshot region eligibility at the actual physical draw.
 		# This observes facts, not a target declaration or a transferable receipt.
 		if not _mountain_effect_reaches(_retained_effect_anchor(observer), drawer): continue
+		_ensure_tuanfei_round_connection()
 		observer.tuanfei_extra_draws += count
 
-# Private payout primitive only. END parent integration waits for Q11; calling
-# this directly never advances phases or treats a technical END as a rule event.
+# The END parent owns serialization/phase authorization; this primitive never
+# advances phases. Q11/Q12 now define skips and the round remainder boundary.
 func _settle_tuanfei_end(allowed: Callable) -> int:
 	for observer in players:
 		if not allowed.call(): return CHOICE_INVALID
+		if _tuanfei_enabled(observer): _ensure_tuanfei_round_connection()
 		if not _tuanfei_enabled(observer) or not observer.is_alive() or observer.tuanfei_extra_draws < 3: continue
 		var reward = floori(observer.tuanfei_extra_draws / 3.0)
 		observer.tuanfei_extra_draws %= 3
