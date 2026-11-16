@@ -14,6 +14,8 @@ var from_strike: bool = false
 var is_chain: bool = false
 var committed: bool = false
 var sacrifice_offered: bool = false
+# One optional Simba reaction for one committed damage instance, not per HP.
+var emergency_offered: bool = false
 var transfer_target: Player
 var transfer_amount: int = 0
 var transferred_damage: DamageRecord

@@ -52,6 +52,7 @@ var _paipian_selection_general := -1
 var _paipian_pending: Dictionary = {}
 var _simba_deed_pending: Dictionary = {}
 var _simba_deed_choice_override: Callable = Callable()
+var _simba_emergency_choice_override: Callable = Callable()
 var _tuanfei_end_frames: Dictionary = {}
 var _tuanfei_round_ledger: RoundLedger
 var _tuanfei_round_generation := -1
@@ -7687,6 +7688,13 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 	if event_name == "damage_applied":
 		_update_debug("%s 受到 %d 点伤害" % [subject.player_name, data["damage"]])
 		_sync_all_ui()
+		# SI-Q4: offer Emergency before ordinary rescue of the damage victim.
+		if await _try_simba_emergency(subject, chain) == CHOICE_INVALID:
+			chain.continuation_invalid = true
+			return true
+		if _game_over:
+			chain.terminal_complete = true
+			return true
 		if subject.is_dying():
 			await _resolve_dying(subject, source, "damage", chain)
 		# before_death checkpoint 也可能救回目标；重查被普通救援延后的终局。
@@ -10242,6 +10250,60 @@ func _execute_paipian(p: Player, targets: Array[Player]) -> int:
 	if is_same(_paipian_pending,lease): _paipian_pending = {}
 	_restore_input_owner()
 	return result
+
+# I05d-6: optional reaction to one committed damage instance, before rescue.
+func _simba_emergency_enabled(owner: Player) -> bool:
+	return is_instance_valid(owner) and _has_character_body(owner) and not owner.is_dead() \
+		and owner.simba_emergency_enabled and owner.general_name == "辛巴·古德曼" and not _is_kneeling(owner)
+
+func _emergency_target_allowed(owner: Player, target: Player) -> bool:
+	return is_instance_valid(target) and _has_character_body(target) and not target.is_dead() \
+		and not _is_kneeling(target) and _can_target_body(owner, target) \
+		and _mountain_effect_reaches(_retained_effect_anchor(owner), target)
+
+func _try_simba_emergency(target: Player, chain: EffectChain) -> int:
+	var record = chain.damage
+	if record == null or not record.committed or record.applied_amount <= 0 or record.emergency_offered: return 0
+	record.emergency_offered = true
+	for owner in players:
+		if not _simba_emergency_enabled(owner) or not _emergency_target_allowed(owner, target): continue
+		var generation = _dying_lifecycle_generation
+		var revision = turn_manager.get_context_revision()
+		var owner_general = owner.awakening_revision
+		var target_general = target.awakening_revision
+		var registry = unit_registry.generation()
+		var space = terrain_markers()
+		var states = [owner.hp, target.hp, target.good_deed_marks]
+		var valid = func(): return not _game_over and generation == _dying_lifecycle_generation \
+			and revision == turn_manager.get_context_revision() and _simba_emergency_enabled(owner) \
+			and owner_general == owner.awakening_revision and target_general == target.awakening_revision \
+			and registry == unit_registry.generation() and space == terrain_markers() \
+			and states == [owner.hp, target.hp, target.good_deed_marks] \
+			and record == chain.damage and record.target == target and _emergency_target_allowed(owner, target)
+		var choice: int
+		if _simba_emergency_choice_override.is_valid():
+			choice = await _simba_emergency_choice_override.call(owner, target, valid)
+		elif not _is_human(owner):
+			choice = -1 # Conservative policy is added in I05d-7 through this entry.
+		else:
+			_set_input_player(owner)
+			choice = await _show_choice_popup("是否发动【急救】：失去1体力，令%s获得1额外体力和1好事？" % target.player_name, ["发动急救"], valid)
+		if not valid.call() or choice not in [-1, 0]: return CHOICE_INVALID
+		if choice == -1: continue
+		owner.hp -= 1
+		target.receive_good_deed()
+		_history_event("skill", "%s 发动【急救】：失去1体力，%s获得1额外体力和1好事" % [owner.player_name, target.player_name], owner, [target])
+		_sync_all_ui()
+		# SI-Q3b: recipient effect commits before the cost payer's rescue.
+		# For self-use the net HP change is zero; retain the original damage
+		# parent and source for any still-needed rescue, rather than replace it.
+		if owner != target:
+			if await _resolve_dying(owner, null, "emergency_cost") == CHOICE_INVALID: return CHOICE_INVALID
+		if generation != _dying_lifecycle_generation or revision != turn_manager.get_context_revision(): return CHOICE_INVALID
+		_restore_input_owner()
+		return 1
+	_restore_input_owner()
+	return 0
 
 # I05d-4: private active skill and pre-rescue mark recovery. Optional prompts
 # use one original countdown throughout target selection and confirmation.

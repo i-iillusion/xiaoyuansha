@@ -29,6 +29,7 @@ var simba_lord_skill_enabled := false
 var simba_wanci_enabled := false
 var simba_good_deeds_enabled := false
 var simba_tuanfei_enabled := false
+var simba_emergency_enabled := false
 var tuanfei_extra_draws: int = 0
 var good_deed_marks: int = 0
 
