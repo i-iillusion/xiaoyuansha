@@ -23,6 +23,23 @@ var identity_revealed: bool = false
 # 武将（以同学为原型）：默认稻草人（5 血无技能）
 var general_name: String = "稻草人"
 
+# I05e-2a: private server capability, not a restored general-card field.
+# Public opening and the actual Jiegui action/trigger are later gates.
+var sally_jiegui_enabled := false
+
+func has_jiegui() -> bool:
+	return sally_jiegui_enabled and general_name == "萨利·赛克斯" \
+		and not is_dead() and not unit_disappeared
+
+# Effect qualification only: never synthesize an equipment instance, name claim,
+# attack-range bonus or Borrowed Sword target. A hidden weapon occupies the slot.
+func has_virtual_chixiong_effect() -> bool:
+	return has_jiegui() and not equipment.has("weapon")
+
+func has_chixiong_effect() -> bool:
+	if is_dead() or unit_disappeared: return false
+	return get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU or has_virtual_chixiong_effect()
+
 # I05d-2 private capability; enabled by the server only when Simba opens.
 # Configuration, not general-card state: Sage must not cache lord authority.
 var simba_lord_skill_enabled := false

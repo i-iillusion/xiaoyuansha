@@ -1,5 +1,9 @@
 # 本地无窗口回归（Windows）
 
+## I05e-2a private Sally qualification
+
+`test_i05_sally_foundation.gd` is mandatory in the local runner and core CI job. It checks the private server capability, empty/real/hidden weapon slots, gender, Sage restoration and stale/dead/disappeared bodies, plus the real Borrowed Sword target query and a real-weapon positive control (SA-Q9). These are qualification primitives only: no Sally public roster, actual Chixiong trigger, voluntary equipment-discard UI or full skill/network implementation is claimed. Adopted SA-Q1–Q9 are recorded in manual 6.19; later substeps follow the Sally audit. All old suites, assertions and time limits remain required.
+
 ## I05d-8 public Simba acceptance
 
 `test_i05_simba_judgment.gd` retains the private skill, AI and lifecycle checks and adds native menu/normal-roster/public-detail checks. The accepted rule source is manual 6.13 plus SI-Q1–Q12; remainder carries inside a round and clears at its end. No new PDF adoption.

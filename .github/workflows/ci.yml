@@ -90,7 +90,7 @@ jobs:
       - name: Run legacy rule and ownership suites
         run: |
           set -euo pipefail
-          for spec in 'test_i05_simba_judgment 2' 'test_i05_sunny_external_losses 2' 'test_i05_david_opening 2' 'test_i05_david_reactions 2' 'test_i05_effects 2' 'test_i05_sunny_payments 2' 'test_i05_sunny_reactions 2' 'test_i04 2' 'test_i04_responses 2' 'test_i03 2' 'test_i02 2' 'test_i01 2' 'test_h03 2' 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2'; do
+          for spec in 'test_i05_sally_foundation 2' 'test_i05_simba_judgment 2' 'test_i05_sunny_external_losses 2' 'test_i05_david_opening 2' 'test_i05_david_reactions 2' 'test_i05_effects 2' 'test_i05_sunny_payments 2' 'test_i05_sunny_reactions 2' 'test_i04 2' 'test_i04_responses 2' 'test_i03 2' 'test_i02 2' 'test_i01 2' 'test_h03 2' 'test_h02 2' 'test_h01_layout 2' 'test_ai_pace 2' 'test_action_history 2' 'test_playtest_feedback 2' 'test_ui_scale 2' 'test_identity_visibility 2' 'test_lan 2'; do
             read -r test players extra <<< "$spec"
             log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
             status=0
