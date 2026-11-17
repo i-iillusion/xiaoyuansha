@@ -23,6 +23,7 @@ func run(t):
 			await t.process_frame
 			t.check(result.is_empty() and game._choice_prompt_stack.size() == 1 and bridge.input_owner() == seat, "I05e3 private woman owns one real timed window for host/remote")
 			var prompt = game._choice_prompt_stack.back().overlay
+			t.check(not game._sally_woman_target_allowed(owner,owner) and token(bridge,seat,"目标："+owner.player_name) == "", "I05e3 SA-Q12 Woman excludes self in authoritative validation and host/remote target buttons")
 			var target_token = token(bridge,seat,"目标："+target.player_name)
 			t.check(target_token != "" and not bridge.submit((seat+1)%5,target_token) and bridge.submit(seat,target_token), "I05e3 target selection is restricted to actual input peer")
 			game._step_remaining = 7.0
@@ -79,7 +80,10 @@ func gifted_and_guards(t,helper):
 	var result: Array = []; begin(game,owner,result); await t.process_frame
 	var prompt = game._choice_prompt_stack.back().overlay
 	var buttons = prompt.find_children("*","Button",true,false)
-	buttons[1].pressed.emit(); buttons[5].pressed.emit(); prompt.confirm.pressed.emit()
+	var target_button = buttons.filter(func(b): return b.text == "目标："+game.players[1].player_name)
+	var fee_button = buttons.filter(func(b): return b.text == "弃牌1：任意牌（未具体化）")
+	t.check(target_button.size() == 1 and fee_button.size() == 1, "I05e3 granted PLAY selects an actual other target and original fee after self exclusion")
+	target_button[0].pressed.emit(); fee_button[0].pressed.emit(); prompt.confirm.pressed.emit()
 	for i in 3: await t.process_frame
 	t.check(result == [1] and game.players[1].gender == "female" and owner.hand_size() == 0, "I05e3 real granted PLAY accepts one confirmed Woman fee")
 	t.check(game.turn_manager.complete_standalone_phase(frame) and game.turn_manager.current_player_idx == 1, "I05e3 gender action restores suspended parent START")

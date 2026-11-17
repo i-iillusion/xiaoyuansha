@@ -21,7 +21,7 @@ func setup(names: Array[String], snapshot: HandSelection):
 	box.custom_minimum_size = Vector2(600, 0)
 	center.add_child(box)
 	var title = Label.new()
-	title.text = "【女人】选择角色及弃置的1张手牌，确认后使其变为女性"
+	title.text = "【女人】选择其他角色及弃置的1张手牌，确认后使其变为女性"
 	box.add_child(title)
 	var scroll = ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(600, 360)

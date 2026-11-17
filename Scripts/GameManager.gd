@@ -9299,7 +9299,7 @@ func _can_use_play_skill(p: Player) -> bool:
 
 # SA-Q8: the target and original hand fee share one optional PLAY prompt.
 func _sally_woman_target_allowed(owner: Player, target: Player) -> bool:
-	return is_instance_valid(target) and _has_character_body(target) and target.is_alive() \
+	return is_instance_valid(target) and target != owner and _has_character_body(target) and target.is_alive() \
 		and not _is_kneeling(target) and _can_target_body(owner, target) \
 		and _mountain_effect_reaches(_retained_effect_anchor(owner), target)
 
