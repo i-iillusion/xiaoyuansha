@@ -1176,6 +1176,8 @@ func _on_phase_changed(old_phase: TurnManager.Phase, new_phase: TurnManager.Phas
 	# 胜负已分：不再推进任何阶段逻辑（当前结算链由各调用方的 _game_over 检查自行收尾）
 	if _game_over:
 		return
+	if new_phase == TurnManager.Phase.START:
+		_advance_sally_round_effects()
 	# 当前效果已返回并请求推进时，最终死亡者不再获得摸牌/出牌/弃牌。
 	# 不在伤害窗口中跳回合，以免吞掉当前判定/群体效果的后续结算。
 	if new_phase in [TurnManager.Phase.DRAW, TurnManager.Phase.PLAY, TurnManager.Phase.DISCARD] \
@@ -1226,6 +1228,8 @@ func _do_start_pending(pid: int, generation: int):
 		var accepted = fire_dragon_state.note_skipped_turn(turn_manager.current_unit_id, turn_manager.turn_id) if turn_manager.skip_full_turn \
 			else fire_dragon_state.begin_turn(turn_manager.current_unit_id, turn_manager.turn_id)
 		if not accepted: return
+	if SallySmokingState.enabled(p):
+		SallySmokingState.start_turn(p,turn_manager.turn_id,turn_manager.skip_full_turn)
 	_update_debug("%s 回合开始（手牌 %d 张）" % [p.player_name, p.hand_size()])
 	# 每回合重置回合级标志（治疗权杖桃计数 / 酒层数——狂暴战斧装备者的酒跨回合保留）
 	_reset_turn_flags()
@@ -2281,6 +2285,8 @@ func _do_end(pid: int):
 	var generation = _dying_lifecycle_generation
 	var revision = turn_manager.get_context_revision()
 	var turn = turn_manager.turn_id
+	var ending_body = _phase_actor(pid)
+	SallySmokingState.enter_end(ending_body,turn,turn_manager.skip_full_turn)
 	var key = "%d:%d" % [generation, turn]
 	if _tuanfei_end_frames.has(key): return
 	var frame = {"state": "waiting"}
@@ -2315,6 +2321,7 @@ func _do_end(pid: int):
 		frame.state = "invalid"
 		return
 	frame.state = "finished"
+	SallySmokingState.end_turn(ending_body,turn,turn_manager.skip_full_turn)
 	turn_manager.advance_phase()
 
 func _ensure_tuanfei_round_connection():
@@ -7750,9 +7757,12 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 				else:
 					_public_result("%s 使用【舍己为人】：防止 %s 的此次伤害，随后承受独立新伤害" % [substitute.player_name, subject.player_name])
 				return true
+		record.smoking_hp_protected = _sally_hp_is_protected(subject)
 
 	if event_name == "damage_applied":
 		_update_debug("%s 受到 %d 点伤害" % [subject.player_name, data["damage"]])
+		if record.smoking_hp_protected:
+			_public_result("%s 的【抽烟】保护体力：伤害仍成立，体力不降低" % subject.player_name)
 		_sync_all_ui()
 		# SI-Q4: offer Emergency before ordinary rescue of the damage victim.
 		if await _try_simba_emergency(subject, chain) == CHOICE_INVALID:
@@ -9306,9 +9316,27 @@ func _can_use_sally_turn_skill(owner: Player) -> bool:
 	return _can_use_play_skill(owner) and turn_manager._standalone_play_frame.is_empty() \
 		and _phase_actor(turn_manager.current_player_idx) == owner
 
+func _advance_sally_round_effects():
+	if _game_over or turn_manager.rounds == null: return
+	for p in players:
+		if SallySmokingState.advance_round(p,turn_manager.rounds.round_id):
+			_history_event("skill","%s 的【肺部手术】在新一轮生效" % p.player_name,p)
+
+func _sally_hp_is_protected(p: Player) -> bool:
+	var outside = not _mountain_judgment_contexts.is_empty() or turn_manager.skip_full_turn \
+		or _phase_actor(turn_manager.current_player_idx) != p
+	return SallySmokingState.protects_hp(p,outside)
+
+func _lose_non_cost_hp(p: Player, amount: int):
+	if amount <= 0: return
+	if _sally_hp_is_protected(p):
+		_public_result("%s 的【抽烟】保护体力，未失去体力" % p.player_name)
+	else: p.hp -= amount
+
 func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 	if not is_instance_valid(owner) or not _can_use_sally_turn_skill(owner) or not _is_human(owner) \
 		or _play_skill_execution_busy(): return SallySkillOutcome.DECLINED
+	_advance_sally_round_effects()
 	if operation:
 		if not SallySmokingState.can_operate(owner) or owner.hand_size() < 1: return SallySkillOutcome.DECLINED
 	elif not SallySmokingState.can_smoke(owner): return SallySkillOutcome.DECLINED
@@ -9349,7 +9377,7 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 			if paid.size() != 1: result = CHOICE_INVALID
 			else:
 				if paid[0] != null: deck.discard(paid[0])
-				SallySmokingState.note_operation_paid(owner)
+				SallySmokingState.note_operation_paid(owner,turn_manager.rounds.round_id if turn_manager.rounds != null else -1)
 				_history_event("skill","%s 发动【肺部手术】：弃置1手牌，等待下一轮生效" % owner.player_name,owner)
 				result = SallySkillOutcome.APPLIED
 		else:
@@ -9702,7 +9730,7 @@ func _activate_jushan(p: Player) -> int:
 					if immune == 1: continue
 					if key == "heal": target.heal(1)
 					else:
-						target.hp -= 1 # Loss, not damage: no source, damage weapon or Sacrifice.
+						_lose_non_cost_hp(target,1) # No damage fact; active fees use their own direct HP payment.
 						_sync_all_ui()
 						if target.is_dying() and await _resolve_dying(target,null,"jushan") == CHOICE_INVALID:
 							result = CHOICE_INVALID; break
@@ -10641,8 +10669,10 @@ func _try_reclaim_good_deeds(owner: Player, allowed: Callable) -> int:
 		if selected == -1: break
 		var target = candidates[selected]
 		if not valid.call() or not _good_deed_target_allowed(owner, target, true): return CHOICE_INVALID
-		var amount = owner.reclaim_good_deeds_from(target)
-		_history_event("skill", "%s 回收%s的%d个【好事】：扣除其%d体力，自己回复%d体力" % [owner.player_name, target.player_name, amount, amount, amount], owner, [target])
+		var hp_protected = _sally_hp_is_protected(target)
+		var amount = owner.reclaim_good_deeds_from(target,hp_protected)
+		var target_result = "其体力受【抽烟】保护" if hp_protected else "扣除其%d体力" % amount
+		_history_event("skill", "%s 回收%s的%d个【好事】：%s，自己回复%d体力" % [owner.player_name, target.player_name, amount, target_result, amount], owner, [target])
 		_sync_all_ui()
 		# SI-Q5b: the owner is already healed before nested target rescue.
 		if owner.is_alive() and target.is_dying():

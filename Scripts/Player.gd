@@ -40,6 +40,7 @@ var sally_smoke_last_start := -1
 var sally_smoke_last_end := -1
 var sally_surgery_pending := false
 var sally_surgery_active := false
+var sally_surgery_due_round := -1
 # General-card history is per actual body, never per general name/controller.
 var sally_first_dealt: Dictionary = {}
 var sally_first_taken := false
@@ -96,12 +97,12 @@ func receive_good_deed() -> bool:
 	hp += 1
 	return true
 
-func reclaim_good_deeds_from(target: Player) -> int:
+func reclaim_good_deeds_from(target: Player, protect_target_hp: bool = false) -> int:
 	if is_dead() or unit_disappeared or not is_instance_valid(target) \
 			or target.is_dead() or target.unit_disappeared or target.good_deed_marks <= 0: return 0
 	var amount = target.good_deed_marks
 	target.good_deed_marks = 0
-	target.hp -= amount
+	if not protect_target_hp: target.hp -= amount
 	# SI-Q5b: recover the owner before the caller resolves the target's dying.
 	heal(amount)
 	return amount
@@ -132,6 +133,7 @@ var _game_start_state: Dictionary = {}
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken", "sally_first_dealt", "sally_first_taken",
 	"sally_smoke_uses", "sally_smoke_active", "sally_smoke_pending_boost", "sally_boost_turn",
 	"sally_female_end_turn", "sally_smoke_last_start", "sally_smoke_last_end", "sally_surgery_pending", "sally_surgery_active",
+	"sally_surgery_due_round",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
 	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks", "tuanfei_extra_draws"]

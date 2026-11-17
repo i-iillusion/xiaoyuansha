@@ -13,6 +13,7 @@ var applied_amount: int = 0
 var from_strike: bool = false
 var is_chain: bool = false
 var committed: bool = false
+var smoking_hp_protected := false
 var sacrifice_offered: bool = false
 # One optional Simba reaction for one committed damage instance, not per HP.
 var emergency_offered: bool = false
@@ -60,6 +61,9 @@ func commit() -> bool:
 	# prevented original never commits. Do this before any nested HP reactions.
 	if source != null: source.note_sally_damage_to(target)
 	target.note_sally_damage_taken()
-	target.take_damage(amount)
+	if smoking_hp_protected:
+		events.append("smoking_hp_protected")
+	else:
+		target.take_damage(amount)
 	hp_after = target.hp
 	return true
