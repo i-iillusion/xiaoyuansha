@@ -28,6 +28,18 @@ var general_name: String = "稻草人"
 var sally_jiegui_enabled := false
 var sally_lieqi_enabled := false
 var sally_woman_enabled := false
+var sally_smoking_enabled := false
+var sally_surgery_enabled := false
+# I05e-4a private state only; actual payment/rescue/turn hooks remain gated.
+var sally_smoke_uses := 0
+var sally_smoke_active := false
+var sally_smoke_pending_boost := false
+var sally_boost_turn := -1
+var sally_female_end_turn := -1
+var sally_smoke_last_start := -1
+var sally_smoke_last_end := -1
+var sally_surgery_pending := false
+var sally_surgery_active := false
 # General-card history is per actual body, never per general name/controller.
 var sally_first_dealt: Dictionary = {}
 var sally_first_taken := false
@@ -118,6 +130,8 @@ var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
 const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken", "sally_first_dealt", "sally_first_taken",
+	"sally_smoke_uses", "sally_smoke_active", "sally_smoke_pending_boost", "sally_boost_turn",
+	"sally_female_end_turn", "sally_smoke_last_start", "sally_smoke_last_end", "sally_surgery_pending", "sally_surgery_active",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
 	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks", "tuanfei_extra_draws"]
