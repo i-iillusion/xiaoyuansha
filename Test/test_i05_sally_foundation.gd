@@ -11,5 +11,8 @@ func check(ok: bool, message: String):
 
 func run():
 	await load("res://Test/i05_sally_foundation_cases.gd").new().run(self)
+	await load("res://Test/i05_sally_jiegui_cases.gd").new().run(self)
+	await load("res://Test/i05_sally_discard_cases.gd").new().run(self)
+	await load("res://Test/i05_sally_jiegui_bridge_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

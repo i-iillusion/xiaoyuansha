@@ -1,8 +1,10 @@
 # 本地无窗口回归（Windows）
 
-## I05e-2a private Sally qualification
+## I05e-2 private Sally Jiegui
 
-`test_i05_sally_foundation.gd` is mandatory in the local runner and core CI job. It checks the private server capability, empty/real/hidden weapon slots, gender, Sage restoration and stale/dead/disappeared bodies, plus the real Borrowed Sword target query and a real-weapon positive control (SA-Q9). These are qualification primitives only: no Sally public roster, actual Chixiong trigger, voluntary equipment-discard UI or full skill/network implementation is claimed. Adopted SA-Q1–Q9 are recorded in manual 6.19; later substeps follow the Sally audit. All old suites, assertions and time limits remain required.
+`test_i05_sally_foundation.gd` is mandatory in the local runner and core CI job. It retains the 34 qualification assertions and covers actual real/virtual Chixiong triggers, pre-commit reset/equipment/gender invalidation, final-source-death continuation, committed draw/Corruption and ordinary target awakening, plus voluntary own-PLAY equipment discard. A separate non-restored reset revision distinguishes Sage restoration from a normal awakening after paid discard. Actual shared-countdown prompts cover selection, confirmation, decline, timeout callbacks, technical invalidation, original resources, equipment-loss effects and granted PLAY. Host/remote bridge cases use real portrait/skill/response buttons and opaque commands, including concrete target hand payment, wrong-seat rejection and stale tokens. Fixtures explicitly prepare equipment/acting boundaries; they do not claim natural Sally ENet play. The public roster/protocol and other Sally skills remain gated. Adopted SA-Q1–Q9 are recorded in manual 6.19; later substeps follow the Sally audit. All old suites, assertions and time limits remain required.
+
+Technical Chixiong interruption must abandon the original completion receipt; a normal decision not to activate still completes the Strike. An actual Leo wielding a real Chixiong sword checks this through awarded Prep tokens, in addition to virtual-source invalidation cases. Already-paid cards remain discarded in both branches.
 
 ## I05d-8 public Simba acceptance
 

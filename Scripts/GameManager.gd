@@ -51,6 +51,7 @@ var _paipian_selection_actor: Player
 var _paipian_selection_general := -1
 var _paipian_pending: Dictionary = {}
 var _simba_deed_pending: Dictionary = {}
+var _jiegui_discard_pending: Dictionary = {}
 var _simba_deed_choice_override: Callable = Callable()
 var _simba_emergency_choice_override: Callable = Callable()
 var _tuanfei_end_frames: Dictionary = {}
@@ -3681,16 +3682,25 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 
 	# 雌雄双股剑：使用【杀】指定异性目标后，可令其选择：弃一张手牌 / 令你摸一张牌
 	# 时机在目标响应（出闪）之前，先于伤害结算（与方天画戟互斥武器，正常不会同时触发）
-	if target.is_alive() and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU and p.is_opposite_gender_to(target) \
+	if target.is_alive() and p.has_chixiong_effect() and p.is_opposite_gender_to(target) \
 			and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD:
 		var original_weapon = p.get_equipment_card("weapon")
+		var virtual_source = p.has_virtual_chixiong_effect()
+		var source_general = p.general_name
+		var source_reset = p.general_reset_revision
+		var target_reset = target.general_reset_revision
+		var genders = [p.gender, target.gender]
+		var lifecycle = _dying_lifecycle_generation
 		var revision = turn_manager.get_context_revision()
 		var hit_valid = func():
 			return not _game_over and revision == turn_manager.get_context_revision() \
+				and lifecycle == _dying_lifecycle_generation \
 				and _has_character_body(target) and target.is_alive()
 		var choice_valid = func():
 			return hit_valid.call() and _has_character_body(p) and p.is_alive() \
-				and p.get_weapon() == CardData.CardSubType.CHIXIONG_SHUANGGU \
+				and p.has_chixiong_effect() and p.has_virtual_chixiong_effect() == virtual_source \
+				and p.general_name == source_general and p.general_reset_revision == source_reset \
+				and target.general_reset_revision == target_reset and [p.gender, target.gender] == genders \
 				and p.get_equipment_card("weapon") == original_weapon and p.is_opposite_gender_to(target) \
 				and target.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		var activate = 1
@@ -3702,6 +3712,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 		if p.is_dead():
 			return true # TIME-04：已用杀余伤继续无源，不继续雌雄选择。
 		if activate == CHOICE_INVALID or not choice_valid.call():
+			invalid_out.append(true)
 			return false
 		if activate == 1:
 			var resolved = await _resolve_chixiong(p, target, choice_valid, invalid_out)
@@ -3710,6 +3721,7 @@ func _prepare_strike_target(p: Player, target: Player, ignore_restrictions: bool
 			if p.is_dead():
 				return true # TIME-04：目标选择期间来源死亡，不吞掉剩余无源伤害。
 			if not resolved:
+				if invalid_out.is_empty(): invalid_out.append(true)
 				return false # Resolver owns pre-confirmation checks; committed reaction may remove the weapon.
 
 	return true
@@ -9244,6 +9256,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _jiegui_discard_pending.is_empty(): return true
 	if not _simba_deed_pending.is_empty(): return true
 	if not _paipian_pending.is_empty(): return true
 	if not _farming_peach_pending.is_empty(): return true
@@ -9278,6 +9291,51 @@ func _can_use_play_skill(p: Player) -> bool:
 	return not _game_over and is_instance_valid(p) and _has_character_body(p) and p.is_alive() \
 		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
+
+# SA-Q6/Q8: an optional own-PLAY action, including a genuinely granted PLAY.
+# Selection and confirmation stay in one prompt and share one real countdown.
+func _perform_jiegui_discard(p: Player) -> int:
+	if not is_instance_valid(p) or not p.has_jiegui() or not _can_use_play_skill(p) \
+			or _play_skill_execution_busy() or not _is_human(p): return 0
+	var slots: Array[String] = []
+	for slot in p.get_equip_slots():
+		if _equipment_resource_for_pick(p, slot) != null: slots.append(slot)
+	if slots.is_empty(): return 0
+	var originals = slots.map(func(slot): return _equipment_resource_for_pick(p, slot))
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var lease = {"owner": p}
+	_jiegui_discard_pending = lease
+	var revision = turn_manager.get_context_revision()
+	var lifecycle = _dying_lifecycle_generation
+	var epoch = p.awakening_revision
+	var valid = func(): return is_same(_jiegui_discard_pending, lease) and not _game_over \
+		and lifecycle == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+		and _has_character_body(p) and p.has_jiegui() and p.awakening_revision == epoch \
+		and _can_use_play_skill(p) and slots.map(func(slot): return _equipment_resource_for_pick(p, slot)) == originals
+	var prompt = JieguiDiscardPrompt.new()
+	$UI.add_child(prompt)
+	var names: Array[String] = []
+	for slot in slots:
+		names.append("%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(p.equipment[slot])])
+	prompt.setup(names)
+	var answer = ChoicePromptAnswer.new()
+	prompt.answered.connect(answer.submit)
+	_set_input_player(p)
+	var choice = await _wait_choice_prompt(prompt, answer, valid)
+	var result = 0
+	if choice == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID
+	elif choice >= 0:
+		if choice >= slots.size(): result = CHOICE_INVALID
+		else:
+			var card = p.remove_equipment(slots[choice])
+			deck.discard(card)
+			_history_event("skill", "%s 发动【姐贵】：弃置【%s】" % [p.player_name, CardData.get_type_name(card.sub_type)], p)
+			_sync_all_ui()
+			result = 1
+	if is_same(_jiegui_discard_pending, lease): _jiegui_discard_pending = {}
+	_restore_input_owner()
+	return result
 
 func _activate_farming_upgrade(p: Player) -> int:
 	if not _david_rules_enabled or not _can_use_play_skill(p) or not players.has(p) \
@@ -13773,6 +13831,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "姐贵":
+		await _perform_jiegui_discard(owner_player)
+		return
 	if skill_key == "做好事":
 		await _perform_good_deed(owner_player)
 		return

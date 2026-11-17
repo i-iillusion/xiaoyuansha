@@ -191,6 +191,9 @@ var hidden_equip_card: CardBase = null
 # 【觉醒】（史蒂芬·彼特先斯）：觉醒技已发动 / 觉醒三选一（1=不能成为【杀】的目标，2=不能成为【决斗】的目标，3=不能成为【南蛮入侵】和【万箭齐发】的目标）
 # 代次只用于拒绝旧异步答复，不属于可复原的游戏效果。
 var awakening_revision: int = 0
+# A real general-card reset differs from an ordinary awakening caused by a
+# committed response/payment. It must invalidate old optional selections.
+var general_reset_revision: int = 0
 var awaken_effects_applied: bool = false
 var awoken: bool = false:
 	set(value):
@@ -297,6 +300,7 @@ func capture_game_start_state():
 		_game_start_state[field] = get(field)
 
 func restore_game_start_state():
+	general_reset_revision += 1
 	awakening_revision += 1 # 即便复原前后标记同值，也使旧窗口失效。
 	assert(not _game_start_state.is_empty(), "缺少开局武将快照，不能猜测复活状态")
 	for field in GENERAL_STATE_FIELDS:
