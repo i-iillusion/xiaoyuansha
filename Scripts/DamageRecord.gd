@@ -56,6 +56,10 @@ func commit() -> bool:
 	committed = true
 	hp_before = target.hp
 	applied_amount = amount
+	# SA-Q10/Q11: count actual damage, including propagation/transfers; a
+	# prevented original never commits. Do this before any nested HP reactions.
+	if source != null: source.note_sally_damage_to(target)
+	target.note_sally_damage_taken()
 	target.take_damage(amount)
 	hp_after = target.hp
 	return true

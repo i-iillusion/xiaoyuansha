@@ -52,6 +52,7 @@ var _paipian_selection_general := -1
 var _paipian_pending: Dictionary = {}
 var _simba_deed_pending: Dictionary = {}
 var _jiegui_discard_pending: Dictionary = {}
+var _sally_woman_pending: Dictionary = {}
 var _simba_deed_choice_override: Callable = Callable()
 var _simba_emergency_choice_override: Callable = Callable()
 var _tuanfei_end_frames: Dictionary = {}
@@ -7595,6 +7596,7 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		var actual = chain.target_player
 		if subject == null or record.is_chain:
 			return false
+		data["value"] += subject.sally_source_bonus(actual)
 		var weapon = subject.get_weapon()
 		var weapon_enabled = actual.get_armor() != CardData.CardSubType.QINGGANG_SHIELD
 		if record.from_strike and weapon_enabled:
@@ -7683,6 +7685,8 @@ func _on_chain_trigger(chain: EffectChain, event_name: String, subject: Player, 
 		record.target_modifiers_applied = true
 		if subject == null or subject.is_dead():
 			return true
+		if subject.has_sally_lieqi() and not subject.sally_first_taken:
+			data["value"] += 1
 		if _is_mountain_body(subject):
 			if not _has_damage_target_body(subject): return true
 			if chain.damage_element != EffectChain.DamageType.PHYSICAL:
@@ -9256,6 +9260,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _sally_woman_pending.is_empty(): return true
 	if not _jiegui_discard_pending.is_empty(): return true
 	if not _simba_deed_pending.is_empty(): return true
 	if not _paipian_pending.is_empty(): return true
@@ -9292,8 +9297,68 @@ func _can_use_play_skill(p: Player) -> bool:
 		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
 
-# SA-Q6/Q8: an optional own-PLAY action, including a genuinely granted PLAY.
-# Selection and confirmation stay in one prompt and share one real countdown.
+# SA-Q8: the target and original hand fee share one optional PLAY prompt.
+func _sally_woman_target_allowed(owner: Player, target: Player) -> bool:
+	return is_instance_valid(target) and _has_character_body(target) and target.is_alive() \
+		and not _is_kneeling(target) and _can_target_body(owner, target) \
+		and _mountain_effect_reaches(_retained_effect_anchor(owner), target)
+
+func _perform_sally_woman(owner: Player) -> int:
+	if not is_instance_valid(owner) or not owner.has_sally_woman() or not _can_use_play_skill(owner) \
+		or owner.hand_size() == 0 or _play_skill_execution_busy() or not _is_human(owner): return 0
+	var candidates: Array[Player] = []
+	for target in _character_targets(owner):
+		if _sally_woman_target_allowed(owner, target): candidates.append(target)
+	if candidates.is_empty(): return 0
+	var snapshot = HandSelection.new(owner)
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var registry = unit_registry.generation()
+	var space = terrain_markers()
+	var epoch = owner.general_reset_revision
+	var target_states = candidates.map(func(p): return [p.general_reset_revision, p.gender])
+	var lease = {"owner": owner}
+	_sally_woman_pending = lease
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var valid = func(): return is_same(_sally_woman_pending, lease) and not _game_over \
+		and revision == turn_manager.get_context_revision() and generation == _dying_lifecycle_generation \
+		and registry == unit_registry.generation() and space == terrain_markers() \
+		and _has_character_body(owner) and owner.has_sally_woman() and _can_use_play_skill(owner) \
+		and epoch == owner.general_reset_revision and snapshot.hand == owner.hand and snapshot.determined == owner.determined_cards \
+		and candidates.all(func(p): return _sally_woman_target_allowed(owner,p)) \
+		and target_states == candidates.map(func(p): return [p.general_reset_revision,p.gender])
+	var prompt = SallyWomanPrompt.new()
+	$UI.add_child(prompt)
+	var names: Array[String] = []
+	for target in candidates: names.append(target.player_name)
+	prompt.setup(names, snapshot)
+	var answer = ChoicePromptAnswer.new()
+	prompt.answered.connect(answer.submit)
+	_set_input_player(owner)
+	var choice = await _wait_choice_prompt(prompt, answer, valid)
+	var result = 0
+	if choice == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID
+	elif choice >= 0:
+		var target_index = choice / snapshot.cards.size()
+		var card_index = choice % snapshot.cards.size()
+		if target_index >= candidates.size(): result = CHOICE_INVALID
+		else:
+			var indices: Array[int] = [card_index]
+			var paid = snapshot.take(indices, 1)
+			if paid.size() != 1: result = CHOICE_INVALID
+			else:
+				if paid[0] != null: deck.discard(paid[0])
+				var target = candidates[target_index]
+				target.gender = "female"
+				_history_event("skill", "%s 发动【女人】：弃置1手牌，使%s变为女性" % [owner.player_name,target.player_name], owner, [target])
+				_sync_all_ui()
+				result = 1
+	if is_same(_sally_woman_pending, lease): _sally_woman_pending = {}
+	_restore_input_owner()
+	return result
+
+# SA-Q6/Q8: own PLAY, including a genuinely granted PLAY; one countdown.
 func _perform_jiegui_discard(p: Player) -> int:
 	if not is_instance_valid(p) or not p.has_jiegui() or not _can_use_play_skill(p) \
 			or _play_skill_execution_busy() or not _is_human(p): return 0
@@ -13831,6 +13896,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key == "女人":
+		await _perform_sally_woman(owner_player)
+		return
 	if skill_key == "姐贵":
 		await _perform_jiegui_discard(owner_player)
 		return

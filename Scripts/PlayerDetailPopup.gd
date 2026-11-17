@@ -130,6 +130,8 @@ func _populate():
 				_add_skill_btn("做好事", sk)
 			elif _viewer == _player and _player.has_jiegui() and sk.begins_with("【姐贵】"):
 				_add_skill_btn("姐贵", sk)
+			elif _viewer == _player and _player.has_sally_woman() and sk.begins_with("【女人】"):
+				_add_skill_btn("女人", sk)
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
@@ -145,6 +147,8 @@ func _populate():
 	# 装备区：只显示名字，悬停浮现效果描述；顺序 = 武器 → 防具 → 坐骑
 	if skills.is_empty() and _viewer == _player and _player.has_jiegui():
 		_add_skill_btn("姐贵", "【姐贵】出牌阶段，主动弃置自己的一件装备；无武器牌时视为装备雌雄双股剑")
+	if skills.is_empty() and _viewer == _player and _player.has_sally_woman():
+		_add_skill_btn("女人", "【女人】出牌阶段，弃置1张手牌，使一名角色变为女性")
 	if skills.is_empty() and _viewer == _player and _player.general_name == "辛巴·古德曼" and _player.simba_good_deeds_enabled:
 		_add_skill_btn("做好事", "【做好事】失去1体力，令另一名角色获得1额外体力及1好事标记")
 

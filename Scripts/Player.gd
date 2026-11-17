@@ -26,6 +26,32 @@ var general_name: String = "稻草人"
 # I05e-2a: private server capability, not a restored general-card field.
 # Public opening and the actual Jiegui action/trigger are later gates.
 var sally_jiegui_enabled := false
+var sally_lieqi_enabled := false
+var sally_woman_enabled := false
+# General-card history is per actual body, never per general name/controller.
+var sally_first_dealt: Dictionary = {}
+var sally_first_taken := false
+
+func has_sally_lieqi() -> bool:
+	return sally_lieqi_enabled and general_name == "萨利·赛克斯" and not is_dead() and not unit_disappeared
+
+func has_sally_woman() -> bool:
+	return sally_woman_enabled and general_name == "萨利·赛克斯" and not is_dead() and not unit_disappeared
+
+func sally_source_bonus(target: Player) -> int:
+	var bonus = 0
+	if has_sally_lieqi() and not sally_first_dealt.has(target.get_instance_id()): bonus += 1
+	if has_sally_woman() and gender in ["male", "female"] and gender == target.gender: bonus += 1
+	return bonus
+
+func note_sally_damage_to(target: Player):
+	if not has_sally_lieqi(): return
+	# Copy-on-write preserves the opening snapshot's empty history on restoration.
+	sally_first_dealt = sally_first_dealt.duplicate()
+	sally_first_dealt[target.get_instance_id()] = true
+
+func note_sally_damage_taken():
+	if has_sally_lieqi(): sally_first_taken = true
 
 func has_jiegui() -> bool:
 	return sally_jiegui_enabled and general_name == "萨利·赛克斯" \
@@ -91,7 +117,7 @@ var unit_disappeared: bool = false
 var _game_start_state: Dictionary = {}
 # 武将牌自身状态；身份、手牌和装备不属于此快照。
 # 将来新增技能状态须在此登记，才能随【贤者的加护】一并复原。
-const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken",
+const GENERAL_STATE_FIELDS = ["general_name", "gender", "awoken", "sally_first_dealt", "sally_first_taken",
 	"awake_choice", "awaken_effects_applied", "kneeling", "kneel_used", "facedown", "shensu_penalty",
 	"shensu_used_this_turn", "prep_tokens", "fire_dragon_eggs", "jim_mountains_started", "jim_rebuild_pending",
 	"farm_empty_fields", "farm_good_fields", "farm_action_turn", "farm_hand_actions", "wrestle_round", "spy_used", "good_deed_marks", "tuanfei_extra_draws"]
