@@ -7,6 +7,7 @@ var selected: Array[int] = []
 var required := 1
 var fallback: Array[int] = []
 var confirm: Button
+var heading := ""
 
 func setup(snapshot: HandSelection, count: int, mandatory: bool):
 	required = count
@@ -25,7 +26,7 @@ func setup(snapshot: HandSelection, count: int, mandatory: bool):
 	box.custom_minimum_size = Vector2(520, 0)
 	center.add_child(box)
 	var title = Label.new()
-	title.text = "选择弃置 %d 张手牌（%s）" % [count, "必须弃牌" if mandatory else "技能费用，可取消"]
+	title.text = heading if not heading.is_empty() else "选择弃置 %d 张手牌（%s）" % [count, "必须弃牌" if mandatory else "技能费用，可取消"]
 	box.add_child(title)
 	var scroll = ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(520, 300)

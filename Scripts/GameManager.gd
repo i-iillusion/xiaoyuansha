@@ -53,6 +53,8 @@ var _paipian_pending: Dictionary = {}
 var _simba_deed_pending: Dictionary = {}
 var _jiegui_discard_pending: Dictionary = {}
 var _sally_woman_pending: Dictionary = {}
+var _sally_skill_pending: Dictionary = {}
+enum SallySkillOutcome { DECLINED, APPLIED, RESET_TERMINATED, COST_FATAL }
 var _simba_deed_choice_override: Callable = Callable()
 var _simba_emergency_choice_override: Callable = Callable()
 var _tuanfei_end_frames: Dictionary = {}
@@ -9260,6 +9262,7 @@ var _play_skill_selection_generation: int = 0
 
 # 序列化主动出牌技能入口；响应、觉醒与保命仍可在原执行中正常发生。
 func _play_skill_execution_busy(continuing_zhuangbi: int = -1) -> bool:
+	if not _sally_skill_pending.is_empty(): return true
 	if not _sally_woman_pending.is_empty(): return true
 	if not _jiegui_discard_pending.is_empty(): return true
 	if not _simba_deed_pending.is_empty(): return true
@@ -9297,7 +9300,75 @@ func _can_use_play_skill(p: Player) -> bool:
 		and turn_manager.can_play_card() and _play_actor() == p \
 		and not _is_kneeling(p)
 
-# SA-Q8: the target and original hand fee share one optional PLAY prompt.
+# Q8/Q14: optional skill payment and its rescue continuation share one lease.
+func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
+	if not is_instance_valid(owner) or not _can_use_play_skill(owner) or not _is_human(owner) \
+		or _play_skill_execution_busy(): return SallySkillOutcome.DECLINED
+	if operation:
+		if not SallySmokingState.can_operate(owner) or owner.hand_size() < 1: return SallySkillOutcome.DECLINED
+	elif not SallySmokingState.can_smoke(owner): return SallySkillOutcome.DECLINED
+	var revision = turn_manager.get_context_revision()
+	var generation = _dying_lifecycle_generation
+	var epoch = owner.general_reset_revision
+	var state = [owner.hp,owner.gender,owner.sally_smoke_uses,owner.sally_surgery_pending,owner.sally_surgery_active]
+	var fee = SallySmokingState.cost(owner)
+	var snapshot = HandSelection.new(owner)
+	var lease = {"owner": owner, "operation": operation}
+	_sally_skill_pending = lease
+	for child in _detail_popup_root.get_children(): child.queue_free()
+	_detail_popup_root.visible = false
+	var continuation = func(): return is_same(_sally_skill_pending,lease) and not _game_over \
+		and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
+		and _has_character_body(owner) and _can_use_play_skill(owner) and epoch == owner.general_reset_revision
+	var valid = func(): return continuation.call() and SallySmokingState.enabled(owner) \
+		and state == [owner.hp,owner.gender,owner.sally_smoke_uses,owner.sally_surgery_pending,owner.sally_surgery_active] \
+		and (SallySmokingState.can_operate(owner) and snapshot.hand == owner.hand and snapshot.determined == owner.determined_cards if operation else SallySmokingState.can_smoke(owner) and fee == SallySmokingState.cost(owner))
+	_set_input_player(owner)
+	var choice: int
+	var selected: Array[int] = []
+	if operation:
+		var prompt = HandDiscardPrompt.new()
+		prompt.heading = "【肺部手术】选择弃置1张手牌，确认后从下个回合开始免除抽烟体力费用"
+		$UI.add_child(prompt)
+		prompt.setup(snapshot,1,false)
+		var answer = ChoicePromptAnswer.new()
+		prompt.answered.connect(func(indices): selected.assign(indices); answer.submit(0 if indices.size() == 1 else -1))
+		choice = await _wait_choice_prompt(prompt,answer,valid)
+	else:
+		choice = await _show_choice_popup("【抽烟】第%d次：确认后失去%d体力；获救后变为男性并建立抽烟状态" % [owner.sally_smoke_uses+1,fee], ["确认抽烟"], valid)
+	var result = SallySkillOutcome.DECLINED
+	if choice == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID
+	elif choice == 0:
+		if operation:
+			var paid = snapshot.take(selected,1)
+			if paid.size() != 1: result = CHOICE_INVALID
+			else:
+				if paid[0] != null: deck.discard(paid[0])
+				SallySmokingState.note_operation_paid(owner)
+				_history_event("skill","%s 发动【肺部手术】：弃置1手牌，等待下个回合生效" % owner.player_name,owner)
+				result = SallySkillOutcome.APPLIED
+		else:
+			SallySmokingState.note_payment(owner)
+			owner.hp -= fee
+			_history_event("skill","%s 发动【抽烟】：第%d次，支付%d体力" % [owner.player_name,owner.sally_smoke_uses,fee],owner)
+			_sync_all_ui()
+			var rescue = await _resolve_dying(owner,null,"sally_smoking_cost")
+			if generation != _dying_lifecycle_generation or rescue == CHOICE_INVALID: result = CHOICE_INVALID
+			elif epoch != owner.general_reset_revision:
+				result = SallySkillOutcome.RESET_TERMINATED # Q14: never rebuild smoke after Sage.
+			elif owner.is_dead(): result = SallySkillOutcome.COST_FATAL
+			elif not continuation.call(): result = CHOICE_INVALID
+			elif SallySmokingState.establish_after_rescue(owner):
+				result = SallySkillOutcome.APPLIED
+				_public_result("%s 变为男性并进入【抽烟】状态" % owner.player_name)
+			else: result = CHOICE_INVALID
+	elif choice != -1: result = CHOICE_INVALID
+	if is_same(_sally_skill_pending,lease): _sally_skill_pending = {}
+	_sync_all_ui()
+	_restore_input_owner()
+	return result
+
+# Q8/Q12: the target and original hand fee share one optional Woman prompt.
 func _sally_woman_target_allowed(owner: Player, target: Player) -> bool:
 	return is_instance_valid(target) and target != owner and _has_character_body(target) and target.is_alive() \
 		and not _is_kneeling(target) and _can_target_body(owner, target) \
@@ -13896,6 +13967,9 @@ func _on_detail_popup_closed():
 # 详情弹窗技能点击：目前有【下跪】（布鲁斯·萨维奇）/【苕】（安普提·斯丢皮得）/【装逼】（史蒂芬·彼特先斯）/【校园霸主】（杰基·斯特朗）可交互
 func _on_detail_skill_clicked(skill_key: String, owner_player: Player):
 	if owner_player != _local_player(): return
+	if skill_key in ["抽烟","肺部手术"]:
+		await _perform_sally_smoking(owner_player,skill_key == "肺部手术")
+		return
 	if skill_key == "女人":
 		await _perform_sally_woman(owner_player)
 		return

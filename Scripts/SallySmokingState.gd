@@ -19,8 +19,8 @@ static func note_payment(p: Player) -> bool:
 	p.sally_smoke_uses += 1
 	return true
 
-# No counter write here: Q14 must decide how Sage interacts with the pending
-# caller. A raw state helper cannot choose whether that old caller may resume.
+# No counter write here. Under Q14 the GM terminates the old caller on Sage;
+# this raw helper cannot authorize that caller to resume after restoration.
 static func establish_after_rescue(p: Player) -> bool:
 	if not enabled(p) or not p.is_alive(): return false
 	p.gender = "male"
