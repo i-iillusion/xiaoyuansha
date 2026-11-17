@@ -17,6 +17,7 @@ var _mountain_skills_enabled: bool = false
 var _farming_skills_enabled: bool = false
 var _filming_skills_enabled: bool = false
 var _spy_skills_enabled: bool = false
+var _sally_turn_actions_allowed := true
 # 悬停效果描述浮层
 var _tooltip: PanelContainer
 var _tooltip_label: Label
@@ -33,7 +34,7 @@ var _tooltip_label: Label
 @onready var _close_btn: Button = $Panel/CloseBtn
 
 # 静态方法：创建一个新的详情弹窗
-static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false, farming_skills_enabled: bool = false, filming_skills_enabled: bool = false, spy_skills_enabled: bool = false) -> PlayerDetailPopup:
+static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: Player = null, mountain_skills_enabled: bool = false, farming_skills_enabled: bool = false, filming_skills_enabled: bool = false, spy_skills_enabled: bool = false, sally_turn_actions_allowed: bool = true) -> PlayerDetailPopup:
 	var scene = load("res://Scenes/PlayerDetailPopup.tscn")
 	if scene == null:
 		# 代码兜底：直接实例化
@@ -45,6 +46,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 		popup._farming_skills_enabled = farming_skills_enabled
 		popup._filming_skills_enabled = filming_skills_enabled
 		popup._spy_skills_enabled = spy_skills_enabled
+		popup._sally_turn_actions_allowed = sally_turn_actions_allowed
 		parent.add_child(popup)
 		return popup
 
@@ -56,6 +58,7 @@ static func create(parent: Node, player: Player, wine_stacks: int = 0, viewer: P
 	popup._farming_skills_enabled = farming_skills_enabled
 	popup._filming_skills_enabled = filming_skills_enabled
 	popup._spy_skills_enabled = spy_skills_enabled
+	popup._sally_turn_actions_allowed = sally_turn_actions_allowed
 	parent.add_child(popup)
 	return popup
 
@@ -133,7 +136,7 @@ func _populate():
 			elif _viewer == _player and _player.has_sally_woman() and sk.begins_with("【女人】"):
 				_add_skill_btn("女人", sk)
 			elif _viewer == _player and SallySmokingState.enabled(_player) and (sk.begins_with("【抽烟】") or (sk.begins_with("【肺部手术】") and _player.sally_surgery_enabled)):
-				_add_skill_btn("抽烟" if sk.begins_with("【抽烟】") else "肺部手术",sk)
+				_add_sally_turn_skill("抽烟" if sk.begins_with("【抽烟】") else "肺部手术",sk)
 			# 【无谋】：下跪状态下技能失效 → 灰色
 			elif sk.begins_with("【无谋】") and _player.general_name == "布鲁斯·萨维奇" and _player.kneeling:
 				_add_skill_label(sk, Color(0.55, 0.55, 0.6))
@@ -152,9 +155,9 @@ func _populate():
 	if skills.is_empty() and _viewer == _player and _player.has_sally_woman():
 		_add_skill_btn("女人", "【女人】出牌阶段，弃置1张手牌，使一名其他角色变为女性")
 	if skills.is_empty() and _viewer == _player and SallySmokingState.enabled(_player):
-		_add_skill_btn("抽烟", "【抽烟】女性时出牌阶段发动，失去X体力，获救后变为男性并建立状态")
+		_add_sally_turn_skill("抽烟", "【抽烟】女性时，本人完整回合的出牌阶段发动；获赠阶段不能发动")
 		if _player.sally_surgery_enabled:
-			_add_skill_btn("肺部手术", "【肺部手术】累计抽烟三次后，弃置1手牌，从下个回合开始免除抽烟体力费用")
+			_add_sally_turn_skill("肺部手术", "【肺部手术】累计抽烟三次后，本人完整回合出牌阶段弃置1手牌；获赠阶段不能发动")
 	if skills.is_empty() and _viewer == _player and _player.general_name == "辛巴·古德曼" and _player.simba_good_deeds_enabled:
 		_add_skill_btn("做好事", "【做好事】失去1体力，令另一名角色获得1额外体力及1好事标记")
 
@@ -310,6 +313,12 @@ func _clear_container(c: Container):
 		child.queue_free()
 
 # 普通技能行（不可点击）
+func _add_sally_turn_skill(key: String, description: String):
+	if _sally_turn_actions_allowed:
+		_add_skill_btn(key, description)
+	else:
+		_add_skill_label(description + "（仅本人完整回合的出牌阶段）", Color(0.65, 0.65, 0.7))
+
 func _add_skill_label(sk: String, color: Color):
 	var skill_label = Label.new()
 	skill_label.text = "· %s" % sk

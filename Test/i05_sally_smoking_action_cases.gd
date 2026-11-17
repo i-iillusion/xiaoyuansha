@@ -104,10 +104,8 @@ func guards_and_gift(t,helper):
 	game.turn_manager.current_phase = TurnManager.Phase.START
 	var frame = game.turn_manager.begin_standalone_phase(0,TurnManager.Phase.PLAY)
 	var result: Array = []; begin(game,owner,false,result); await t.process_frame
-	game._choice_prompt_stack.back().overlay.find_children("*","Button",true,false)[0].pressed.emit()
-	for i in 3: await t.process_frame
-	t.check(result == [1] and owner.hp == 2 and owner.sally_smoke_active, "I05e4b1 actual granted PLAY permits confirmed smoke cost and state")
-	t.check(game.turn_manager.complete_standalone_phase(frame) and game.turn_manager.current_player_idx == 1, "I05e4b1 smoking returns to suspended giver START")
+	t.check(result == [0] and owner.hp == 3 and not owner.sally_smoke_active and owner.gender == "female" and owner.sally_smoke_uses == 0 and game._choice_prompt_stack.is_empty(), "I05e4b1 Q15 actual granted PLAY refuses smoke without payment, state or prompt")
+	t.check(game.turn_manager.complete_standalone_phase(frame) and game.turn_manager.current_player_idx == 1, "I05e4b1 refused smoking leaves granted phase able to return to giver START")
 	await helper.dispose(t,game)
 
 func resources_and_detail(t,helper):

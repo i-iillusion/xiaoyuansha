@@ -9301,8 +9301,13 @@ func _can_use_play_skill(p: Player) -> bool:
 		and not _is_kneeling(p)
 
 # Q8/Q14: optional skill payment and its rescue continuation share one lease.
+func _can_use_sally_turn_skill(owner: Player) -> bool:
+	# Q15: a granted stage is not an eligible full personal turn.
+	return _can_use_play_skill(owner) and turn_manager._standalone_play_frame.is_empty() \
+		and _phase_actor(turn_manager.current_player_idx) == owner
+
 func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
-	if not is_instance_valid(owner) or not _can_use_play_skill(owner) or not _is_human(owner) \
+	if not is_instance_valid(owner) or not _can_use_sally_turn_skill(owner) or not _is_human(owner) \
 		or _play_skill_execution_busy(): return SallySkillOutcome.DECLINED
 	if operation:
 		if not SallySmokingState.can_operate(owner) or owner.hand_size() < 1: return SallySkillOutcome.DECLINED
@@ -9319,7 +9324,7 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 	_detail_popup_root.visible = false
 	var continuation = func(): return is_same(_sally_skill_pending,lease) and not _game_over \
 		and generation == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
-		and _has_character_body(owner) and _can_use_play_skill(owner) and epoch == owner.general_reset_revision
+		and _has_character_body(owner) and _can_use_sally_turn_skill(owner) and epoch == owner.general_reset_revision
 	var valid = func(): return continuation.call() and SallySmokingState.enabled(owner) \
 		and state == [owner.hp,owner.gender,owner.sally_smoke_uses,owner.sally_surgery_pending,owner.sally_surgery_active] \
 		and (SallySmokingState.can_operate(owner) and snapshot.hand == owner.hand and snapshot.determined == owner.determined_cards if operation else SallySmokingState.can_smoke(owner) and fee == SallySmokingState.cost(owner))
@@ -9328,7 +9333,7 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 	var selected: Array[int] = []
 	if operation:
 		var prompt = HandDiscardPrompt.new()
-		prompt.heading = "【肺部手术】选择弃置1张手牌，确认后从下个回合开始免除抽烟体力费用"
+		prompt.heading = "【肺部手术】选择弃置1张手牌，确认后从下一轮开始免除抽烟体力费用"
 		$UI.add_child(prompt)
 		prompt.setup(snapshot,1,false)
 		var answer = ChoicePromptAnswer.new()
@@ -9345,7 +9350,7 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 			else:
 				if paid[0] != null: deck.discard(paid[0])
 				SallySmokingState.note_operation_paid(owner)
-				_history_event("skill","%s 发动【肺部手术】：弃置1手牌，等待下个回合生效" % owner.player_name,owner)
+				_history_event("skill","%s 发动【肺部手术】：弃置1手牌，等待下一轮生效" % owner.player_name,owner)
 				result = SallySkillOutcome.APPLIED
 		else:
 			SallySmokingState.note_payment(owner)
@@ -13951,7 +13956,7 @@ func _open_player_detail(player: Player):
 		child.queue_free()
 
 	_detail_popup_root.visible = true
-	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled, _paipian_rules_enabled, _spy_rules_enabled)
+	var popup = PlayerDetailPopup.create(_detail_popup_root, player, player.wine_stacks, _local_player(), _mountain_rules_enabled and player == _local_player(), _david_rules_enabled, _paipian_rules_enabled, _spy_rules_enabled, _can_use_sally_turn_skill(player))
 	popup.equip_clicked.connect(_on_detail_equip_clicked.bind(player))
 	popup.skill_clicked.connect(_on_detail_skill_clicked.bind(player))
 	popup.tree_exited.connect(_on_detail_popup_closed)
