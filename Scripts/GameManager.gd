@@ -6742,6 +6742,7 @@ func _resolve_chain_propagation(source: Player, damaged: Player, amount: int, el
 
 func _play_duel(attacker: Player, target: Player, ignore_distance: bool = false):
 	var response_revision = turn_manager.get_context_revision()
+	var boosted_duel = _sally_response_count(attacker) == 2
 	# 【决斗】距离限制 2（含马修正，兜底防直调）；【霸王】（杰基·斯特朗）你的决斗无距离限制
 	if not ignore_distance and attacker.general_name != "杰基·斯特朗" and attacker.attack_distance_to(target) > 2:
 		_update_debug("%s 距离 %s 为 %d，超出决斗距离 2，无法发起【决斗】！" % [attacker.player_name, target.player_name, attacker.attack_distance_to(target)])
@@ -6782,11 +6783,13 @@ func _play_duel(attacker: Player, target: Player, ignore_distance: bool = false)
 		other = attacker
 
 	while true:
-		# 【霸王】：非杰基方每次响应需打出两张杀（杰基本人只需一张）
+		# 【霸王】 raises the non-Jackie quota. Boosted Sally raises her target's
+		# quota independently, while leaving the first responder order intact.
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			return CHOICE_INVALID
-		var needs_two = jacqui != null and current != jacqui
-		var can_respond = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(needs_two))
+		var double_for_bawang = jacqui != null and current != jacqui
+		var reason = "抽烟" if boosted_duel and current == target else ("霸王" if double_for_bawang else "")
+		var can_respond = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_prompt.bind(not reason.is_empty(), reason))
 		if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 			return CHOICE_INVALID
 
@@ -6794,21 +6797,20 @@ func _play_duel(attacker: Player, target: Player, ignore_distance: bool = false)
 			return CHOICE_INVALID
 		if can_respond == BasicResponseOutcome.PAID:
 			_update_debug("%s 出【杀】响应【决斗】" % current.player_name)
-			# 【霸王】：对方还需打出第二张杀
-			if needs_two:
+			if not reason.is_empty():
 				if not HandPayment.has_response(current, CardData.CardSubType.STRIKE):
 					# 没有第二张杀 → 响应失败 → 受伤害
 					_update_debug("%s 无法再出【杀】，在【决斗】中失败" % current.player_name)
 					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
 					if damage.invalidated: return CHOICE_INVALID
 					break
-				var cont = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt)
+				var cont = await _ask_basic_card_response_result(current, CardData.CardSubType.STRIKE, _show_duel_second_strike_prompt.bind(reason))
 				if _game_over or response_revision != turn_manager.get_context_revision() or not current.is_alive() or not other.is_alive() or _is_kneeling(current) or _is_kneeling(other):
 					return CHOICE_INVALID
 				if cont == BasicResponseOutcome.INVALIDATED:
 					return CHOICE_INVALID
 				if cont == BasicResponseOutcome.PAID:
-					_update_debug("%s 再出【杀】响应【决斗】（【霸王】需两张）" % current.player_name)
+					_update_debug("%s 再出【杀】响应【决斗】（【%s】需两张）" % [current.player_name, reason])
 				else:
 					_update_debug("%s 放弃继续响应，在【决斗】中失败" % current.player_name)
 					var damage = await _deal_damage_result(other, current, 1 + _rage_bonus(other), EffectChain.DamageType.PHYSICAL)
@@ -6828,7 +6830,7 @@ func _play_duel(attacker: Player, target: Player, ignore_distance: bool = false)
 	_sync_all_ui()
 
 # 决斗响应弹窗（玩家0）：needs_two = 【霸王】下对方需依次打出两张杀
-func _show_duel_prompt(needs_two: bool = false) -> int:
+func _show_duel_prompt(needs_two: bool = false, reason: String = "霸王") -> int:
 	if _duel_respond_override.is_valid():
 		return 1 if _duel_respond_override.call() else 0
 	if _game_over:
@@ -6849,7 +6851,7 @@ func _show_duel_prompt(needs_two: bool = false) -> int:
 
 	var label = Label.new()
 	if needs_two:
-		label.text = "【决斗】！请出【杀】响应（【霸王】：需依次打出两张【杀】），\n否则受到 1 点伤害"
+		label.text = "【决斗】！请出【杀】响应（【%s】：需依次打出两张【杀】），\n否则受到 1 点伤害" % reason
 	else:
 		label.text = "【决斗】！请出【杀】响应，\n否则受到 1 点伤害"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -6880,7 +6882,7 @@ func _show_duel_prompt(needs_two: bool = false) -> int:
 	return 0 if result == -1 else result
 
 # 【霸王】第二张杀询问（玩家0）：打出第一张杀后，询问是否继续响应
-func _show_duel_second_strike_prompt() -> int:
+func _show_duel_second_strike_prompt(reason: String = "霸王") -> int:
 	if _duel_second_override.is_valid():
 		return 1 if _duel_second_override.call() else 0
 	if _game_over:
@@ -6900,7 +6902,7 @@ func _show_duel_second_strike_prompt() -> int:
 	overlay.add_child(vbox)
 
 	var label = Label.new()
-	label.text = "由于【霸王】技能你需要再打出 1 张【杀】，是否继续响应？\n（放弃则受到 1 点伤害）"
+	label.text = "由于【%s】技能你需要再打出 1 张【杀】，是否继续响应？\n（放弃则受到 1 点伤害）" % reason
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
