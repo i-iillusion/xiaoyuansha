@@ -3597,7 +3597,7 @@ func _execute_single_strike(p: Player, target: Player, card: CardBase, sub: Card
 	chain.ignore_target_restrictions = ignore_target_restrictions
 	chain.declared_targets = declared_targets.duplicate()
 	chain.awakening_target_bound = awakening_target_bound
-	chain.response_callback = _on_chain_response_check
+	chain.response_callback = _on_chain_response_check.bind(_sally_response_count(p))
 	var strike_revision = turn_manager.get_context_revision()
 	var strike_generation = _dying_lifecycle_generation
 	var result = await chain.start()
@@ -4363,6 +4363,7 @@ func _play_aoe(required_sub: CardData.CardSubType, card_name: String, required_n
 
 func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name: String, required_name: String, actions: Array[CardActionEvent], response_revision: int, roster: Array[Player] = [], quota_actor: Variant = -1):
 	var generation = _dying_lifecycle_generation
+	var response_count = _sally_response_count(p)
 	var origin = _retained_effect_anchor(p)
 	var audience = _prep_group_scope(p,CardData.CardSubType.BARBARIAN_INVASION,roster)
 	var peter_scope = _new_peter_trick_scope(p,audience)
@@ -4414,7 +4415,7 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 			return
 		if not _mountain_effect_reaches(origin,target): continue
 
-		var responded = await _ask_basic_card_response_result(target, required_sub, _show_aoe_prompt.bind(card_name, required_name))
+		var responded = await _ask_basic_card_responses(target, required_sub, _show_aoe_prompt.bind(card_name, required_name), response_count)
 		if _game_over or generation != _dying_lifecycle_generation or response_revision != turn_manager.get_context_revision():
 			_abandon_card_actions(actions)
 			return
@@ -4439,6 +4440,17 @@ func _resolve_paid_aoe(p: Player, required_sub: CardData.CardSubType, card_name:
 
 # 杀/决斗/AOE共用物理响应，不消耗主动杀次数和酒，也不创建新出牌阶段。
 enum BasicResponseOutcome { DECLINED, PAID, INVALIDATED }
+
+func _sally_response_count(user: Player) -> int:
+	return 2 if SallySmokingState.doubles_response(user, turn_manager.turn_id) else 1
+
+func _ask_basic_card_responses(p: Player, expected: CardData.CardSubType, prompt: Callable, count: int, decision: Callable = Callable()) -> BasicResponseOutcome:
+	for index in range(1, count + 1):
+		var progress = "\n【抽烟】需依次打出%d张（第%d张）" % [count, index] if count > 1 else ""
+		var result = await _ask_basic_card_response_result(p, expected, prompt.bind(progress), decision)
+		if result != BasicResponseOutcome.PAID:
+			return result
+	return BasicResponseOutcome.PAID
 
 # 保留bool兼容入口；实际伤害链须解释失效，不能把失效当主动放弃。
 func _ask_basic_card_response(p: Player, expected: CardData.CardSubType, prompt: Callable, decision: Callable = Callable()) -> bool:
@@ -4497,7 +4509,7 @@ func _ask_basic_card_response_result(p: Player, expected: CardData.CardSubType, 
 	_sync_all_ui()
 	return BasicResponseOutcome.PAID
 
-func _show_aoe_prompt(card_name: String, required_name: String) -> int:
+func _show_aoe_prompt(card_name: String, required_name: String, progress: String = "") -> int:
 	# 测试钩子：跳过 UI 直接返回
 	if _aoe_override.is_valid():
 		return 1 if _aoe_override.call() else 0
@@ -4520,6 +4532,7 @@ func _show_aoe_prompt(card_name: String, required_name: String) -> int:
 
 	var label = Label.new()
 	label.text = "【%s】！请出【%s】响应，\n否则将受到 1 点伤害" % [card_name, required_name]
+	label.text += progress
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
@@ -7454,7 +7467,7 @@ func _show_liehuo_prompt(allowed: Callable = Callable()) -> int:
 	var result = await _wait_choice_prompt(overlay, answer, allowed)
 	return 0 if result == -1 else result
 
-func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player) -> bool:
+func _on_chain_response_check(chain: EffectChain, responder: Player, expected_sub: CardData.CardSubType, attacker: Player, response_count: int = 1) -> bool:
 	if expected_sub != CardData.CardSubType.DODGE:
 		return false
 	if _is_mountain_body(responder):
@@ -7463,16 +7476,17 @@ func _on_chain_response_check(chain: EffectChain, responder: Player, expected_su
 		return false # Ordinary mountain has no controller/gesture/card response.
 	var revision = turn_manager.get_context_revision()
 	var prompt = _show_dodge_prompt.bind(attacker.player_name if attacker != null else "已失去来源的效果", "杀")
-	var dodged = await _ask_basic_card_response_result(responder, expected_sub, prompt, _dodge_override)
+	var dodged = await _ask_basic_card_responses(responder, expected_sub, prompt, response_count, _dodge_override)
 	if dodged == BasicResponseOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or not responder.is_alive():
 		chain.is_cancelled = true
 		chain.continuation_invalid = true
 		return false
 	_history_event("dodged" if dodged == BasicResponseOutcome.PAID else "declined",
-		"%s 的【闪】抵消了【杀】" % responder.player_name if dodged == BasicResponseOutcome.PAID else "%s 未打出【闪】" % responder.player_name, responder)
+		"%s 的【闪】抵消了【杀】" % responder.player_name if dodged == BasicResponseOutcome.PAID else (
+			"%s 未完成【闪】响应" % responder.player_name if response_count > 1 else "%s 未打出【闪】" % responder.player_name), responder)
 	return dodged == BasicResponseOutcome.PAID
 
-func _show_dodge_prompt(attacker_name: String, card_name: String) -> int:
+func _show_dodge_prompt(attacker_name: String, card_name: String, progress: String = "") -> int:
 	if _game_over:
 		return CHOICE_INVALID
 	var answer = ChoicePromptAnswer.new()
@@ -7491,6 +7505,7 @@ func _show_dodge_prompt(attacker_name: String, card_name: String) -> int:
 
 	var label = Label.new()
 	label.text = "%s 对你使用了【%s】\n是否出【闪】响应？" % [attacker_name, card_name]
+	label.text += progress
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_font_size_override("font_size", 22)
 	label.add_theme_color_override("font_color", Color(1, 0.9, 0.7))
