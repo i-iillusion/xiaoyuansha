@@ -12,6 +12,8 @@ class_name CardBase
 
 # 延时锦囊放置者的座位（闪电伤害来源用）
 var source_seat: int = -1
+# Recorded at placement and retained if the original delayed card moves.
+var judgment_nullification_count: int = 1
 # 【苕】暗置资源保留原对象与类别；具体牌原名仅内部记录，明置前不公开。
 var hidden_category: String = ""
 var hidden_original_sub_type: int = -1

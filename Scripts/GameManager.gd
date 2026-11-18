@@ -1377,7 +1377,7 @@ func _run_judgment_cards(p: Player, granted: bool) -> bool:
 			# not the delayed card's original source. A mountain's initial
 			# response admits both sides; character judgments use its region.
 			var region: Player = null if _is_mountain_body(p) else p
-			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, p, region, _new_peter_trick_scope(null,[p]))
+			nullified = await _ask_nullification_chain_result("%s的【%s】即将生效，是否打出一张【无懈可击】？" % [p.player_name, card.card_name], valid, p, region, _new_peter_trick_scope(null,[p]), card.judgment_nullification_count)
 			if nullified == NullificationOutcome.INVALIDATED or not valid.call():
 				return false
 		p.judgment_cards.erase(card)
@@ -3561,11 +3561,13 @@ func execute_card_on_target(target: Player, sub: CardData.CardSubType):
 		CardData.CardSubType.INDULGENCE, CardData.CardSubType.SUPPLY_SHORTAGE, CardData.CardSubType.BURNING_CAMP:
 			# 延时锦囊（对目标使用）：进入目标判定区，待其下回合判定阶段结算
 			# （闪电不走此路径：只能对自己，由 play_card 直接处理）
+			var nullification_count = _sally_response_count(p)
 			var virtual_use = _yes_ah_active
 			card = await _take_trick_card(p, sub)
 			if card == null:
 				return
 			card.source_seat = p.seat_index
+			card.judgment_nullification_count = nullification_count
 			target.judgment_cards.append(card)
 			if sub == CardData.CardSubType.INDULGENCE: turn_manager.use_card("indulgence")
 			elif sub == CardData.CardSubType.SUPPLY_SHORTAGE: turn_manager.use_card("supply_shortage")
@@ -4081,12 +4083,14 @@ func play_card(sub: CardData.CardSubType):
 			if not p.is_alive():
 				_update_debug("你已阵亡，无法使用【闪电】")
 				return
+			var nullification_count = _sally_response_count(p)
 			if not await _choose_yes_ah_for_play(p, "闪电"): return
 			var virtual_use = _yes_ah_active
 			var card = await _take_trick_card(p, sub)
 			if card == null:
 				return
 			card.source_seat = p.seat_index
+			card.judgment_nullification_count = nullification_count
 			p.judgment_cards.append(card)
 			var action = _record_card_action(p, card, CardActionEvent.Kind.USE, not virtual_use, virtual_use)
 			if await _await_hand_awakening(p) == CHOICE_INVALID:
@@ -7076,8 +7080,12 @@ func _prepare_peter_nullification(trick: Dictionary, response_scope: Dictionary,
 		_history_event("skill","%s 发动【关你屁事】：所选角色不能对本张牌使用无懈" % owner.player_name,owner,trick.excluded)
 	return 0
 
-func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), first_origin: Player = null, first_region: Player = null, peter_scope: Dictionary = {}) -> NullificationOutcome:
-	var pending: bool = false        # 当前是否有一张生效中的无懈
+func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(), first_origin: Player = null, first_region: Player = null, peter_scope: Dictionary = {}, judgment_count: int = 0) -> NullificationOutcome:
+	# Immediate tricks use the original user's boost. A judgment supplies
+	# the original card's stored count because its origin is the holder.
+	var required = judgment_count if judgment_count > 0 else _sally_response_count(first_origin)
+	var pending := false
+	var paid_in_group := 0
 	var actions: Array[CardActionEvent] = []
 	var round_desc: String = desc
 	var revision = turn_manager.get_context_revision()
@@ -7097,7 +7105,10 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 		if await _prepare_peter_nullification(peter_scope,scope,valid) == CHOICE_INVALID:
 			return NullificationOutcome.INVALIDATED
 	while true:
-		var reply = await _ask_nullification_round_result(round_desc, allowed, scope)
+		var prompt = round_desc
+		if required > 1:
+			prompt += "\n【抽烟】本组需%d张无懈，已打出%d张" % [required, paid_in_group]
+		var reply = await _ask_nullification_round_result(prompt, allowed, scope)
 		if reply.get("card_action") is CardActionEvent:
 			actions.append(reply.card_action)
 		if reply.outcome == NullificationOutcome.INVALIDATED or _game_over or revision != turn_manager.get_context_revision() or generation != _dying_lifecycle_generation:
@@ -7110,9 +7121,19 @@ func _ask_nullification_chain_result(desc: String, allowed: Callable = Callable(
 			# may be no prompt cleanup to return input to the suspended caller.
 			_restore_input_owner()
 			return NullificationOutcome.NULLIFIED if pending else NullificationOutcome.PASSED
-		pending = not pending
-		if not scope.is_empty(): scope = {"origin":reply.actor,"region":_retained_effect_anchor(reply.actor),"peter":peter_scope}
-		round_desc = "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
+		paid_in_group += 1
+		if not scope.is_empty():
+			scope.origin = reply.actor
+		if paid_in_group == required:
+			pending = not pending
+			paid_in_group = 0
+			if not scope.is_empty():
+				scope.region = _retained_effect_anchor(reply.actor)
+			round_desc = "%s完成了本组【无懈可击】，是否反无懈？" % reply.actor_name if required > 1 else "%s打出了1张【无懈可击】，是否打出一张【无懈可击】？" % reply.actor_name
+		else:
+			# Contributors are still responding to the same effect until the
+			# group closes, so its regional eligibility remains in force.
+			round_desc = "%s已为本组打出【无懈可击】，是否补足？" % reply.actor_name
 	return NullificationOutcome.INVALIDATED
 
 # 询问一轮：按座位顺序询问所有存活角色，返回打出无懈的玩家名（无人打出返回 ""）

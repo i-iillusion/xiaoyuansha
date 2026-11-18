@@ -1,6 +1,14 @@
 # 开发约束与交接入口
 
 
+## 2026-11-18 / QA-T383：I05e-5c 双倍无懈与延时牌
+
+I05e-5c-Q1 已裁定同一组可由两名角色各支付一张。I05e-5c-Q2 已裁定原延时牌保存打出时的双倍要求，之后判定仍按两张一组。两条裁决已写入手册 6.19。
+
+I05e-5a、5b、5c 已完成。下一项 I05e-6 从 PlayerObservation、UnitObservation、LanGameBridge 及 AI 的纯值观察入口核对萨利公开状态和输入所有权，再验收所有技能与山、火龙、获赠阶段和其他武将的组合。I05e-7 负责独立开放候选及萨利自然 ENet。当前萨利仍为 metadata_only。
+
+
+
 ## 2026-11-18 / QA-T382：I05e-5b 决斗响应
 
 下一项 I05e-5c 从 GameManager._ask_nullification_chain_result 和 _ask_nullification_round_result 进入。待裁定 I05e-5c-Q1 两张无懈能否由两人合付、首张不足时如何处理，以及 Q2 强化回合挂出的乐不思蜀在之后判定时是否保留双倍。已提出具体局面，保留“我也不清楚，需要商议”。萨利继续私有验收。
