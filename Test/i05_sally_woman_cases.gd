@@ -116,5 +116,13 @@ func detail_and_topology(t,helper):
 	t.check(not game._sally_woman_target_allowed(owner,dragon), "I05e3 unseen dragon cannot be chosen by Woman")
 	var audience: Array[Player] = [owner]
 	game.fire_dragon_state.record_use(game.unit_registry.id_for(dragon),1,audience)
-	t.check(game._sally_woman_target_allowed(owner,dragon), "I05e3 revealed independent dragon body is a legal character for Woman")
+	t.check(not game._sally_woman_target_allowed(owner,dragon) and dragon.gender == "none", "I05e6-Q1 revealed dragon is a unit and cannot be changed by Woman")
+	owner.hand.append(null)
+	var result: Array = []; begin(game,owner,result); await t.process_frame
+	var prompt = game._choice_prompt_stack.back().overlay
+	var targets = prompt.find_children("*","Button",true,false)
+	t.check(not targets.any(func(b): return b.text == "目标："+dragon.player_name) and targets.any(func(b): return b.text == "目标："+game.players[3].player_name), "I05e6-Q1 real prompt excludes the revealed unit and still offers its controller")
+	targets.filter(func(b): return b.text == "取消发动女人")[0].pressed.emit()
+	for i in 3: await t.process_frame
+	t.check(result == [0] and owner.hand_size() == 1 and dragon.gender == "none", "I05e6-Q1 no unit mutation or card payment on cancellation")
 	await helper.dispose(t,game)

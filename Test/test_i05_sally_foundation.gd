@@ -24,5 +24,6 @@ func run():
 	await load("res://Test/i05_sally_basic_response_cases.gd").new().run(self)
 	await load("res://Test/i05_sally_duel_cases.gd").new().run(self)
 	await load("res://Test/i05_sally_nullification_cases.gd").new().run(self)
+	await load("res://Test/i05_sally_ai_cases.gd").new().run(self)
 	print("RESULT: %d asserts, %d failures" % [checks, failures])
 	quit(1 if failures else 0)

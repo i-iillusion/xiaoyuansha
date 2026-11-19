@@ -2029,6 +2029,47 @@ func _ai_simba_action_current(owner: Player, action: Dictionary) -> bool:
 		and _ai_terrain_snapshot == terrain_markers() and context.targets == _simba_ai_targets(owner) \
 		and context.states == _simba_ai_target_states(owner, context.targets)
 
+func _ai_sally_actions(owner: Player, view: Dictionary) -> Array:
+	if owner.general_name != "萨利·赛克斯" or _is_human(owner) \
+			or not _can_use_play_skill(owner) or _play_skill_execution_busy():
+		return []
+	var own = SimbaPolicy.body(view, view.actor)
+	if own.get("general", "") != "萨利·赛克斯":
+		return []
+	var choices: Array = []
+	var status = own.get("sally", {})
+	if _can_use_sally_turn_skill(owner):
+		if SallySmokingState.can_operate(owner) and own.hand_count > 0 \
+				and not status.get("surgery_pending", false) and not status.get("surgery_active", false):
+			choices.append({"skill":"sally_surgery", "priority":102})
+		if SallySmokingState.can_smoke(owner) and own.hp > SallySmokingState.cost(owner):
+			choices.append({"skill":"sally_smoke", "priority":91, "fee":SallySmokingState.cost(owner)})
+	var armor = owner.get_equipment_card("armor")
+	if owner.has_jiegui() and own.hp < own.max_hp and armor != null and armor.sub_type == CardData.CardSubType.SILVER_LION:
+		choices.append({"skill":"sally_lion", "priority":105, "resource":armor.get_instance_id()})
+	var strike_types = [CardData.CardSubType.STRIKE, CardData.CardSubType.FIRE_STRIKE, CardData.CardSubType.THUNDER_STRIKE]
+	if owner.has_sally_woman() and own.gender == "female" and own.hand_count >= 2 \
+			and strike_types.any(func(sub): return can_declare_basic(owner,sub)):
+		var strike_targets = _get_strike_targets(owner)
+		for row in view.players:
+			if row.gender != "male" or SimbaPolicy.allied(view, row.seat):
+				continue
+			var target = players[row.seat]
+			if _sally_woman_target_allowed(owner,target) and strike_targets.has(target):
+				choices.append({"skill":"sally_woman", "priority":88, "recipient":row.seat, "recipient_epoch":target.general_reset_revision})
+	for action in choices:
+		action["sub"] = -1
+		action["target"] = -1
+		action["owner_epoch"] = owner.general_reset_revision
+	return choices
+
+func _ai_sally_action_current(owner: Player, action: Dictionary) -> bool:
+	var expected = action.duplicate()
+	expected.erase("actor")
+	expected.erase("revision")
+	expected.erase("phase")
+	return _ai_sally_actions(owner, _ai_observation(owner)).has(expected)
+
 func _ai_play_candidates(observation: Dictionary) -> Array:
 	_ai_offered_actions.clear()
 	var seat: Variant = observation.actor
@@ -2043,7 +2084,7 @@ func _ai_play_candidates(observation: Dictionary) -> Array:
 	_capture_ai_simba_context(p)
 	if _game_over or not p.is_alive() or _is_kneeling(p) or not turn_manager.can_play_card():
 		return []
-	var choices: Array = []
+	var choices = _ai_sally_actions(p,observation)
 	if not _ai_simba_context.is_empty():
 		choices.append({"skill": "good_deed", "sub": -1, "target": -1, "priority": 96})
 	if p.general_name=="桑尼·斯派":
@@ -2132,6 +2173,14 @@ func _execute_ai_action(action: Dictionary):
 	if action.get("skill", "") == "good_deed":
 		if _ai_simba_action_current(p, action): await _perform_good_deed(p)
 		return
+	if action.get("skill", "").begins_with("sally_"):
+		if not _ai_sally_action_current(p,action): return
+		match action.skill:
+			"sally_smoke": await _perform_sally_smoking(p)
+			"sally_surgery": await _perform_sally_smoking(p,true)
+			"sally_lion": await _perform_jiegui_discard(p,"armor")
+			"sally_woman": await _perform_sally_woman(p,players[action.recipient])
+		return
 	if action.get("skill", "") == "farming_upgrade":
 		if _ai_farming_upgrade_eligible(p): await _activate_farming_upgrade(p)
 		return
@@ -2190,6 +2239,7 @@ func _run_ai_play(actor: Player):
 			if actor.hand != snapshot.hand or actor.determined_cards != snapshot.determined: return false
 			if action.get("skill","") in ["paipian","spy"]: return _ai_sunny_action_current(actor,action)
 			if action.get("skill", "") == "good_deed": return _ai_simba_action_current(actor, action)
+			if action.get("skill", "").begins_with("sally_"): return _ai_sally_action_current(actor, action)
 			if target == null: return true
 			if not is_instance_valid(target) or not _has_damage_target_body(target) or not target.is_alive(): return false
 			if TargetIdentity.resolve_live(players, unit_registry, action.target) != target: return false
@@ -9372,7 +9422,7 @@ func _lose_non_cost_hp(p: Player, amount: int):
 	else: p.hp -= amount
 
 func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
-	if not is_instance_valid(owner) or not _can_use_sally_turn_skill(owner) or not _is_human(owner) \
+	if not is_instance_valid(owner) or not _can_use_sally_turn_skill(owner) \
 		or _play_skill_execution_busy(): return SallySkillOutcome.DECLINED
 	_advance_sally_round_effects()
 	if operation:
@@ -9397,7 +9447,11 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 	_set_input_player(owner)
 	var choice: int
 	var selected: Array[int] = []
-	if operation:
+	if not _is_human(owner):
+		choice = 0
+		if operation:
+			selected = snapshot.defaults(1)
+	elif operation:
 		var prompt = HandDiscardPrompt.new()
 		prompt.heading = "【肺部手术】选择弃置1张手牌，确认后从下一轮开始免除抽烟体力费用"
 		$UI.add_child(prompt)
@@ -9441,15 +9495,16 @@ func _perform_sally_smoking(owner: Player, operation: bool = false) -> int:
 
 # Q8/Q12: the target and original hand fee share one optional Woman prompt.
 func _sally_woman_target_allowed(owner: Player, target: Player) -> bool:
-	return is_instance_valid(target) and target != owner and _has_character_body(target) and target.is_alive() \
-		and not _is_kneeling(target) and _can_target_body(owner, target) \
+	# I05e-6-Q1: this skill changes characters, never summoned units.
+	return is_instance_valid(target) and target != owner and players.has(target) and target.is_alive() \
+		and not _is_kneeling(target) \
 		and _mountain_effect_reaches(_retained_effect_anchor(owner), target)
 
-func _perform_sally_woman(owner: Player) -> int:
+func _perform_sally_woman(owner: Player, ai_target: Player = null) -> int:
 	if not is_instance_valid(owner) or not owner.has_sally_woman() or not _can_use_play_skill(owner) \
-		or owner.hand_size() == 0 or _play_skill_execution_busy() or not _is_human(owner): return 0
+		or owner.hand_size() == 0 or _play_skill_execution_busy(): return 0
 	var candidates: Array[Player] = []
-	for target in _character_targets(owner):
+	for target in players:
 		if _sally_woman_target_allowed(owner, target): candidates.append(target)
 	if candidates.is_empty(): return 0
 	var snapshot = HandSelection.new(owner)
@@ -9470,15 +9525,19 @@ func _perform_sally_woman(owner: Player) -> int:
 		and epoch == owner.general_reset_revision and snapshot.hand == owner.hand and snapshot.determined == owner.determined_cards \
 		and candidates.all(func(p): return _sally_woman_target_allowed(owner,p)) \
 		and target_states == candidates.map(func(p): return [p.general_reset_revision,p.gender])
-	var prompt = SallyWomanPrompt.new()
-	$UI.add_child(prompt)
-	var names: Array[String] = []
-	for target in candidates: names.append(target.player_name)
-	prompt.setup(names, snapshot)
-	var answer = ChoicePromptAnswer.new()
-	prompt.answered.connect(answer.submit)
-	_set_input_player(owner)
-	var choice = await _wait_choice_prompt(prompt, answer, valid)
+	var choice := -1
+	if _is_human(owner):
+		var prompt = SallyWomanPrompt.new()
+		$UI.add_child(prompt)
+		var names: Array[String] = []
+		for target in candidates: names.append(target.player_name)
+		prompt.setup(names, snapshot)
+		var answer = ChoicePromptAnswer.new()
+		prompt.answered.connect(answer.submit)
+		_set_input_player(owner)
+		choice = await _wait_choice_prompt(prompt, answer, valid)
+	elif candidates.has(ai_target):
+		choice = candidates.find(ai_target) * snapshot.cards.size() + snapshot.defaults(1)[0]
 	var result = 0
 	if choice == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID
 	elif choice >= 0:
@@ -9501,9 +9560,9 @@ func _perform_sally_woman(owner: Player) -> int:
 	return result
 
 # SA-Q6/Q8: own PLAY, including a genuinely granted PLAY; one countdown.
-func _perform_jiegui_discard(p: Player) -> int:
+func _perform_jiegui_discard(p: Player, ai_slot: String = "") -> int:
 	if not is_instance_valid(p) or not p.has_jiegui() or not _can_use_play_skill(p) \
-			or _play_skill_execution_busy() or not _is_human(p): return 0
+			or _play_skill_execution_busy(): return 0
 	var slots: Array[String] = []
 	for slot in p.get_equip_slots():
 		if _equipment_resource_for_pick(p, slot) != null: slots.append(slot)
@@ -9520,16 +9579,18 @@ func _perform_jiegui_discard(p: Player) -> int:
 		and lifecycle == _dying_lifecycle_generation and revision == turn_manager.get_context_revision() \
 		and _has_character_body(p) and p.has_jiegui() and p.awakening_revision == epoch \
 		and _can_use_play_skill(p) and slots.map(func(slot): return _equipment_resource_for_pick(p, slot)) == originals
-	var prompt = JieguiDiscardPrompt.new()
-	$UI.add_child(prompt)
-	var names: Array[String] = []
-	for slot in slots:
-		names.append("%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(p.equipment[slot])])
-	prompt.setup(names)
-	var answer = ChoicePromptAnswer.new()
-	prompt.answered.connect(answer.submit)
-	_set_input_player(p)
-	var choice = await _wait_choice_prompt(prompt, answer, valid)
+	var choice = slots.find(ai_slot)
+	if _is_human(p):
+		var prompt = JieguiDiscardPrompt.new()
+		$UI.add_child(prompt)
+		var names: Array[String] = []
+		for slot in slots:
+			names.append("%s：%s" % [Player.EQUIP_SLOT_NAMES[slot], CardData.get_type_name(p.equipment[slot])])
+		prompt.setup(names)
+		var answer = ChoicePromptAnswer.new()
+		prompt.answered.connect(answer.submit)
+		_set_input_player(p)
+		choice = await _wait_choice_prompt(prompt, answer, valid)
 	var result = 0
 	if choice == CHOICE_INVALID or not valid.call(): result = CHOICE_INVALID
 	elif choice >= 0:
