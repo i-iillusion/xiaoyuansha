@@ -135,6 +135,19 @@ const GENERALS = {
 			"【急救】一名角色受到一次实际伤害后、普通求救前，你可以失去1体力，令该受伤者获得1额外体力（可超过上限）及1个好事标记；先给予效果，再处理你的费用濒死。每次伤害一次，不按伤害点数重复",
 		],
 	},
+	"萨利·赛克斯": {
+		"max_hp": 3,
+		"gender": "female",
+		"section": "6.19",
+		"avatar": "🐱",
+		"skills": [
+			"【姐贵】无武器牌时视为装备雌雄双股剑；出牌阶段可以主动弃置自己的装备",
+			"【猎奇】对每名角色首次造成伤害各+1；首次受到伤害+1",
+			"【女人】对同性角色造成的伤害+1；出牌阶段可弃置一张手牌，使另一名角色变为女性",
+			"【抽烟】本人完整回合的出牌阶段，女性可失去本次发动次数等量的体力，获救后变男性。回合外保护体力，下次正常回合的牌需要双倍响应，结束阶段变回女性",
+			"【肺部手术】累计抽烟三次后，在本人完整回合的出牌阶段可弃置一张手牌，从下一轮起抽烟免体力费用",
+		],
+	},
 	"麦克斯·欧尼斯特": {
 		"max_hp": 4,
 		"avatar": "🤠",
@@ -153,7 +166,6 @@ const METADATA_ONLY_GENERALS = {
 	"史蒂夫·UB": {"max_hp": 4, "section": "6.15"},
 	"本尼·康绸尔": {"max_hp": 3, "section": "6.17"},
 	"泰瑞·谢尔": {"max_hp": -1, "section": "6.18"},
-	"萨利·赛克斯": {"max_hp": 3, "gender": "female", "section": "6.19"},
 	"杰克·伯德": {"max_hp": 4, "section": "6.20"},
 	"海因里希·迷因": {"max_hp": 4, "section": "6.21"},
 	"汤姆·伊茨弥": {"max_hp": 4, "section": "6.22"},
@@ -179,7 +191,7 @@ static func get_max_hp(general_name: String, player_count: int = 0) -> int:
 	return data.get("max_hp", 4)
 
 static func get_gender(general_name: String) -> String:
-	return METADATA_ONLY_GENERALS.get(general_name, {}).get("gender", "male")
+	return GENERALS.get(general_name, METADATA_ONLY_GENERALS.get(general_name, {})).get("gender", "male")
 
 static func get_implementation_status(general_name: String) -> String:
 	if general_name == "稻草人":

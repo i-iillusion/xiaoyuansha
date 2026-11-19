@@ -310,7 +310,7 @@ jobs:
           retention-days: 7
 
   simba-network-tests:
-    name: Simba natural ENet (Godot 4.7.2)
+    name: Simba and Sally natural ENet (Godot 4.7.2)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -348,10 +348,10 @@ jobs:
             exit 1
           fi
 
-      - name: Run natural Simba ENet lifecycle cases
+      - name: Run natural Simba and Sally ENet lifecycle cases
         run: |
           set -euo pipefail
-          for spec in 'test_i05_simba_network 3' 'test_i05_simba_network 5' 'test_i05_simba_network 3 --host-controller' 'test_i05_simba_network 5 --host-controller' 'test_i05_simba_network 3 --cancel-case' 'test_i05_simba_network 5 --cancel-case' 'test_i05_simba_network 3 --reserve-case' 'test_i05_simba_network 3 --drop-case' 'test_i05_simba_network 5 --drop-case' 'test_i05_simba_network 3 --drop-case --host-controller' 'test_i05_simba_network 6 --mode=ambitious_identity'; do
+          for spec in 'test_i05_simba_network 3' 'test_i05_simba_network 5' 'test_i05_simba_network 3 --host-controller' 'test_i05_simba_network 5 --host-controller' 'test_i05_simba_network 3 --cancel-case' 'test_i05_simba_network 5 --cancel-case' 'test_i05_simba_network 3 --reserve-case' 'test_i05_simba_network 3 --drop-case' 'test_i05_simba_network 5 --drop-case' 'test_i05_simba_network 3 --drop-case --host-controller' 'test_i05_simba_network 6 --mode=ambitious_identity' 'test_i05_sally_network 3' 'test_i05_sally_network 5 --host-controller' 'test_i05_sally_network 6 --mode=ambitious_identity'; do
             read -r test players extra <<< "$spec"
             log="$CI_LOG_DIR/lan-${test}-${players}${extra:-}.log"
             status=0

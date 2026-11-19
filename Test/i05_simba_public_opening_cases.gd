@@ -3,9 +3,9 @@ const SIMBA="辛巴·古德曼"
 
 func run(t):
 	var saved=[GameManager.selected_players,GameManager.selected_mode,GameManager.selected_general,GameManager.random_general,GameManager.random_identity,MainMenu.random_mode]
-	t.check(GeneralData.get_available_random_generals().size()==14 and GeneralData.get_available_random_generals().count(SIMBA)==1 and LanSession.GENERALS.count(SIMBA)==1,"I05d public native/random/LAN pools expose fourteen unique generals and exactly one Simba")
+	t.check(GeneralData.get_available_random_generals().size() == 15 and GeneralData.get_available_random_generals().count(SIMBA)==1 and LanSession.GENERALS.count(SIMBA)==1,"I05d public native/random/LAN pools expose fifteen unique generals and exactly one Simba")
 	t.check(GeneralData.get_implementation_status(SIMBA)=="prototype" and not GeneralData.METADATA_ONLY_GENERALS.has(SIMBA) and GeneralData.get_max_hp(SIMBA)==5,"I05d public data replaces metadata with adopted five HP")
-	t.check(GeneralData.get_skills(SIMBA).size()==5 and GeneralData.get_handbook_section(SIMBA)=="6.13" and LanSession.PROTOCOL=="campus-lan-17","I05d public data retains all five skills and incompatible rule protocol")
+	t.check(GeneralData.get_skills(SIMBA).size()==5 and GeneralData.get_handbook_section(SIMBA)=="6.13" and LanSession.PROTOCOL=="campus-lan-18","I05d public data retains all five skills and incompatible rule protocol")
 	MainMenu.random_mode=false
 	var menu=load("res://Scenes/MainMenu.tscn").instantiate(); menu.set_script(load("res://Test/leo_menu_observer.gd")); t.root.add_child(menu)
 	await t.process_frame

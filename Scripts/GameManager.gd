@@ -1042,6 +1042,11 @@ func start_game():
 		p.simba_good_deeds_enabled = p.general_name == "辛巴·古德曼"
 		p.simba_tuanfei_enabled = p.general_name == "辛巴·古德曼"
 		p.simba_emergency_enabled = p.general_name == "辛巴·古德曼"
+		p.sally_jiegui_enabled = p.general_name == "萨利·赛克斯"
+		p.sally_lieqi_enabled = p.general_name == "萨利·赛克斯"
+		p.sally_woman_enabled = p.general_name == "萨利·赛克斯"
+		p.sally_smoking_enabled = p.general_name == "萨利·赛克斯"
+		p.sally_surgery_enabled = p.general_name == "萨利·赛克斯"
 		p.max_hp = GeneralData.get_max_hp(p.general_name, player_count)
 		# Classic >=5 baseline: identity bonus is separate from
 		# the general snapshot, and must be set before Player._ready initializes HP.

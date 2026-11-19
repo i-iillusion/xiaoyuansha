@@ -4,7 +4,7 @@ const DAVID = "大卫·法米尔"
 func run(t):
 	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity, MainMenu.random_mode]
 	t.check(GeneralData.get_implementation_status(DAVID) == "prototype" and GeneralData.get_max_hp(DAVID) == 4 and not GeneralData.METADATA_ONLY_GENERALS.has(DAVID), "I05b6 public David has one four-HP playable catalog entry")
-	t.check(GeneralData.get_available_random_generals().size() == 14 and GeneralData.get_available_random_generals().count(DAVID) == 1 and LanSession.GENERALS.count(DAVID) == 1 and LanSession.PROTOCOL == "campus-lan-17", "I05b6 native/random/LAN agree on fourteen unique generals and updated protocol")
+	t.check(GeneralData.get_available_random_generals().size() == 15 and GeneralData.get_available_random_generals().count(DAVID) == 1 and LanSession.GENERALS.count(DAVID) == 1 and LanSession.PROTOCOL == "campus-lan-18", "I05b6 native/random/LAN agree on fifteen unique generals and updated protocol")
 	t.check(GeneralData.get_skills(DAVID).size() == 2 and GeneralData.get_skills(DAVID)[0].begins_with("【种田】") and GeneralData.get_skills(DAVID)[1].begins_with("【我要跟你摔角】"), "I05b6 public skill data contains both adopted skills exactly once")
 	MainMenu.random_mode = false
 	var menu = load("res://Scenes/MainMenu.tscn").instantiate()

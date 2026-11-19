@@ -170,5 +170,5 @@ func resets_and_gate(t):
 		var event = game._record_card_action(p, CardBase.create(CardData.CardSubType.DODGE), CardActionEvent.Kind.RESPONSE)
 		game._complete_card_actions([event])
 	t.check(p.farm_empty_fields == 1 and p.farm_hand_actions == 2, "I05b restored general can start a fresh legal farming pair")
-	t.check(GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 14 and GeneralData.get_implementation_status(DAVID) == "prototype" and LanSession.PROTOCOL == "campus-lan-17", "I05b fully accepted public David appears once with new LAN protocol/pool")
+	t.check(GeneralData.GENERALS.has(DAVID) and GeneralData.get_available_random_generals().size() == 15 and GeneralData.get_implementation_status(DAVID) == "prototype" and LanSession.PROTOCOL == "campus-lan-18", "I05b fully accepted public David appears once with new LAN protocol/pool")
 	await dispose(t, game)

@@ -2,10 +2,10 @@ extends RefCounted
 const SUNNY="桑尼·斯派"
 func run(t):
 	var saved=[GameManager.selected_players,GameManager.selected_mode,GameManager.selected_general,GameManager.random_general,GameManager.random_identity,MainMenu.random_mode]
-	t.check(GeneralData.get_available_random_generals().size()==14 and GeneralData.get_available_random_generals().count(SUNNY)==1 and LanSession.GENERALS.count(SUNNY)==1,"Sunny is exactly one of fourteen public generals")
+	t.check(GeneralData.get_available_random_generals().size() == 15 and GeneralData.get_available_random_generals().count(SUNNY)==1 and LanSession.GENERALS.count(SUNNY)==1,"Sunny is exactly one of fifteen public generals")
 	t.check(GeneralData.get_implementation_status(SUNNY)=="prototype" and not GeneralData.METADATA_ONLY_GENERALS.has(SUNNY) and GeneralData.get_max_hp(SUNNY)==4,"Sunny public data replaces metadata with four HP")
 	t.check(GeneralData.get_skills(SUNNY).size()==3 and GeneralData.get_handbook_section(SUNNY)=="6.12","public descriptions retain three adopted skills and source section")
-	t.check(LanSession.PROTOCOL=="campus-lan-17","new public capability has an incompatible protocol version")
+	t.check(LanSession.PROTOCOL=="campus-lan-18","new public capability has an incompatible protocol version")
 	var manager=load("res://Scenes/Game.tscn").instantiate(); manager.auto_start=false; t.root.add_child(manager)
 	await t.process_frame
 	t.check(manager._paipian_rules_enabled and manager._spy_rules_enabled and manager._corruption_rules_enabled,"default server exposes all Sunny abilities together")

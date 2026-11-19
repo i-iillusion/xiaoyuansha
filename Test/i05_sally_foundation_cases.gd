@@ -61,10 +61,11 @@ func run(t):
 	p.mark_dead()
 	t.check(not p.has_jiegui() and not p.has_chixiong_effect(), "I05e2a final dead bodies have no effective sword")
 	p.free(); other.free()
-	t.check(GeneralData.get_implementation_status(SALLY) == "metadata_only" and not GeneralData.GENERALS.has(SALLY) and not LanSession.GENERALS.has(SALLY), "I05e2a private foundation never opens Sally")
-	t.check(GeneralData.get_available_random_generals().size() == 14 and LanSession.PROTOCOL == "campus-lan-17", "I05e2a public pool and protocol remain unchanged")
+	t.check(GeneralData.get_implementation_status(SALLY) == "prototype" and not GeneralData.METADATA_ONLY_GENERALS.has(SALLY) and LanSession.GENERALS.count(SALLY) == 1, "I05e7 Sally is public in one roster entry")
+	t.check(GeneralData.get_available_random_generals().size() == 15 and LanSession.PROTOCOL == "campus-lan-18", "I05e7 public pool and updated protocol")
 	await borrowed_boundary(t)
 	await public_observation(t)
+	await load("res://Test/i05_sally_public_opening_cases.gd").new().run(t)
 
 func public_observation(t):
 	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity]

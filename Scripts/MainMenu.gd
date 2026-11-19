@@ -135,6 +135,7 @@ func _show_general_select():
 	_add_general_btn("大卫·法米尔")
 	_add_general_btn("桑尼·斯派")
 	_add_general_btn("辛巴·古德曼")
+	_add_general_btn("萨利·赛克斯")
 	_add_btn("← 返回", _show_test, "")
 
 func _add_general_btn(general_name: String):

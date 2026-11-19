@@ -5,10 +5,10 @@ signal lobby_changed(state: Dictionary)
 signal state_received(state: Dictionary)
 signal notice(message: String)
 
-const PROTOCOL := "campus-lan-17"
+const PROTOCOL := "campus-lan-18"
 const DEFAULT_PORT := 24567
 const GENERALS: Array[String] = ["凯文·罗本", "布鲁斯·萨维奇", "安普提·斯丢皮得", "史蒂芬·彼特先斯",
-	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊", "克里斯·西弗", "吉姆·芒顿", "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹", "大卫·法米尔", "桑尼·斯派", "辛巴·古德曼"]
+	"杰基·斯特朗", "麦克斯·欧尼斯特", "里奥·普利威尔", "比尔·盖伊", "克里斯·西弗", "吉姆·芒顿", "彼得·伊茨·朗·欧弗·约尔·欧耳·麦·彼茨尼兹", "大卫·法米尔", "桑尼·斯派", "辛巴·古德曼", "萨利·赛克斯"]
 # Private integration gate; never a lobby setting or an RPC argument.
 var _enable_mountain_rules_for_tests := false
 var members: Dictionary = {}
