@@ -194,6 +194,10 @@ func _state_changed(state: Dictionary) -> void:
 		var text = "%d号 %s\n%s\n体力 %d/%d · 手牌 %d\n%s%s%s" % [int(player.seat) + 1, player.name, player.general,
 			player.hp, player.max_hp, player.hand_count, "已阵亡 " if player.dead else "", "横置 " if player.chained else "", "翻面 " if player.facedown else ""]
 		text += "\n身份：" + (player.identity if player.identity != "" else ("暗置" if state.mode != GameModes.FREE_FOR_ALL else "无"))
+		if player.has("gender"):
+			text += "\n性别：" + PlayerObservation.gender_label(player.gender)
+		for status in PlayerObservation.sally_labels(player.get("sally", {})):
+			text += "\n" + status
 		var judgments: Array[String] = []
 		for sub in player.judgments: judgments.append(CardData.get_type_name(int(sub)))
 		text += "\n判定：" + ("、".join(judgments) if not judgments.is_empty() else "无")

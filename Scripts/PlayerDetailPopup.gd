@@ -76,7 +76,7 @@ func _populate():
 
 	_avatar_label.text = GeneralData.get_avatar(_player.general_name)
 	_name_label.text = _player.player_name
-	_general_label.text = "武将：%s" % _player.general_name
+	_general_label.text = "武将：%s · %s" % [_player.general_name, PlayerObservation.gender_label(_player.gender)]
 	_hp_label.text = "体力：%d/%d" % [_player.hp, _player.max_hp]
 	var visible_identity := PlayerObservation.visible_identity(_player, _viewer)
 	if _player.identity == "":
@@ -245,6 +245,12 @@ func _populate():
 		wine_status.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
 		wine_status.add_theme_font_size_override("font_size", 14)
 		_status_container.add_child(wine_status)
+		has_status = true
+
+	for text in PlayerObservation.sally_labels(PlayerObservation.sally_status(_player)):
+		var state_label = Label.new()
+		state_label.text = text
+		_status_container.add_child(state_label)
 		has_status = true
 
 	if not has_status:

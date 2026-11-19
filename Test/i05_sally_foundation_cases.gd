@@ -64,6 +64,48 @@ func run(t):
 	t.check(GeneralData.get_implementation_status(SALLY) == "metadata_only" and not GeneralData.GENERALS.has(SALLY) and not LanSession.GENERALS.has(SALLY), "I05e2a private foundation never opens Sally")
 	t.check(GeneralData.get_available_random_generals().size() == 14 and LanSession.PROTOCOL == "campus-lan-17", "I05e2a public pool and protocol remain unchanged")
 	await borrowed_boundary(t)
+	await public_observation(t)
+
+func public_observation(t):
+	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity]
+	var fixture = load("res://Test/i05_sally_jiegui_cases.gd").new()
+	for seat in [0,1]:
+		var game = fixture.fixture(t,seat)
+		var sally = game.players[seat]
+		var viewer = game.players[(seat+1)%5]
+		sally.identity = "反贼"
+		sally.identity_revealed = false
+		sally.sally_smoking_enabled = true
+		sally.sally_surgery_enabled = true
+		sally.determined_cards.append(CardBase.create(CardData.CardSubType.PEACH))
+		var bridge = LanGameBridge.new()
+		t.root.add_child(bridge)
+		bridge.game = game
+		var old_token = bridge.snapshot(seat).targets.get(str(seat),"")
+		t.check(old_token != "" and bridge.snapshot(seat).players[seat].gender == "female", "I05e6a owner's opening gender and portrait are available")
+		SallySmokingState.establish_after_rescue(sally)
+		sally.sally_surgery_pending = true
+		var remote = bridge.snapshot(viewer.seat_index)
+		var row = remote.players[seat]
+		var ai_row = game._ai_observation(viewer).players[seat]
+		t.check(row.gender == "male" and row.sally == {"smoking":true,"boosted":false,"surgery_pending":true,"surgery_active":false} and ai_row.sally == row.sally and ai_row.gender == row.gender, "I05e6a remote and AI agree on public Sally state")
+		t.check(row.identity == "" and not row.has("own_cards") and remote.own_cards.is_empty() and bridge.snapshot(seat).own_cards.size() == 1, "I05e6a public gender and skill state never expose identities or opponent hand")
+		t.check(not bridge.submit(seat,old_token), "I05e6a a change to public gender and skill state refreshes the portrait token")
+		var current_token = bridge.snapshot(seat).targets.get(str(seat),"")
+		t.check(current_token != old_token and bridge.submit(seat,current_token), "I05e6a refreshed owner can open detail")
+		await t.process_frame
+		var labels = bridge.snapshot(seat).labels
+		t.check(labels.any(func(label): return "男性" in label) and labels.has("抽烟状态") and labels.has("肺部手术待生效"), "I05e6a actual detail reports current gender and public status")
+		sally.restore_game_start_state()
+		var restored = bridge.snapshot(viewer.seat_index).players[seat]
+		t.check(restored.gender == "female" and not restored.sally.smoking and not restored.sally.surgery_pending and not restored.sally.boosted, "I05e6a general restoration clears public smoking and surgery state")
+		sally.mark_dead()
+		t.check(not bridge.snapshot(viewer.seat_index).players[seat].has("sally"), "I05e6a final death removes active Sally observation")
+		bridge.game = null
+		bridge.queue_free()
+		await fixture.dispose(t,game)
+	GameManager.selected_players = saved[0]; GameManager.selected_mode = saved[1]
+	GameManager.selected_general = saved[2]; GameManager.random_general = saved[3]; GameManager.random_identity = saved[4]
 
 func borrowed_boundary(t):
 	var saved = [GameManager.selected_players, GameManager.selected_mode, GameManager.selected_general, GameManager.random_general, GameManager.random_identity]
